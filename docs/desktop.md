@@ -35,10 +35,19 @@ PWA-delen består af:
 
 ## 4. Tauri-desktopapp (valgfri)
 
-Se afsnittet *Tauri-status* nedenfor.
+Orbit kan bygges som en rigtig Windows-desktopapp med [Tauri](https://tauri.app/) (kræver [Rust](https://rustup.rs/) – installeres med `winget install Rustlang.Rustup`).
 
----
+Konfigurationen ligger i `src-tauri/tauri.conf.json` (app-id `dk.orbit.projektstyring`, version 0.2.0, vindue 1480×940, mørkt baggrundsfarve `#17181c`). Byg og installer:
 
-## Tauri-status
+```bash
+npm run tauri build      # bygger frontend + Rust-app + installere
+```
 
-*(opdateres ved build – se nedenstående afsnit)*
+Installerene lander i `src-tauri/target/release/bundle/`:
+
+- `msi/Orbit_0.2.0_x64_en-US.msi` – klassisk Windows-installer
+- `nsis/Orbit_0.2.0_x64-setup.exe` – NSIS-installer
+
+Tauri-appen indlejrer produktionsbuildet fra `dist/`, så den kører uden dev-server og uden browser. Bemærk at companion-serveren (`server/companion.mjs`, port 4310) stadig skal køre, hvis appen skal bruge dens funktioner (Teams-integration m.m.).
+
+> `src-tauri/target/` er gitignoreret – kun konfiguration, Rust-kilde og ikoner ligger i git.
