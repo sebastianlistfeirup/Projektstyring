@@ -6,18 +6,22 @@ export function cn(...classes: (string | false | null | undefined)[]): string {
   return classes.filter(Boolean).join(' ');
 }
 
-export function formatDate(iso: string | null | undefined, pattern = 'd. MMM yyyy'): string {
-  if (!iso) return '—';
-  return format(parseISO(iso), pattern, { locale: da });
+function toDate(value: string | Date): Date {
+  return typeof value === 'string' ? parseISO(value) : value;
 }
 
-export function formatDateShort(iso: string | null | undefined): string {
+export function formatDate(iso: string | Date | null | undefined, pattern = 'd. MMM yyyy'): string {
   if (!iso) return '—';
-  return format(parseISO(iso), 'd. MMM', { locale: da });
+  return format(toDate(iso), pattern, { locale: da });
 }
 
-export function timeAgo(iso: string): string {
-  return formatDistanceToNow(parseISO(iso), { addSuffix: true, locale: da });
+export function formatDateShort(iso: string | Date | null | undefined): string {
+  if (!iso) return '—';
+  return format(toDate(iso), 'd. MMM', { locale: da });
+}
+
+export function timeAgo(iso: string | Date): string {
+  return formatDistanceToNow(toDate(iso), { addSuffix: true, locale: da });
 }
 
 export function isOverdue(task: Task): boolean {

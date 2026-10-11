@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { Flag, Users } from 'lucide-react';
-import type { Priority, TaskStatus, User } from './types';
-import { AVATAR_COLORS, LABEL_COLOR_STYLES, PRIORITY_META, STATUS_META } from './constants';
-import { cn } from './utils';
+import type { Priority, TaskStatus, User } from '../lib/types';
+import { AVATAR_COLORS, LABEL_COLOR_STYLES, PRIORITY_META, STATUS_META } from '../lib/constants';
+import { cn } from '../lib/utils';
 
 const AVATAR_SIZES = {
   xs: 'h-5 w-5 text-[9px]',

@@ -118,7 +118,7 @@ export const seedActivity: ActivityEntry[] = [
   { id: 'a-5', timestamp: '2026-10-08T10:30:00.000Z', userId: 'u-me', taskId: 't-iit-2', projectId: 'p-iit', action: 'påbegyndte', detail: 'Microsoft 365-rydning: grupper og Teams' },
   { id: 'a-6', timestamp: '2026-10-07T16:45:00.000Z', userId: 'u-sofie', taskId: 't-hjb-3', projectId: 'p-hjb', action: 'opdaterede', detail: 'Hjemmeside: ny forsidesektion' },
   { id: 'a-7', timestamp: '2026-10-07T08:20:00.000Z', userId: 'u-me', taskId: 't-hjb-10', projectId: 'p-hjb', action: 'oprettede', detail: 'Blog: tre artikler klar til lancering' },
-  { id: 'a-8', timestamp: '2026-10-06T13:10:00.000Z', userId: 'u-noah', projectId: 'p-app', action: 'startede sprinten', detail: 'Sprint 15' },
+  { id: 'a-8', timestamp: '2026-10-06T13:10:00.000Z', userId: 'u-noah', taskId: null, projectId: 'p-app', action: 'startede sprinten', detail: 'Sprint 15' },
   { id: 'a-9', timestamp: '2026-10-05T09:00:00.000Z', userId: 'u-me', taskId: 't-iit-4', projectId: 'p-iit', action: 'tildelte opgaven til Emil Christiansen', detail: 'MFA-udrulning til alle brugere' },
   { id: 'a-10', timestamp: '2026-10-02T14:10:00.000Z', userId: 'u-sofie', taskId: 't-app-1', projectId: 'p-app', action: 'afsluttede', detail: 'Designsystem: komponentbibliotek til app 2.0' },
   { id: 'a-11', timestamp: '2026-10-01T11:00:00.000Z', userId: 'u-me', taskId: 't-app-13', projectId: 'p-app', action: 'planlagde i', detail: 'Sprint 16' },
