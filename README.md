@@ -1,32 +1,40 @@
-# React + TypeScript + Vite
+# Orbit – Projektstyring
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Et moderne, dansksproget projektstyringsværktøj bygget som en hurtig lokal web-app. Inspireret af Monday, Microsoft Teams og Azure DevOps – med fokus på en lækker, hurtig brugeroplevelse.
 
-Currently, two official plugins are available:
+## Funktioner
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Tavle** – Kanban med træk-og-slip mellem kolonner og inline oprettelse
+- **Tabel** – Sorterbar og filtrerbar oversigt med gruppeéringer
+- **Tidslinje** – Gantt-lignende planlægning med sprint-bånd og "i dag"-markør
+- **Backlog & Sprints** – Sprint-planlægning med træk-og-slip mellem sprints
+- **Min arbejdsliste** – Personligt overblik med forsinkelser og kommende frister
+- **Dashboard** – Statusdiagrammer, burndown og arbejdsbelastning
+- **Aktivitet** – Levende aktivitetsfeed for hele arbejdsområdet
+- **Kommandopalette** – `Ctrl+K`: søg, opret og naviger på tastaturet
+- **Opgavedetalje** – Kommentarer, delopgaver, etiketter, frister, points m.m.
+- **Mørkt/lyst tema** og fuld persistence i browseren (localStorage)
 
-## React Compiler
+## Teknologi
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+React 18 · TypeScript · Vite · Tailwind CSS · Zustand (persistence) · dnd-kit · Recharts · date-fns · lucide-react
 
-## Expanding the Oxlint configuration
+## Kom i gang
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Byg til produktion:
+
+```bash
+npm run build
+```
+
+## Roadmap
+
+- [ ] Integration: Outlook (opgaver fra mails/kalender)
+- [ ] Integration: Microsoft Teams (notifikationer, tabs)
+- [ ] Bag om appen: lokal database + synkronisering
+- [ ] Eksport (CSV/PDF) og rapporter

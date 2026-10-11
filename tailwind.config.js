@@ -2,6 +2,11 @@
 export default {
   darkMode: 'class',
   content: ['./index.html', './src/**/*.{ts,tsx}'],
+  safelist: [
+    {
+      pattern: /^(bg|text|border|ring)-(violet|sky|amber|emerald|rose|cyan|indigo|pink|orange|teal|red|slate)-(400|500|600)$/,
+    },
+  ],
   theme: {
     extend: {
       fontFamily: {
