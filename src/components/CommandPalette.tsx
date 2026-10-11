@@ -60,10 +60,11 @@ export default function CommandPalette() {
     const list: Row[] = [];
 
     if (q) {
+      const targetProject = projects.find((p) => p.id === (activeProjectId ?? projects[0]?.id));
       list.push({
         id: 'create',
         group: 'handling',
-        label: `Opret opgave "${query.trim()}"`,
+        label: `Opret opgave "${query.trim()}"${targetProject ? ` i ${targetProject.name}` : ''}`,
         hint: 'Enter',
         run: () => {
           const projectId = activeProjectId ?? projects[0]?.id;

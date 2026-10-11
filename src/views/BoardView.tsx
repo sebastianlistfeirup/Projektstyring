@@ -14,10 +14,12 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities';
 import { CalendarClock, CheckSquare, MessageSquare, Plus, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
-import { STATUS_META } from '../lib/constants';
+import { STATUS_META, PRIORITY_META } from '../lib/constants';
 import { cn, formatDateShort, isOverdue, taskRef } from '../lib/utils';
-import type { Task, TaskStatus } from '../lib/types';
-import { Avatar, LabelChip, ProgressBar } from '../components/common';
+import type { Priority, Task, TaskStatus } from '../lib/types';
+import { Avatar, LabelChip, PriorityBadge, ProgressBar } from '../components/common';
+
+const PRIORITY_CYCLE: Priority[] = ['none', 'low', 'medium', 'high', 'urgent'];
 
 const BOARD_COLUMNS: TaskStatus[] = ['todo', 'inprogress', 'inreview', 'done'];
 
@@ -205,6 +207,7 @@ function BoardColumn({
 
 function TaskCard({ task, dragging = false }: { task: Task; dragging?: boolean }) {
   const selectTask = useStore((s) => s.selectTask);
+  const updateTask = useStore((s) => s.updateTask);
   const projects = useStore((s) => s.projects);
   const users = useStore((s) => s.users);
   const labels = useStore((s) => s.labels);
@@ -221,6 +224,12 @@ function TaskCard({ task, dragging = false }: { task: Task; dragging?: boolean }
   const subtaskDone = task.subtasks.filter((st) => st.done).length;
   const subtaskPct = task.subtasks.length ? Math.round((subtaskDone / task.subtasks.length) * 100) : task.status === 'done' ? 100 : 0;
   const taskLabels = labels.filter((l) => task.labelIds.includes(l.id));
+
+  const cyclePriority = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = PRIORITY_CYCLE[(PRIORITY_CYCLE.indexOf(task.priority) + 1) % PRIORITY_CYCLE.length];
+    updateTask(task.id, { priority: next });
+  };
 
   return (
     <article
@@ -269,6 +278,14 @@ function TaskCard({ task, dragging = false }: { task: Task; dragging?: boolean }
         )}
 
         <span className="flex-1" />
+
+        <button
+          onClick={cyclePriority}
+          title={`Prioritet: ${PRIORITY_META[task.priority].label} – klik for at ændre`}
+          className="shrink-0 rounded p-0.5 transition-transform hover:scale-125"
+        >
+          <PriorityBadge priority={task.priority} showLabel={false} />
+        </button>
 
         {task.dueDate && (
           <span
