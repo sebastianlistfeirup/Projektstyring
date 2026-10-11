@@ -169,7 +169,7 @@ export default function AppShell() {
         </div>
 
         <div className="border-t border-zinc-200/80 p-3 text-[11px] text-zinc-400 dark:border-white/[0.06] dark:text-zinc-500">
-          Data gemmes lokalt i browseren. Integrationer til Outlook og Teams kommer i næste fase.
+          Data gemmes lokalt i browseren. Windows-notifikationer, Teams og eksport styres fra Integrationer-fanen.
         </div>
       </aside>
 
