@@ -46,8 +46,26 @@ Et moderne, dansksproget projektstyringsværktøj til Windows – inspireret af 
 - **Afhængigheder** – "blokeret af"-relationer, auto-forskydning og kritisk sti på tidslinjen
 - **Tilpasselige felter** – egne felter pr. projekt (tekst/tal/valgliste) som kolonner i tabellen
 - **Gemte visninger** – filtre du kan genbruge og dele
+- **Bulk-handling** – markér mange opgaver og tildel/flyt/slet på én gang
+- **Duplikér & flyt** – opgaver kan kopieres eller flyttes mellem projekter
+- **Arkiv** – afsluttede projekter gemmes væk og kan gendannes
 - **Notifikationscenter** – @mentions og hændelser med udlæst/ulæst
-- **Dansk/engelsk** – sprog-skift i hele app-skallen
+- **Kommentar-tråde** – svar, redigering og 👍🎉❤️-reaktioner
+- **Vedhæftninger** – filer direkte på opgaven (gemmes lokalt via companion)
+- **Dansk/engelsk** – hele appen skifter sprog (DA/EN-knap i topbjælken)
+
+### Analyse
+
+- **Projekt-puls** – health-score pr. projekt med forklaringer og AI-risikovurdering
+- **Velocity** – planlagt vs. gennemført pr. sprint + estimat vs. faktisk tid
+
+### Platform & udviklere
+
+- **Åbent API + webhooks** – `GET /api/v1/*` og `task.completed`-events (se docs/api.md – inkl. Power Automate-eksempel)
+- **Azure DevOps** – to-vejs sync af work items (PAT) – afslut i Orbit, status skrives tilbage
+- **Asynkron standup** – dagens status postes til Teams
+- **Onboarding-tur** ved første start + **?** viser alle genveje
+- **PWA** (offline) + **Tauri Windows-app** (MSI/NSIS fra GitHub Releases)
 
 | Team & kapacitet | Integrationer | Outlook & Microsoft 365 |
 |---|---|---|
@@ -94,5 +112,5 @@ React 19 · TypeScript · Vite · Tailwind CSS · Zustand · dnd-kit · Recharts
 - [ ] To-vejs-sync med Microsoft To Do
 - [ ] PDF-eksport og rapportdesigner
 - [ ] Kommentar-redigering og svar-tråde
-- [ ] Oversættelse af alle views til engelsk (skallen er klar)
+- [x] Oversættelse af alle views til engelsk
 - [ ] Mobilapp (PWA er installerbar i dag)
