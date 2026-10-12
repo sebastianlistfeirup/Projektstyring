@@ -4,7 +4,7 @@ import { da } from 'date-fns/locale';
 import { CalendarDays, CalendarClock, Check, CircleAlert, ListTodo } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { cn, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
-import { EmptyState, PriorityBadge, ProgressBar, StatusBadge } from '../components/common';
+import { EmptyState, PriorityBadge, ProgressBar, StatusBadge, ViewHeader } from '../components/common';
 import { taskProgress } from '../components/table/taskProgress';
 import type { Task } from '../lib/types';
 
@@ -132,14 +132,13 @@ export default function MyWorkView() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-4xl space-y-6 p-4 lg:p-6">
-        <div>
-          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-            God dag, {firstName}
-          </h2>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">{capitalizedDate}</p>
-        </div>
+      <div className="mx-auto max-w-4xl p-4 lg:p-6">
+        <ViewHeader
+          title="Min arbejdsliste"
+          subtitle={firstName ? `God dag, ${firstName} · ${capitalizedDate}` : capitalizedDate}
+        />
 
+        <div className="space-y-6">
         {/* Stat-kort */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {stats.map(({ label, value, Icon, iconCls }) => (
@@ -208,6 +207,7 @@ export default function MyWorkView() {
             </div>
           </section>
         )}
+        </div>
       </div>
     </div>
   );

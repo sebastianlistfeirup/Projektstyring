@@ -17,7 +17,7 @@ import { useStore } from '../store/useStore';
 import { PROJECT_TEMPLATES, type ProjectTemplate } from '../data/templates';
 import type { ImportItem, Priority } from '../lib/types';
 import { cn, formatDate } from '../lib/utils';
-import { StatusBadge } from '../components/common';
+import { StatusBadge, ViewHeader } from '../components/common';
 
 const UNKNOWN_FILE = 'Kunne ikke genkende filen – understøtter Trello JSON, Monday CSV og Jira CSV.';
 
@@ -363,8 +363,10 @@ export default function ImportView() {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-6">
-      <div className="mx-auto flex max-w-7xl flex-col gap-6">
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto flex max-w-7xl flex-col gap-6 p-4 lg:p-6">
+        <ViewHeader title="Import & skabeloner" subtitle="Kom hurtigt i gang — opret fra skabelon eller importer fra Trello, Monday og Jira" />
+
         {/* Sektion A */}
         <section className="animate-fade-in">
           <div className="flex items-center gap-2 pb-3">

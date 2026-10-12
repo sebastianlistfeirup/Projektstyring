@@ -15,7 +15,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { cn, formatDate, timeAgo } from '../lib/utils';
-import { Avatar, EmptyState } from '../components/common';
+import { Avatar, EmptyState, ViewHeader } from '../components/common';
 import type { ActivityEntry } from '../lib/types';
 
 type Filter = 'all' | 'comments' | 'moves' | 'created' | 'sprints';
@@ -123,7 +123,10 @@ export default function ActivityView() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-3xl space-y-4 p-4 lg:p-6">
+      <div className="mx-auto max-w-3xl p-4 lg:p-6">
+        <ViewHeader title="Aktivitet" subtitle="Følg med i teamets seneste hændelser" />
+
+        <div className="space-y-4">
         {/* Filtre */}
         <div className="flex flex-wrap items-center gap-2">
           {FILTERS.map((f) => (
@@ -211,6 +214,7 @@ export default function ActivityView() {
             </section>
           ))
         )}
+        </div>
       </div>
     </div>
   );

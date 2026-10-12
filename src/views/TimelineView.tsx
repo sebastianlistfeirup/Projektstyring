@@ -5,7 +5,7 @@ import { CalendarRange } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import type { TaskStatus } from '../lib/types';
 import { cn, formatDateShort, taskRef } from '../lib/utils';
-import { Avatar, EmptyState } from '../components/common';
+import { Avatar, EmptyState, ViewHeader } from '../components/common';
 
 const DAY_W = 36;
 const LABEL_W = 256;
@@ -78,12 +78,15 @@ export default function TimelineView() {
 
   if (rows.length === 0) {
     return (
-      <div className="h-full overflow-auto p-6">
-        <EmptyState
-          icon={<CalendarRange className="h-6 w-6" />}
-          title="Ingen opgaver med datoer"
-          description="Tidslinjen viser opgaver med start- eller slutdato. Tilføj datoer på opgaver for at se dem her."
-        />
+      <div className="h-full overflow-auto">
+        <div className="p-4 lg:p-6">
+          <ViewHeader title="Tidslinje" subtitle="Se opgaver og sprints spredt ud over tid" />
+          <EmptyState
+            icon={<CalendarRange className="h-6 w-6" />}
+            title="Ingen opgaver med datoer"
+            description="Tidslinjen viser opgaver med start- eller slutdato. Tilføj datoer på opgaver for at se dem her."
+          />
+        </div>
       </div>
     );
   }
@@ -112,8 +115,10 @@ export default function TimelineView() {
   const offsetOf = (d: Date) => differenceInCalendarDays(d, windowStart) * DAY_W;
 
   return (
-    <div className="h-full overflow-auto p-6">
-      <div className="w-max min-w-full">
+    <div className="h-full overflow-auto">
+      <div className="p-4 lg:p-6">
+        <ViewHeader title="Tidslinje" subtitle="Se opgaver og sprints spredt ud over tid" />
+        <div className="w-max min-w-full">
         <div className="sticky top-0 z-30 flex">
           <div className="sticky left-0 top-0 z-40 flex h-full w-64 shrink-0 items-end bg-zinc-100 pb-2 pl-2 dark:bg-[#17181c]">
             <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">
@@ -179,7 +184,7 @@ export default function TimelineView() {
 
           {showToday && (
             <div
-              className="pointer-events-none absolute bottom-0 top-0 z-10 w-0.5 bg-indigo-400"
+              className="pointer-events-none absolute bottom-0 top-0 z-10 w-px bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.8)]"
               style={{ left: LABEL_W + todayIndex * DAY_W }}
             >
               <span className="absolute left-1 top-0 rounded-b-md bg-indigo-400 px-1.5 py-0.5 text-[9px] font-bold text-white">
@@ -252,6 +257,7 @@ export default function TimelineView() {
               </div>
             );
           })}
+        </div>
         </div>
       </div>
     </div>

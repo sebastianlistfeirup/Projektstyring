@@ -4,7 +4,7 @@ import { CalendarDays, Gauge, Palmtree, UserCheck, Users } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import type { Task, User } from '../lib/types';
 import { cn, isOverdue } from '../lib/utils';
-import { Avatar, ProgressBar } from '../components/common';
+import { Avatar, ProgressBar, ViewHeader } from '../components/common';
 
 interface MemberLoad {
   user: User;
@@ -69,8 +69,10 @@ export default function TeamView() {
   const candidates = loads.filter((l) => !l.onVacation).sort((a, b) => a.utilization - b.utilization).slice(0, 3);
 
   return (
-    <div className="h-full overflow-y-auto p-6">
-      <div className="mx-auto flex max-w-7xl flex-col gap-4">
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto flex max-w-7xl flex-col gap-4 p-4 lg:p-6">
+        <ViewHeader title="Team & kapacitet" subtitle="Belastning og kapacitet på tværs af teamet" />
+
         {/* Overskriftsrække: samlet belastning */}
         <div className="glass-panel animate-fade-in rounded-xl p-4">
           <div className="flex flex-wrap items-center gap-x-6 gap-y-3">

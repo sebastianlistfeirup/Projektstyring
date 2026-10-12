@@ -111,6 +111,26 @@ export function ProgressBar({ value, className }: { value: number; className?: s
   );
 }
 
+export function ViewHeader({
+  title,
+  subtitle,
+  actions,
+}: {
+  title: string;
+  subtitle?: string;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="mb-5 flex flex-wrap items-end justify-between gap-3 animate-fade-in">
+      <div className="min-w-0">
+        <h2 className="text-lg font-bold tracking-tight text-zinc-900 dark:text-zinc-50">{title}</h2>
+        {subtitle && <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">{subtitle}</p>}
+      </div>
+      {actions && <div className="flex items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
+
 export function EmptyState({
   icon,
   title,
@@ -123,8 +143,8 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-300 px-6 py-12 text-center dark:border-white/10">
-      <div className="grid h-12 w-12 place-items-center rounded-xl bg-zinc-100 text-zinc-400 dark:bg-white/5 dark:text-zinc-500">
+    <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-zinc-300 bg-gradient-to-b from-zinc-100 to-transparent px-6 py-16 text-center animate-fade-in dark:border-white/10 dark:from-white/[0.04] dark:to-transparent">
+      <div className="grid h-14 w-14 place-items-center rounded-full bg-indigo-500/10 text-indigo-500 ring-1 ring-indigo-500/20 dark:text-indigo-400">
         {icon}
       </div>
       <p className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">{title}</p>

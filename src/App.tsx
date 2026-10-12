@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import AppShell from './components/AppShell';
 import CommandPalette from './components/CommandPalette';
+import Splash from './components/Splash';
 import TaskDrawer from './components/TaskDrawer';
 import { useStore } from './store/useStore';
 import type { Task } from './lib/types';
@@ -70,6 +71,7 @@ export default function App() {
       </Routes>
       <TaskDrawer />
       <CommandPalette />
+      <Splash />
     </HashRouter>
   );
 }

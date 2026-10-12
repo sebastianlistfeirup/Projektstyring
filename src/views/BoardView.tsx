@@ -17,7 +17,7 @@ import { useStore } from '../store/useStore';
 import { STATUS_META, PRIORITY_META } from '../lib/constants';
 import { cn, formatDateShort, isOverdue, taskRef } from '../lib/utils';
 import type { Priority, Task, TaskStatus } from '../lib/types';
-import { Avatar, LabelChip, PriorityBadge, ProgressBar } from '../components/common';
+import { Avatar, LabelChip, PriorityBadge, ProgressBar, ViewHeader } from '../components/common';
 
 const PRIORITY_CYCLE: Priority[] = ['none', 'low', 'medium', 'high', 'urgent'];
 
@@ -33,6 +33,7 @@ export default function BoardView() {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [creating, setCreating] = useState<TaskStatus | null>(null);
   const [title, setTitle] = useState('');
+  const [freshId, setFreshId] = useState<string | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -51,7 +52,8 @@ export default function BoardView() {
     const trimmed = title.trim();
     const projectId = activeProjectId ?? projects[0]?.id;
     if (!trimmed || !projectId) return;
-    addTask({ title: trimmed, projectId, status });
+    const task = addTask({ title: trimmed, projectId, status });
+    setFreshId(task.id);
     setTitle('');
     setCreating(null);
   };
@@ -88,8 +90,11 @@ export default function BoardView() {
 
   return (
     <div className="flex h-full flex-col">
+      <div className="px-4 pt-4 lg:px-6 lg:pt-6">
+        <ViewHeader title="Tavle" subtitle="Træk opgaver frem mod målet" />
+      </div>
       <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragEnd={onDragEnd}>
-        <div className="flex flex-1 gap-4 overflow-x-auto p-5">
+        <div className="flex flex-1 gap-4 overflow-x-auto px-4 pb-4 lg:px-6 lg:pb-6">
           {BOARD_COLUMNS.map((status) => (
             <BoardColumn
               key={status}
@@ -97,6 +102,7 @@ export default function BoardView() {
               tasks={columnTasks(status)}
               creating={creating === status}
               draft={creating === status ? title : ''}
+              freshId={freshId}
               onDraftChange={setTitle}
               onStartCreate={() => {
                 setCreating(status);
@@ -120,6 +126,7 @@ function BoardColumn({
   tasks,
   creating,
   draft,
+  freshId,
   onDraftChange,
   onStartCreate,
   onCancelCreate,
@@ -129,6 +136,7 @@ function BoardColumn({
   tasks: Task[];
   creating: boolean;
   draft: string;
+  freshId: string | null;
   onDraftChange: (v: string) => void;
   onStartCreate: () => void;
   onCancelCreate: () => void;
@@ -143,7 +151,7 @@ function BoardColumn({
       <header className="flex items-center gap-2 px-3.5 pb-2 pt-3">
         <span className={cn('h-2 w-2 rounded-full', meta.dot)} />
         <h2 className="text-[13px] font-semibold">{meta.label}</h2>
-        <span className="rounded-full bg-zinc-200/80 px-1.5 text-[11px] font-medium tabular-nums text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
+        <span className="inline-flex min-w-[20px] items-center justify-center rounded-full bg-zinc-200/80 px-1.5 py-px text-center text-[11px] font-semibold tabular-nums text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
           {projectCount}
         </span>
         <button
@@ -164,7 +172,7 @@ function BoardColumn({
       >
         <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
           {tasks.map((task) => (
-            <TaskCard key={task.id} task={task} />
+            <TaskCard key={task.id} task={task} fresh={task.id === freshId} />
           ))}
         </SortableContext>
 
@@ -205,7 +213,7 @@ function BoardColumn({
   );
 }
 
-function TaskCard({ task, dragging = false }: { task: Task; dragging?: boolean }) {
+function TaskCard({ task, dragging = false, fresh = false }: { task: Task; dragging?: boolean; fresh?: boolean }) {
   const selectTask = useStore((s) => s.selectTask);
   const updateTask = useStore((s) => s.updateTask);
   const projects = useStore((s) => s.projects);
@@ -240,6 +248,7 @@ function TaskCard({ task, dragging = false }: { task: Task; dragging?: boolean }
       onClick={() => selectTask(task.id)}
       className={cn(
         'group cursor-grab select-none rounded-xl border border-zinc-200/90 bg-white p-3 shadow-card transition-all duration-150 hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-panel active:cursor-grabbing dark:border-white/[0.07] dark:bg-[#232429] dark:hover:border-white/[0.15]',
+        fresh && 'animate-fade-in',
         (isDragging || dragging) && 'rotate-2 opacity-90 shadow-panel',
         isDragging && 'opacity-30',
       )}

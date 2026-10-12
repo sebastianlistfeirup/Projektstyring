@@ -22,7 +22,7 @@ import { useStore } from '../store/useStore';
 import { PRIORITY_META, STATUS_META } from '../lib/constants';
 import type { Priority, Sprint, Task, TaskStatus } from '../lib/types';
 import { cn, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
-import { Avatar, EmptyState } from '../components/common';
+import { Avatar, EmptyState, ViewHeader } from '../components/common';
 
 const CHART = {
   indigo: '#818cf8',
@@ -304,24 +304,28 @@ export default function DashboardView() {
 
   if (filtered.length === 0) {
     return (
-      <div className="h-full overflow-y-auto p-6">
-        <EmptyState
-          icon={<LayoutDashboard className="h-6 w-6" />}
-          title="Intet at vise endnu"
-          description="Der er ingen opgaver i det valgte projekt. Opret en opgave for at se statistik, diagrammer og kommende frister her."
-        />
+      <div className="h-full overflow-y-auto">
+        <div className="p-4 lg:p-6">
+          <ViewHeader title="Dashboard" subtitle="Overblik over fremdrift, frister og belastning" />
+          <EmptyState
+            icon={<LayoutDashboard className="h-6 w-6" />}
+            title="Intet at vise endnu"
+            description="Der er ingen opgaver i det valgte projekt. Opret en opgave for at se statistik, diagrammer og kommende frister her."
+          />
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="h-full overflow-y-auto p-6">
-      <div className="mx-auto flex max-w-7xl flex-col gap-4">
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto flex max-w-7xl flex-col gap-4 p-4 lg:p-6">
+        <ViewHeader title="Dashboard" subtitle="Overblik over fremdrift, frister og belastning" />
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {stats.map((stat, i) => (
             <div
               key={stat.label}
-              className="glass-panel card-hover animate-slide-up rounded-xl p-4"
+              className="glass-panel card-hover animate-slide-up rounded-xl border-t-2 border-indigo-500/60 p-4"
               style={{ animationDelay: `${i * 40}ms` }}
             >
               <div className="flex items-center gap-3">

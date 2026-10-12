@@ -5,7 +5,7 @@ import { parseISO } from 'date-fns';
 import { useStore } from '../store/useStore';
 import { PRIORITY_META, STATUS_META, STATUS_ORDER } from '../lib/constants';
 import { cn, formatDateShort, isOverdue, taskRef } from '../lib/utils';
-import { Avatar, EmptyState, LabelChip, PriorityBadge, ProgressBar, StatusBadge } from '../components/common';
+import { Avatar, EmptyState, LabelChip, PriorityBadge, ProgressBar, StatusBadge, ViewHeader } from '../components/common';
 import { taskProgress } from '../components/table/taskProgress';
 import type { Priority, Task, TaskStatus, User } from '../lib/types';
 
@@ -280,7 +280,10 @@ export default function TableView() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[1400px] space-y-4 p-4 lg:p-6">
+      <div className="mx-auto max-w-[1400px] p-4 lg:p-6">
+        <ViewHeader title="Tabel" subtitle="Sortér, filtrér og gruppér alle opgaver ét sted" />
+
+        <div className="space-y-4">
         {/* Filter-bar */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
@@ -368,6 +371,7 @@ export default function TableView() {
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   );
@@ -385,7 +389,7 @@ function GroupRows({
   return (
     <>
       {showHeader && (
-        <tr className="border-b border-zinc-200/70 bg-zinc-50/80 dark:border-white/[0.05] dark:bg-white/[0.03]">
+        <tr className="border-b border-zinc-200/70 bg-zinc-100/80 dark:border-white/[0.05] dark:bg-white/[0.05]">
           <td colSpan={10} className="px-4 py-2">
             <span className="flex items-center gap-2">
               <span className="text-xs font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-300">

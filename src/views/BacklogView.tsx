@@ -13,7 +13,7 @@ import { Check, ChevronDown, ChevronRight, GripVertical, ListChecks, Play, Plus 
 import { useStore } from '../store/useStore';
 import { SPRINT_META, STATUS_META } from '../lib/constants';
 import { cn, formatDateShort, taskRef } from '../lib/utils';
-import { Avatar, EmptyState, PriorityBadge } from '../components/common';
+import { Avatar, EmptyState, PriorityBadge, ViewHeader } from '../components/common';
 import type { Sprint, Task } from '../lib/types';
 
 function pointsOf(tasks: Task[]): number {
@@ -330,14 +330,13 @@ export default function BacklogView() {
   if (!activeProjectId) {
     return (
       <div className="h-full overflow-y-auto">
-        <div className="grid h-full place-items-center p-6">
-          <div className="w-full max-w-md">
-            <EmptyState
-              icon={<ListChecks className="h-6 w-6" />}
-              title="Intet projekt valgt"
-              description="Vælg et projekt i venstre sidepanel for at se backlog og sprints."
-            />
-          </div>
+        <div className="mx-auto max-w-5xl p-4 lg:p-6">
+          <ViewHeader title="Backlog & Sprints" subtitle="Planlæg sprints og prioritér backloggen" />
+          <EmptyState
+            icon={<ListChecks className="h-6 w-6" />}
+            title="Intet projekt valgt"
+            description="Vælg et projekt i venstre sidepanel for at se backlog og sprints."
+          />
         </div>
       </div>
     );
@@ -347,22 +346,19 @@ export default function BacklogView() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-5xl space-y-4 p-4 lg:p-6">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-              {project?.name ?? 'Backlog'}
-            </h2>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              Træk opgaver mellem sprints, eller opret nye direkte i en sektion.
-            </p>
-          </div>
-          <button onClick={() => setAddingSprint((v) => !v)} className="btn-outline ml-auto">
-            <Plus className="h-4 w-4" />
-            Ny sprint
-          </button>
-        </div>
+      <div className="mx-auto max-w-5xl p-4 lg:p-6">
+        <ViewHeader
+          title="Backlog & Sprints"
+          subtitle={project ? `${project.name} · Træk opgaver mellem sprints, eller opret nye direkte i en sektion.` : 'Træk opgaver mellem sprints, eller opret nye direkte i en sektion.'}
+          actions={
+            <button onClick={() => setAddingSprint((v) => !v)} className="btn-outline">
+              <Plus className="h-4 w-4" />
+              Ny sprint
+            </button>
+          }
+        />
 
+        <div className="space-y-4">
         {addingSprint && <NewSprintForm onClose={() => setAddingSprint(false)} />}
 
         <DndContext sensors={sensors} onDragStart={onDragStart} onDragCancel={onDragCancel} onDragEnd={onDragEnd}>
@@ -410,6 +406,7 @@ export default function BacklogView() {
             ) : null}
           </DragOverlay>
         </DndContext>
+        </div>
       </div>
     </div>
   );

@@ -10,7 +10,8 @@
     "build": "tsc -b && vite build",
     "tauri": "tauri",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:smoke": "node scripts/smoke-test.mjs"
   },
   "dependencies": {
     "@azure/msal-node": "^7.0.1",

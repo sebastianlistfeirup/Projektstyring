@@ -42,7 +42,13 @@ export default function AppShell() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="relative z-10 flex h-screen overflow-hidden">
+      {/* Ambient lys bag indholdet */}
+      <div aria-hidden className="pointer-events-none fixed inset-0 z-0">
+        <div className="absolute -top-44 left-1/3 h-96 w-[36rem] rounded-full bg-indigo-500/[0.06] blur-3xl dark:bg-indigo-500/[0.11]" />
+        <div className="absolute -bottom-24 right-0 h-80 w-[30rem] rounded-full bg-violet-500/[0.05] blur-3xl dark:bg-violet-500/[0.08]" />
+        <div className="absolute -left-32 top-1/2 h-72 w-72 rounded-full bg-sky-500/[0.04] blur-3xl dark:bg-sky-500/[0.06]" />
+      </div>
       {/* Ikon-rail */}
       <nav className="flex w-14 shrink-0 flex-col items-center gap-1 border-r border-zinc-200/80 bg-white py-3 dark:border-white/[0.06] dark:bg-[#131417]">
         <div
