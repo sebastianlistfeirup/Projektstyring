@@ -380,6 +380,12 @@ wss.on('connection', (ws) => {
       if (msg.type === 'hello') {
         presence.set(String(msg.clientId ?? Math.random()), { name: String(msg.user?.name ?? 'Ukendt'), since: new Date().toISOString() });
         broadcastPresence();
+      } else if (msg.type === 'cursor') {
+        // Videreformidl markørpositioner til alle ANDRE klienter (tilstedeværelsesmarkører)
+        const data = JSON.stringify({ type: 'cursor', clientId: String(msg.clientId ?? ''), name: String(msg.user?.name ?? ''), x: Number(msg.x), y: Number(msg.y), view: String(msg.view ?? '') });
+        for (const client of wss.clients) {
+          if (client !== ws && client.readyState === 1) client.send(data);
+        }
       }
     } catch { /* ignorer */ }
   });
@@ -1031,6 +1037,142 @@ app.post('/api/adops/complete', async (req, res) => {
       body: JSON.stringify([{ op: 'replace', path: '/fields/System.State', value: 'Done' }]),
     });
     res.json({ ok: r.ok || r.status === 200, status: r.status });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
+});
+
+// ---------------- Kundegodkendelse (offentlig side, skriver tilbage i snapshot) ----
+function findTaskByApprovalToken(token) {
+  const snap = lastSnapshot?.snapshot;
+  if (!snap) return null;
+  const task = (snap.tasks ?? []).find((t) => t.approval?.token === token);
+  return task ? { snap, task } : null;
+}
+
+app.get('/public/approve/:token', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  const found = findTaskByApprovalToken(req.params.token);
+  if (!found) {
+    return res.status(404).send('<!doctype html><html lang="da"><body style="font-family:sans-serif;padding:2rem">Ukendt eller inaktivt godkendelseslink.</body></html>');
+  }
+  const t = found.task;
+  const done = t.approval.status !== 'pending';
+  const html = `<!doctype html>
+<html lang="da"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Godkendelse – ${esc(t.title)}</title>
+<style>
+  body{font-family:'Segoe UI',system-ui,sans-serif;background:#17181c;color:#e4e4e7;margin:0;padding:2.5rem 1.5rem;display:flex;justify-content:center}
+  main{max-width:520px;width:100%}
+  h1{font-size:1.4rem;margin:0 0 .25rem}
+  .card{background:#1e1f24;border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:1.5rem;margin-bottom:1rem}
+  .lbl{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#a1a1aa}
+  p{color:#d4d4d8;white-space:pre-wrap}
+  textarea{width:100%;box-sizing:border-box;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:#17181c;color:#e4e4e7;padding:.75rem;font-family:inherit;min-height:80px}
+  .row{display:flex;gap:.75rem;margin-top:1rem}
+  button{flex:1;border:0;border-radius:10px;padding:.85rem;font-size:1rem;font-weight:600;cursor:pointer}
+  .ok{background:#10b981;color:#fff}
+  .no{background:#f59e0b;color:#111}
+  .state{text-align:center;padding:1rem;border-radius:10px;font-weight:600}
+  .state.approved{background:rgba(16,185,129,.15);color:#34d399}
+  .state.changes{background:rgba(245,158,11,.15);color:#fbbf24}
+</style></head><body><main>
+<div class="card"><span class="lbl">Anmodning om godkendelse</span><h1>${esc(t.title)}</h1></div>
+<div class="card"><span class="lbl">Beskrivelse</span><p>${esc(t.description || 'Ingen beskrivelse.')}</p></div>
+${done
+  ? `<div class="state ${t.approval.status}">${t.approval.status === 'approved' ? 'Godkendt' : 'Ændringer ønsket'}${t.approval.by ? ` af ${esc(t.approval.by)}` : ''}${t.approval.at ? ` · ${esc(t.approval.at.slice(0, 10))}` : ''}${t.approval.comment ? `<p style="margin-top:.5rem;font-weight:400">${esc(t.approval.comment)}</p>` : ''}</div>`
+  : `<div class="card">
+  <span class="lbl">Dit navn</span>
+  <input id="by" style="width:100%;box-sizing:border-box;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:#17181c;color:#e4e4e7;padding:.75rem;margin-top:.4rem" placeholder="Fx Peter Jensen">
+  <div style="margin-top:.75rem"><span class="lbl">Kommentar (valgfri)</span></div>
+  <textarea id="comment" placeholder="Fx 'Godkendt med smårettelser'"></textarea>
+  <div class="row">
+    <button class="ok" onclick="submit('approved')">Godkend</button>
+    <button class="no" onclick="submit('changes')">Ændringer</button>
+  </div>
+  <p id="err" style="color:#fb7185;font-size:.85rem"></p>
+</div>`}
+<script>
+async function submit(action) {
+  const by = document.getElementById('by').value.trim();
+  if (!by) { document.getElementById('err').textContent = 'Skriv dit navn først.'; return; }
+  const comment = document.getElementById('comment').value.trim();
+  const r = await fetch(location.pathname, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, by, comment }) });
+  if (r.ok) location.reload(); else document.getElementById('err').textContent = 'Noget gik galt – prøv igen.';
+}
+</script>
+</main></body></html>`;
+  res.send(html);
+});
+
+app.post('/public/approve/:token', (req, res) => {
+  const found = findTaskByApprovalToken(req.params.token);
+  if (!found) return res.status(404).json({ ok: false, reason: 'Ukendt token' });
+  const { action, by, comment } = req.body ?? {};
+  if (!['approved', 'changes'].includes(action)) return res.status(400).json({ ok: false, reason: 'Ugyldig handling' });
+  const task = found.task;
+  task.approval = { ...task.approval, status: action, by: String(by ?? ''), at: new Date().toISOString(), comment: String(comment ?? '') };
+  task.updatedAt = new Date().toISOString(); // sikrer at klienterne trækker versionen ned ved næste merge
+  broadcast({ type: 'sync', from: 'approval' });
+  windowsNotify('Orbit – godkendelse', `“${task.title}”: ${action === 'approved' ? 'Godkendt' : 'Ændringer ønsket'}`);
+  res.json({ ok: true });
+});
+
+// ---------------- GitHub / GitLab ----------------
+function gitCfg() {
+  return loadConfig().git ?? {};
+}
+
+app.post('/api/git/config', (req, res) => {
+  const { provider, token, owner, repo } = req.body ?? {};
+  const cfg = loadConfig();
+  cfg.git = { provider: provider ?? 'github', token: token ?? '', owner: owner ?? '', repo: repo ?? '' };
+  saveConfig(cfg);
+  res.json({ ok: true });
+});
+
+app.get('/api/git/issues', async (req, res) => {
+  const { provider, token, owner, repo } = gitCfg();
+  if (!token || !owner || !repo) return res.json({ ok: false, reason: 'GitHub/GitLab er ikke konfigureret (token, owner/ejer og repo under Integrationer)' });
+  try {
+    if (provider === 'gitlab') {
+      const r = await fetch(`https://gitlab.com/api/v4/projects/${encodeURIComponent(`${owner}/${repo}`)}/issues?state=opened&per_page=50`, {
+        headers: { 'PRIVATE-TOKEN': token },
+      });
+      if (!r.ok) return res.json({ ok: false, reason: `GitLab svarede ${r.status}` });
+      const data = await r.json();
+      return res.json({ ok: true, items: data.map((i) => ({ id: i.iid, title: i.title, state: i.state })) });
+    }
+    const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues?state=open&per_page=50`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+    });
+    if (!r.ok) return res.json({ ok: false, reason: `GitHub svarede ${r.status} – tjek token og repo-navn` });
+    const data = await r.json();
+    res.json({ ok: true, items: data.filter((i) => !i.pull_request).map((i) => ({ id: i.number, title: i.title, state: i.state })) });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
+});
+
+app.post('/api/git/close', async (req, res) => {
+  const { provider, owner, repo, token } = gitCfg();
+  const { id } = req.body ?? {};
+  if (!token || !id) return res.status(400).json({ ok: false, reason: 'Mangler id eller konfiguration' });
+  try {
+    if (provider === 'gitlab') {
+      const r = await fetch(`https://gitlab.com/api/v4/projects/${encodeURIComponent(`${owner}/${repo}`)}/issues/${id}`, {
+        method: 'PUT',
+        headers: { 'PRIVATE-TOKEN': token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state_event: 'close' }),
+      });
+      return res.json({ ok: r.ok, status: r.status });
+    }
+    const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${id}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state: 'closed' }),
+    });
+    res.json({ ok: r.ok, status: r.status });
   } catch (err) {
     res.json({ ok: false, reason: String(err) });
   }

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { CalendarClock, CalendarPlus, Check, Copy, FileText, FolderInput, Paperclip, Play, Plus, Sparkles, Square, Trash2, X } from 'lucide-react';
+import { CalendarClock, CalendarPlus, Check, ClipboardCheck, Copy, FileText, FolderInput, Paperclip, Play, Plus, Sparkles, Square, Trash2, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { PRIORITY_META, STATUS_META } from '../lib/constants';
 import { cn, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
+import { useLang, t } from '../lib/i18n';
 import {
   aiComplete,
   attachmentUrl,
@@ -17,6 +18,7 @@ import type { Comment, CustomFieldDef, Priority, Task, TaskStatus } from '../lib
 import { Avatar, LabelChip, ProgressBar, StatusBadge } from '../components/common';
 
 export default function TaskDrawer() {
+  useLang();
   const task = useStore((s) => s.tasks.find((t) => t.id === s.selectedTaskId));
   const selectTask = useStore((s) => s.selectTask);
   const projects = useStore((s) => s.projects);
@@ -39,6 +41,8 @@ export default function TaskDrawer() {
   const addFieldDef = useStore((s) => s.addFieldDef);
   const removeFieldDef = useStore((s) => s.removeFieldDef);
   const me = useStore((s) => s.users.find((u) => u.id === s.currentUserId));
+  const requestApproval = useStore((s) => s.requestApproval);
+  const clearApproval = useStore((s) => s.clearApproval);
 
   const [comment, setComment] = useState('');
   const [subtaskTitle, setSubtaskTitle] = useState('');
@@ -84,6 +88,9 @@ export default function TaskDrawer() {
   const [calBusy, setCalBusy] = useState(false);
   const [calFeedback, setCalFeedback] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
 
+  // Footer: kundegodkendelse via offentligt link
+  const [approvalFeedback, setApprovalFeedback] = useState<string | null>(null);
+
   const taskId = task?.id;
   const refreshAttachments = useCallback(async () => {
     if (!taskId) return;
@@ -99,6 +106,7 @@ export default function TaskDrawer() {
   useEffect(() => {
     setFiles([]);
     setAttFeedback(null);
+    setApprovalFeedback(null);
     if (taskId) void refreshAttachments();
   }, [taskId, refreshAttachments]);
 
@@ -253,6 +261,27 @@ export default function TaskDrawer() {
     if (!moveTarget) return;
     moveTaskToProject(task.id, moveTarget);
     setMoveOpen(false);
+  };
+
+  // Kundegodkendelse: offentligt link på companion-serveren
+  const approvalLink = (token: string) => `http://${window.location.hostname}:4310/public/approve/${token}`;
+
+  const copyApprovalLink = async (token: string, message: string) => {
+    try {
+      await navigator.clipboard.writeText(approvalLink(token));
+      setApprovalFeedback(message);
+    } catch {
+      setApprovalFeedback(approvalLink(token));
+    }
+  };
+
+  const onRequestApproval = () => {
+    const token = requestApproval(task.id);
+    if (token) void copyApprovalLink(token, t('drawer.approvalLinkCopied'));
+  };
+
+  const onResetApproval = () => {
+    if (window.confirm(t('drawer.approvalConfirmReset'))) clearApproval(task.id);
   };
 
   const submitSubtask = () => {
@@ -989,41 +1018,118 @@ export default function TaskDrawer() {
         </div>
 
         {/* Footer */}
-        <div className="relative flex items-center gap-2 border-t border-zinc-200/80 px-5 py-3 dark:border-white/[0.06]">
-          <span className="text-[11px] text-zinc-400">
-            Oprettet {formatDateShort(task.createdAt)} · opdateret {formatDateShort(task.updatedAt)}
-          </span>
-          <span className="flex-1" />
-          <button
-            onClick={openMovePopup}
-            title="Flyt opgaven til et andet projekt"
-            className="btn-ghost px-2.5 py-1.5 text-xs"
-          >
-            <FolderInput className="h-3.5 w-3.5" />
-            Flyt til projekt
-          </button>
-          <button
-            onClick={() => {
-              duplicateTask(task.id);
-              selectTask(null);
-            }}
-            title="Opret en kopi af opgaven"
-            className="btn-ghost px-2.5 py-1.5 text-xs"
-          >
-            <Copy className="h-3.5 w-3.5" />
-            Duplikér
-          </button>
-          <button
-            onClick={() => {
-              if (window.confirm('Slet denne opgave? Handlingen kan ikke fortrydes.')) {
-                deleteTask(task.id);
-              }
-            }}
-            className="btn-ghost px-2.5 py-1.5 text-xs text-rose-600 hover:bg-rose-500/10 dark:text-rose-400"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            Slet opgave
-          </button>
+        <div className="relative border-t border-zinc-200/80 px-5 py-3 dark:border-white/[0.06]">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-zinc-400">
+              Oprettet {formatDateShort(task.createdAt)} · opdateret {formatDateShort(task.updatedAt)}
+            </span>
+            <span className="flex-1" />
+            <button
+              onClick={openMovePopup}
+              title="Flyt opgaven til et andet projekt"
+              className="btn-ghost px-2.5 py-1.5 text-xs"
+            >
+              <FolderInput className="h-3.5 w-3.5" />
+              Flyt til projekt
+            </button>
+            <button
+              onClick={() => {
+                duplicateTask(task.id);
+                selectTask(null);
+              }}
+              title="Opret en kopi af opgaven"
+              className="btn-ghost px-2.5 py-1.5 text-xs"
+            >
+              <Copy className="h-3.5 w-3.5" />
+              Duplikér
+            </button>
+
+            {/* Kundegodkendelse */}
+            {!task.approval && (
+              <button
+                onClick={onRequestApproval}
+                title={t('drawer.approvalRequest')}
+                className="btn-ghost px-2.5 py-1.5 text-xs"
+              >
+                <ClipboardCheck className="h-3.5 w-3.5" />
+                {t('drawer.approvalRequest')}
+              </button>
+            )}
+            {task.approval?.status === 'pending' && (
+              <>
+                <span className="flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
+                  {t('drawer.approvalPending')}
+                </span>
+                <button
+                  onClick={() => {
+                    if (task.approval) void copyApprovalLink(task.approval.token, t('drawer.approvalCopied'));
+                  }}
+                  className="btn-ghost px-2.5 py-1.5 text-xs"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  {t('drawer.approvalCopyLink')}
+                </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm(t('drawer.approvalConfirmCancel'))) clearApproval(task.id);
+                  }}
+                  className="btn-ghost px-2.5 py-1.5 text-xs"
+                >
+                  {t('drawer.approvalCancel')}
+                </button>
+              </>
+            )}
+            {task.approval?.status === 'approved' && (
+              <span className="flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                <Check className="h-3.5 w-3.5" />
+                {task.approval.by
+                  ? t('drawer.approvalApprovedBy').replace('{name}', task.approval.by)
+                  : t('drawer.approvalApproved')}
+                <button
+                  onClick={onResetApproval}
+                  title={t('drawer.approvalResetTitle')}
+                  className="grid h-4 w-4 place-items-center rounded-full text-emerald-700/50 transition-colors hover:bg-emerald-500/20 hover:text-emerald-800 dark:text-emerald-300/50 dark:hover:text-emerald-100"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            )}
+            {task.approval?.status === 'changes' && (
+              <span
+                title={task.approval.comment}
+                className="flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-700 dark:text-amber-300"
+              >
+                <span className="max-w-56 truncate">
+                  {task.approval.comment
+                    ? t('drawer.approvalChangesComment').replace('{comment}', task.approval.comment)
+                    : t('drawer.approvalChanges')}
+                </span>
+                <button
+                  onClick={onResetApproval}
+                  title={t('drawer.approvalResetTitle')}
+                  className="grid h-4 w-4 place-items-center rounded-full text-amber-700/50 transition-colors hover:bg-amber-500/20 hover:text-amber-800 dark:text-amber-300/50 dark:hover:text-amber-100"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            )}
+
+            <button
+              onClick={() => {
+                if (window.confirm('Slet denne opgave? Handlingen kan ikke fortrydes.')) {
+                  deleteTask(task.id);
+                }
+              }}
+              className="btn-ghost px-2.5 py-1.5 text-xs text-rose-600 hover:bg-rose-500/10 dark:text-rose-400"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Slet opgave
+            </button>
+          </div>
+          {approvalFeedback && (
+            <p className="mt-1.5 truncate text-xs font-medium text-emerald-600 dark:text-emerald-400">{approvalFeedback}</p>
+          )}
           {moveOpen && (
             <div className="glass-panel absolute bottom-full right-4 z-50 mb-2 w-64 rounded-xl p-3 shadow-panel">
               <p className="mb-1.5 text-xs font-semibold text-zinc-700 dark:text-zinc-200">Flyt til projekt</p>

@@ -1,7 +1,7 @@
 export type TaskStatus = 'backlog' | 'todo' | 'inprogress' | 'inreview' | 'done' | 'canceled';
 export type Priority = 'urgent' | 'high' | 'medium' | 'low' | 'none';
 export type SprintStatus = 'planned' | 'active' | 'completed';
-export type Theme = 'dark' | 'light';
+export type Theme = 'dark' | 'light' | 'system';
 
 export interface User {
   id: string;
@@ -59,7 +59,67 @@ export interface Task {
   recurrence?: 'daily' | 'weekly' | 'monthly' | null; // opret næste instans når opgaven afsluttes
   blockedBy?: string[]; // id'er på opgaver der blokerer denne
   customFields?: Record<string, string | number>; // fieldDefId -> værdi
-  extIds?: { todoListId?: string; todoTaskId?: string; adopsId?: number }; // eksterne systemer
+  extIds?: {
+    todoListId?: string;
+    todoTaskId?: string;
+    adopsId?: number;
+    gitProvider?: 'github' | 'gitlab';
+    gitIssue?: number;
+  }; // eksterne systemer
+  approval?: Approval | null; // kundegodkendelse via offentligt link
+}
+
+export type NoteKind = 'note' | 'meeting' | 'decision';
+
+export interface NoteEntry {
+  id: string;
+  projectId: string;
+  kind: NoteKind;
+  title: string;
+  body: string;
+  authorId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Risk {
+  id: string;
+  projectId: string;
+  title: string;
+  probability: number; // 1-5
+  impact: number; // 1-5
+  mitigation: string;
+  status: 'open' | 'mitigated' | 'closed';
+}
+
+export interface IssueEntry {
+  id: string;
+  projectId: string;
+  title: string;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  status: 'open' | 'inprogress' | 'resolved';
+  taskId?: string | null;
+  createdAt: string;
+}
+
+export interface RulesSettings {
+  wip: { todo: number | null; inprogress: number | null; inreview: number | null };
+  agingDays: number; // eskalér opgaver uden aktivitet efter N dage
+  escalate: boolean;
+}
+
+export interface AgentsSettings {
+  triage: boolean; // foreslå ansvarlig/prioritet på nye opgaver
+  stale: boolean; // advar om stillestående opgaver
+  staleDays: number;
+}
+
+export interface Approval {
+  token: string;
+  status: 'pending' | 'approved' | 'changes';
+  by?: string;
+  at?: string;
+  comment?: string;
 }
 
 export interface StandupEntry {
@@ -135,6 +195,7 @@ export interface Project {
   description: string;
   publicToken?: string | null; // kunde-statusside ( companion /public/status/<token> )
   archived?: boolean; // arkiverede projekter gemmes væk, men kan gendannes
+  budget?: number | null; // budget i DKK (økonomi-modul)
 }
 
 export interface ActivityEntry {

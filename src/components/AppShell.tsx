@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { Archive, ChevronRight, Moon, Plus, RotateCcw, Search, Sun, Trash2, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
@@ -7,6 +7,9 @@ import { useI18n, useLang, t } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { Avatar } from './common';
 import NotificationCenter from './NotificationCenter';
+import PresenceCursors from './PresenceCursors';
+import RouteTransition from './RouteTransition';
+import TvMode from './TvMode';
 
 function openPalette() {
   window.dispatchEvent(new CustomEvent('orbit:open-palette'));
@@ -33,6 +36,14 @@ export default function AppShell() {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [tvMode, setTvMode] = useState(false);
+
+  // TV-tilstand: TvMode-komponenten dispatcher 'orbit:tv' – skjul app-chrome
+  useEffect(() => {
+    const onTv = (e: Event) => setTvMode(Boolean((e as CustomEvent<{ on: boolean }>).detail?.on));
+    window.addEventListener('orbit:tv', onTv);
+    return () => window.removeEventListener('orbit:tv', onTv);
+  }, []);
 
   const me = users.find((u) => u.id === currentUserId);
   const currentView = VIEWS.find((v) => location.pathname.startsWith(v.to));
@@ -61,7 +72,12 @@ export default function AppShell() {
         <div className="absolute -left-32 top-1/2 h-72 w-72 rounded-full bg-sky-500/[0.04] blur-3xl dark:bg-sky-500/[0.06]" />
       </div>
       {/* Ikon-rail */}
-      <nav className="flex w-14 shrink-0 flex-col items-center gap-1 border-r border-zinc-200/80 bg-white py-3 dark:border-white/[0.06] dark:bg-[#131417]">
+      <nav
+        className={cn(
+          'flex w-14 shrink-0 flex-col items-center gap-1 border-r border-zinc-200/80 bg-white py-3 dark:border-white/[0.06] dark:bg-[#131417]',
+          tvMode && 'hidden',
+        )}
+      >
         <div
           className="mb-3 grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-bold text-white shadow-glow"
           title="Orbit"
@@ -99,7 +115,12 @@ export default function AppShell() {
       </nav>
 
       {/* Workspace-panel */}
-      <aside className="flex w-64 shrink-0 flex-col border-r border-zinc-200/80 bg-zinc-50/60 dark:border-white/[0.06] dark:bg-[#1a1b1f]/60">
+      <aside
+        className={cn(
+          'flex w-64 shrink-0 flex-col border-r border-zinc-200/80 bg-zinc-50/60 dark:border-white/[0.06] dark:bg-[#1a1b1f]/60',
+          tvMode && 'hidden',
+        )}
+      >
         <div className="flex items-center gap-2.5 px-4 pb-2 pt-4">
           <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-zinc-700 to-zinc-900 text-xs font-bold text-white dark:from-zinc-200 dark:to-zinc-400 dark:text-zinc-900">
             N
@@ -264,7 +285,12 @@ export default function AppShell() {
 
       {/* Hovedindhold */}
       <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-zinc-200/80 bg-white/70 px-5 backdrop-blur dark:border-white/[0.06] dark:bg-[#17181c]/80">
+        <header
+          className={cn(
+            'flex h-14 shrink-0 items-center gap-3 border-b border-zinc-200/80 bg-white/70 px-5 backdrop-blur dark:border-white/[0.06] dark:bg-[#17181c]/80',
+            tvMode && 'hidden',
+          )}
+        >
           <h1 className="truncate text-[15px] font-semibold">
             {currentView ? t(currentView.labelKey) : 'Orbit'}
           </h1>
@@ -279,6 +305,7 @@ export default function AppShell() {
           )}
           <div className="ml-auto flex items-center gap-2">
             <NotificationCenter />
+            <TvMode />
             <button
               onClick={toggleLang}
               title="Skift sprog / Switch language"
@@ -292,10 +319,13 @@ export default function AppShell() {
             </button>
           </div>
         </header>
-        <div className="min-h-0 flex-1 overflow-hidden">
-          <Outlet />
+        <div className={cn('min-h-0 flex-1 overflow-hidden', tvMode && 'p-6 lg:p-10')}>
+          <RouteTransition>
+            <Outlet />
+          </RouteTransition>
         </div>
       </main>
+      <PresenceCursors />
     </div>
   );
 }

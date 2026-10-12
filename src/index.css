@@ -65,3 +65,53 @@
 .animate-spin-slow {
   animation: spin-slow 3.2s linear infinite;
 }
+
+/* Overgang mellem sider (RouteTransition) */
+@keyframes view-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-view-enter {
+  animation: view-enter 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Print: kun rapport-siden styles pænt – resten af app'en skjules */
+.print-header {
+  display: none;
+}
+
+@media print {
+  body {
+    background: #ffffff !important;
+  }
+  nav,
+  aside,
+  header {
+    display: none !important;
+  }
+  .report-page {
+    background: #ffffff !important;
+    color: #18181b !important;
+  }
+  .report-page .glass-panel {
+    background: #ffffff !important;
+    border-color: #d4d4d8 !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+  }
+  .report-page .report-widget {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .print-header {
+    display: block !important;
+    color: #18181b !important;
+  }
+}

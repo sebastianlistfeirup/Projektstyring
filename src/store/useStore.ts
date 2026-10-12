@@ -4,13 +4,18 @@ import { nanoid } from 'nanoid';
 import { addDays, addMonths, format } from 'date-fns';
 import type {
   ActivityEntry,
+  AgentsSettings,
   AppNotification,
   AutomationSettings,
   CustomFieldDef,
   ImportItem,
+  IssueEntry,
   Label,
+  NoteEntry,
   Priority,
   Project,
+  Risk,
+  RulesSettings,
   SavedView,
   Sprint,
   SprintStatus,
@@ -57,6 +62,13 @@ interface OrbitState {
   savedViews: SavedView[];
   automation: AutomationSettings;
   standups: StandupEntry[];
+  notes: NoteEntry[];
+  risks: Risk[];
+  issues: IssueEntry[];
+  hourlyRate: number; // DKK pr. time (økonomi)
+  rules: RulesSettings;
+  agents: AgentsSettings;
+  syncConflicts: { taskId: string; local: Task; remote: Task }[];
   activeProjectId: string | null;
   selectedTaskId: string | null;
 
@@ -94,6 +106,23 @@ interface OrbitState {
   bulkDeleteTasks: (ids: string[]) => void;
   setTaskExtIds: (taskId: string, ext: NonNullable<Task['extIds']>) => void;
   addStandup: (text: string) => void;
+
+  addNote: (projectId: string, kind: NoteEntry['kind'], title: string, body: string) => void;
+  updateNote: (id: string, patch: Partial<NoteEntry>) => void;
+  deleteNote: (id: string) => void;
+  addRisk: (projectId: string, title: string, probability: number, impact: number, mitigation?: string) => void;
+  updateRisk: (id: string, patch: Partial<Risk>) => void;
+  deleteRisk: (id: string) => void;
+  addIssue: (projectId: string, title: string, severity: IssueEntry['severity'], taskId?: string | null) => void;
+  updateIssue: (id: string, patch: Partial<IssueEntry>) => void;
+  deleteIssue: (id: string) => void;
+  setHourlyRate: (rate: number) => void;
+  setRules: (patch: Partial<RulesSettings>) => void;
+  setAgents: (patch: Partial<AgentsSettings>) => void;
+  requestApproval: (taskId: string) => string | null;
+  clearApproval: (taskId: string) => void;
+  addSyncConflict: (conflict: { taskId: string; local: Task; remote: Task }) => void;
+  resolveSyncConflict: (taskId: string, choice: 'local' | 'remote') => void;
   shareProject: (projectId: string) => void;
   unshareProject: (projectId: string) => void;
 
@@ -173,6 +202,13 @@ export const useStore = create<OrbitState>()(
       savedViews: [],
       automation: { doneTeams: true, doneNotifyAssignee: true, urgentAssigneeId: null },
       standups: [],
+      notes: [],
+      risks: [],
+      issues: [],
+      hourlyRate: 950,
+      rules: { wip: { todo: null, inprogress: null, inreview: null }, agingDays: 7, escalate: true },
+      agents: { triage: false, stale: true, staleDays: 14 },
+      syncConflicts: [],
       activeProjectId: 'p-app',
       selectedTaskId: null,
 
@@ -709,6 +745,99 @@ export const useStore = create<OrbitState>()(
         }));
       },
 
+      addNote: (projectId, kind, title, body) => {
+        if (!title.trim()) return;
+        const now = new Date().toISOString();
+        set((s) => ({
+          notes: [{ id: `n-${nanoid(8)}`, projectId, kind, title: title.trim(), body, authorId: s.currentUserId, createdAt: now, updatedAt: now }, ...s.notes],
+        }));
+      },
+
+      updateNote: (id, patch) => {
+        set((s) => ({
+          notes: s.notes.map((n) => (n.id === id ? { ...n, ...patch, updatedAt: new Date().toISOString() } : n)),
+        }));
+      },
+
+      deleteNote: (id) => {
+        set((s) => ({ notes: s.notes.filter((n) => n.id !== id) }));
+      },
+
+      addRisk: (projectId, title, probability, impact, mitigation = '') => {
+        if (!title.trim()) return;
+        set((s) => ({
+          risks: [{ id: `r-${nanoid(8)}`, projectId, title: title.trim(), probability, impact, mitigation, status: 'open' }, ...s.risks],
+        }));
+      },
+
+      updateRisk: (id, patch) => {
+        set((s) => ({ risks: s.risks.map((r) => (r.id === id ? { ...r, ...patch } : r)) }));
+      },
+
+      deleteRisk: (id) => {
+        set((s) => ({ risks: s.risks.filter((r) => r.id !== id) }));
+      },
+
+      addIssue: (projectId, title, severity, taskId = null) => {
+        if (!title.trim()) return;
+        set((s) => ({
+          issues: [{ id: `i-${nanoid(8)}`, projectId, title: title.trim(), severity, status: 'open', taskId, createdAt: new Date().toISOString() }, ...s.issues],
+        }));
+      },
+
+      updateIssue: (id, patch) => {
+        set((s) => ({ issues: s.issues.map((i) => (i.id === id ? { ...i, ...patch } : i)) }));
+      },
+
+      deleteIssue: (id) => {
+        set((s) => ({ issues: s.issues.filter((i) => i.id !== id) }));
+      },
+
+      setHourlyRate: (rate) => {
+        set({ hourlyRate: Math.max(0, rate) });
+      },
+
+      setRules: (patch) => {
+        set((s) => ({ rules: { ...s.rules, ...patch } }));
+      },
+
+      setAgents: (patch) => {
+        set((s) => ({ agents: { ...s.agents, ...patch } }));
+      },
+
+      requestApproval: (taskId) => {
+        const token = nanoid(18);
+        set((s) => ({
+          tasks: s.tasks.map((t) =>
+            t.id === taskId
+              ? { ...t, approval: { token, status: 'pending' }, updatedAt: new Date().toISOString() }
+              : t,
+          ),
+        }));
+        return token;
+      },
+
+      clearApproval: (taskId) => {
+        set((s) => ({
+          tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, approval: null, updatedAt: new Date().toISOString() } : t)),
+        }));
+      },
+
+      addSyncConflict: (conflict) => {
+        set((s) => ({
+          syncConflicts: [...s.syncConflicts.filter((c) => c.taskId !== conflict.taskId), conflict].slice(0, 20),
+        }));
+      },
+
+      resolveSyncConflict: (taskId, choice) => {
+        const conflict = get().syncConflicts.find((c) => c.taskId === taskId);
+        if (!conflict) return;
+        if (choice === 'remote') {
+          set((s) => ({ tasks: s.tasks.map((t) => (t.id === taskId ? conflict.remote : t)) }));
+        }
+        set((s) => ({ syncConflicts: s.syncConflicts.filter((c) => c.taskId !== taskId) }));
+      },
+
       logActivity: (action, detail, taskId = null, projectId = null) => {
         set((s) => ({ activity: [makeEntry(s.currentUserId, action, detail, taskId, projectId), ...s.activity] }));
       },
@@ -728,6 +857,13 @@ export const useStore = create<OrbitState>()(
           savedViews: [],
           automation: { doneTeams: true, doneNotifyAssignee: true, urgentAssigneeId: null },
           standups: [],
+          notes: [],
+          risks: [],
+          issues: [],
+          hourlyRate: 950,
+          rules: { wip: { todo: null, inprogress: null, inreview: null }, agingDays: 7, escalate: true },
+          agents: { triage: false, stale: true, staleDays: 14 },
+          syncConflicts: [],
           activeProjectId: 'p-app',
           selectedTaskId: null,
         }),

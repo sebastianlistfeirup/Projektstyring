@@ -68,10 +68,11 @@ function mergeById<T extends { id: string; updatedAt?: string }>(local: T[], rem
   return [...map.values()];
 }
 
-function mergeSnapshot(remote: SyncSnapshotPayload) {
+function mergeSnapshot(remote: SyncSnapshotPayload, excludeIds?: Set<string>) {
   applying = true;
   const s = useStore.getState();
-  const tasks = mergeById(s.tasks as Task[], remote.tasks as Task[]);
+  const remoteTasks = excludeIds ? (remote.tasks as Task[]).filter((t) => !excludeIds.has(t.id)) : (remote.tasks as Task[]);
+  const tasks = mergeById(s.tasks as Task[], remoteTasks);
   const projects = mergeById(s.projects as Project[], remote.projects as Project[]);
   const sprints = mergeById(s.sprints as Sprint[], remote.sprints as Sprint[]);
   const users = mergeById(s.users as User[], remote.users as User[]);
@@ -88,7 +89,23 @@ export async function pullAndMerge(): Promise<boolean> {
   const remote = await syncPull();
   if (!remote?.ok || !remote.snapshot || !remote.updatedAt) return false;
   if (remote.updatedAt === lastSyncedAt) return false;
-  mergeSnapshot(remote.snapshot);
+
+  // Konfliktdetektering: både lokale ændringer OG fjernændringer siden sidste sync
+  const exclude = new Set<string>();
+  if (lastSyncedAt) {
+    const local = useStore.getState();
+    const locallyChanged = new Map(
+      local.tasks.filter((t) => t.updatedAt > lastSyncedAt).map((t) => [t.id, t]),
+    );
+    for (const rt of remote.snapshot.tasks as Task[]) {
+      const lt = locallyChanged.get(rt.id);
+      if (lt && lt.updatedAt !== rt.updatedAt) {
+        exclude.add(rt.id);
+        local.addSyncConflict({ taskId: rt.id, local: lt, remote: rt });
+      }
+    }
+  }
+  mergeSnapshot(remote.snapshot, exclude);
   lastSyncedAt = remote.updatedAt;
   return true;
 }
@@ -135,6 +152,7 @@ function connectWs() {
     try {
       const msg = JSON.parse(String(event.data));
       if (msg.type === 'sync') void pullAndMerge();
+      else if (msg.type === 'cursor') cursorListeners.forEach((l) => l(msg));
     } catch { /* ignorer */ }
   };
   ws.onclose = () => {
@@ -155,6 +173,11 @@ export function startSync(): () => void {
     }
   });
 
+  // Periodisk pull – holder også baggrundsfaner opdateret (mobil-paritet)
+  const poll = window.setInterval(() => {
+    if (isSyncEnabled()) void pullAndMerge();
+  }, 45000);
+
   if (isSyncEnabled()) {
     void pullAndMerge().then(() => pushNow());
     connectWs();
@@ -163,10 +186,48 @@ export function startSync(): () => void {
   return () => {
     started = false;
     unsubscribe();
+    window.clearInterval(poll);
     if (ws) ws.close();
     if (reconnectTimer) window.clearTimeout(reconnectTimer);
     if (pushTimer) window.clearTimeout(pushTimer);
   };
+}
+
+// ---------------- Tilstedeværelsesmarkører ----------------
+export interface RemoteCursor {
+  clientId: string;
+  name: string;
+  x: number;
+  y: number;
+  view: string;
+}
+
+type CursorListener = (cursor: RemoteCursor) => void;
+const cursorListeners = new Set<CursorListener>();
+let lastCursorSend = 0;
+
+export function onRemoteCursor(listener: CursorListener): () => void {
+  cursorListeners.add(listener);
+  return () => cursorListeners.delete(listener);
+}
+
+export function sendCursor(x: number, y: number, view: string): void {
+  const now = Date.now();
+  if (now - lastCursorSend < 90) return;
+  lastCursorSend = now;
+  if (!ws || ws.readyState !== 1) return;
+  const s = useStore.getState();
+  const me = s.users.find((u) => u.id === s.currentUserId);
+  ws.send(
+    JSON.stringify({
+      type: 'cursor',
+      clientId: getClientId(),
+      user: { name: me?.name ?? 'Ukendt' },
+      x: Math.round(x),
+      y: Math.round(y),
+      view,
+    }),
+  );
 }
 
 export function restartSync() {

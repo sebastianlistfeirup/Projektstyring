@@ -28,6 +28,7 @@ import { useLang, t } from '../lib/i18n';
 import type { Priority, Sprint, Task, TaskStatus } from '../lib/types';
 import { cn, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
 import { Avatar, EmptyState, ProgressBar, ViewHeader } from '../components/common';
+import CountUp from '../components/CountUp';
 
 const CHART = {
   indigo: '#818cf8',
@@ -213,6 +214,9 @@ export default function DashboardView() {
   const activeProjectId = useStore((s) => s.activeProjectId);
   const selectTask = useStore((s) => s.selectTask);
   const setActiveProject = useStore((s) => s.setActiveProject);
+  const hourlyRate = useStore((s) => s.hourlyRate);
+  const setHourlyRate = useStore((s) => s.setHourlyRate);
+  const updateProject = useStore((s) => s.updateProject);
 
   const [aiBusyId, setAiBusyId] = useState<string | null>(null);
   const [aiResult, setAiResult] = useState<{ projectId: string; name: string; text: string } | null>(null);
@@ -237,6 +241,24 @@ export default function DashboardView() {
   }));
 
   const effortRows = useMemo(() => estimateVsActual(tasks, timeEntries).slice(0, 8), [tasks, timeEntries]);
+
+  // Økonomi: forbrug pr. aktivt projekt (registreret tid × timepris)
+  const activeProject = useMemo(
+    () => projects.find((p) => p.id === activeProjectId) ?? null,
+    [projects, activeProjectId],
+  );
+  const spentMinutes = useMemo(() => {
+    if (!activeProjectId) return 0;
+    const taskIds = new Set(tasks.filter((task) => task.projectId === activeProjectId).map((task) => task.id));
+    const nowMs = Date.now();
+    return timeEntries
+      .filter((e) => taskIds.has(e.taskId))
+      .reduce((sum, e) => sum + Math.round(((e.endedAt ? new Date(e.endedAt).getTime() : nowMs) - new Date(e.startedAt).getTime()) / 60000), 0);
+  }, [tasks, timeEntries, activeProjectId]);
+  const spentKr = Math.round((spentMinutes * hourlyRate) / 60);
+  const budget = activeProject?.budget ?? null;
+  const budgetPct = budget && budget > 0 ? Math.round((spentKr / budget) * 100) : null;
+  const fmtKr = (n: number) => n.toLocaleString('da-DK');
 
   const analyze = async (projectId: string) => {
     const h = health.find((x) => x.projectId === projectId);
@@ -473,13 +495,97 @@ export default function DashboardView() {
                 </div>
                 <div className="min-w-0">
                   <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{stat.label}</p>
-                  <p className="text-2xl font-bold leading-tight tabular-nums text-zinc-900 dark:text-zinc-50">{stat.value}</p>
+                  <p className="text-2xl font-bold leading-tight tabular-nums text-zinc-900 dark:text-zinc-50">
+                    <CountUp value={stat.value} />
+                  </p>
                 </div>
               </div>
               <p className="mt-2 truncate text-xs text-zinc-500 dark:text-zinc-400">{stat.sub}</p>
             </div>
           ))}
         </div>
+
+        {/* Økonomi: timepris, budget og forbrug for det aktive projekt */}
+        <Panel title={t('economy.title')} subtitle={t('economy.subtitle')}>
+          <div className="grid gap-5 sm:grid-cols-2">
+            <div className="space-y-3">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                  {t('economy.hourlyRate')}
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  value={hourlyRate}
+                  onChange={(e) => setHourlyRate(Number(e.target.value))}
+                  className="input w-40 py-1.5 tabular-nums"
+                />
+              </label>
+              {activeProject ? (
+                <label className="block">
+                  <span className="mb-1 block text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                    {t('economy.budget')} · {activeProject.name}
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={activeProject.budget ?? ''}
+                    onChange={(e) =>
+                      updateProject(activeProject.id, { budget: e.target.value ? Number(e.target.value) : null })
+                    }
+                    className="input w-40 py-1.5 tabular-nums"
+                  />
+                </label>
+              ) : (
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">{t('economy.noProject')}</p>
+              )}
+            </div>
+            {activeProject && (
+              <div className="space-y-2">
+                {budget != null && budget > 0 && budgetPct != null ? (
+                  <>
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{t('economy.spent')}</span>
+                      <span
+                        className={cn(
+                          'text-lg font-bold tabular-nums',
+                          budgetPct > 100 ? 'text-rose-600 dark:text-rose-400' : 'text-zinc-900 dark:text-zinc-50',
+                        )}
+                      >
+                        {fmtKr(spentKr)} kr.
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-white/10">
+                      <div
+                        className={cn(
+                          'h-full rounded-full transition-all duration-300',
+                          budgetPct > 100 ? 'bg-rose-500' : 'bg-indigo-500',
+                        )}
+                        style={{ width: `${Math.min(100, budgetPct)}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      {t('economy.ofBudget')
+                        .replace('{spent}', fmtKr(spentKr))
+                        .replace('{budget}', fmtKr(budget))
+                        .replace('{pct}', String(budgetPct))}
+                    </p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      {t('economy.logged')}: {formatMinutes(spentMinutes)}
+                    </p>
+                    {budgetPct > 100 && (
+                      <p className="text-xs font-medium text-rose-600 dark:text-rose-400">
+                        {t('economy.over').replace('{amount}', fmtKr(spentKr - budget))}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">{t('economy.noBudget')}</p>
+                )}
+              </div>
+            )}
+          </div>
+        </Panel>
 
         <div className="grid gap-4 lg:grid-cols-2">
           <Panel title={t('dashboard.byStatus')}>

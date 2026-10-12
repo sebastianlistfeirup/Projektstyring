@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { Activity, CalendarRange, FolderInput, Kanban, LayoutDashboard, ListChecks, ListTodo, Mail, Plug, Sun, Table2, Users } from 'lucide-react';
+import { Activity, BarChart3, CalendarRange, FolderInput, Kanban, LayoutDashboard, ListChecks, ListTodo, Mail, NotebookPen, Plug, ShieldAlert, Sun, Table2, Users } from 'lucide-react';
 
 export interface NavItem {
   to: string;
@@ -18,7 +18,10 @@ export const VIEWS: NavItem[] = [
   { to: '/backlog', label: 'Backlog & Sprints', labelKey: 'nav.backlog', icon: ListChecks, keywords: ['sprint', 'planlægning', 'roadmap'] },
   { to: '/min', label: 'Min arbejdsliste', labelKey: 'nav.mywork', icon: ListTodo, keywords: ['mine', 'opgaver', 'todo'] },
   { to: '/team', label: 'Team & kapacitet', labelKey: 'nav.team', icon: Users, keywords: ['team', 'kapacitet', 'ressourcer', 'belastning'] },
+  { to: '/noter', label: 'Noter', labelKey: 'nav.notes', icon: NotebookPen, keywords: ['wiki', 'mødenoter', 'beslutninger'] },
+  { to: '/risici', label: 'Risici & fejl', labelKey: 'nav.risks', icon: ShieldAlert, keywords: ['risiko', 'issue', 'heatmap', 'matrix'] },
   { to: '/dashboard', label: 'Dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard, keywords: ['rapport', 'diagram', 'status'] },
+  { to: '/rapporter', label: 'Rapporter', labelKey: 'nav.reports', icon: BarChart3, keywords: ['rapport', 'pdf', 'print', 'widget'] },
   { to: '/aktivitet', label: 'Aktivitet', labelKey: 'nav.activity', icon: Activity, keywords: ['log', 'historik', 'feed'] },
   { to: '/import', label: 'Import & skabeloner', labelKey: 'nav.import', icon: FolderInput, keywords: ['skabelon', 'monday', 'trello', 'jira', 'import'] },
   { to: '/integrationer', label: 'Integrationer', labelKey: 'nav.integrations', icon: Plug, keywords: ['companion', 'eksport', 'teams', 'notifikationer'] },

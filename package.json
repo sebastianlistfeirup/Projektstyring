@@ -1,7 +1,7 @@
 {
   "name": "orbit",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "scripts": {
     "dev": "concurrently -n app,companion -c blue,magenta \"vite\" \"node server/companion.mjs\"",

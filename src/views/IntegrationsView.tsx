@@ -34,6 +34,7 @@ import {
   createApiToken,
   createBackup,
   fetchAdopsWorkItems,
+  fetchGitIssues,
   getSyncToken,
   getWebhooks,
   listBackups,
@@ -43,10 +44,12 @@ import {
   runRemindersNow,
   runReportNow,
   saveAdopsConfig,
+  saveGitConfig,
   setSyncToken,
   type AdopsWorkItem,
   type BackupFile,
   type CompanionStatus,
+  type GitIssue,
 } from '../lib/companion';
 import { applySnapshot, getSyncUrl, isSyncEnabled, restartSync, setSyncEnabled, setSyncUrl } from '../lib/sync';
 import { cn, formatDate, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
@@ -105,6 +108,10 @@ export default function IntegrationsView() {
   const standups = useStore((s) => s.standups);
   const addStandup = useStore((s) => s.addStandup);
   const setTaskExtIds = useStore((s) => s.setTaskExtIds);
+  const agents = useStore((s) => s.agents);
+  const setAgents = useStore((s) => s.setAgents);
+  const rules = useStore((s) => s.rules);
+  const setRules = useStore((s) => s.setRules);
 
   const [status, setStatus] = useState<CompanionStatus | null>(null);
   const [webhook, setWebhook] = useState('');
@@ -135,6 +142,13 @@ export default function IntegrationsView() {
   const [webhookInput, setWebhookInput] = useState('');
   const [apiTokenValue, setApiTokenValue] = useState('');
   const [standupText, setStandupText] = useState('');
+  const [gitProvider, setGitProvider] = useState<'github' | 'gitlab'>('github');
+  const [gitToken, setGitToken] = useState('');
+  const [gitOwner, setGitOwner] = useState('');
+  const [gitRepo, setGitRepo] = useState('');
+  const [gitItems, setGitItems] = useState<GitIssue[] | null>(null);
+  const [gitSelected, setGitSelected] = useState<Set<number>>(new Set());
+  const [agentDraft, setAgentDraft] = useState<{ projectId: string; text: string } | null>(null);
   const prefilled = useRef(false);
 
   useEffect(() => {
@@ -1040,6 +1054,207 @@ export default function IntegrationsView() {
               })}
             </ul>
           )}
+        </Section>
+        {/* AI-agenter */}
+        <Section icon={<Sparkles className="h-5 w-5" />} title="AI-agenter" subtitle="Lad AI arbejde i baggrunden – fra værktøj til kollega">
+          <div className="space-y-3">
+            <label className="flex items-center gap-2.5 text-sm text-zinc-700 dark:text-zinc-200">
+              <input type="checkbox" checked={agents.triage} onChange={(e) => setAgents({ triage: e.target.checked })} className="h-4 w-4 accent-indigo-500" />
+              Triage nye opgaver automatisk (foreslår ansvarlig og prioritet)
+            </label>
+            <div className="flex flex-wrap items-center gap-2.5 text-sm text-zinc-700 dark:text-zinc-200">
+              <label className="flex items-center gap-2.5">
+                <input type="checkbox" checked={agents.stale} onChange={(e) => setAgents({ stale: e.target.checked })} className="h-4 w-4 accent-indigo-500" />
+                Advar om stillestående opgaver efter
+              </label>
+              <input
+                type="number"
+                min={1}
+                value={agents.staleDays}
+                onChange={(e) => setAgents({ staleDays: Math.max(1, Number(e.target.value) || 14) })}
+                className="input w-20 py-1.5 text-sm"
+              />
+              <span>dage</span>
+            </div>
+          </div>
+          <div className="mt-4 border-t border-zinc-200/70 pt-3 dark:border-white/[0.06]">
+            <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Statusmail-kladde (AI)</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <select id="agent-project" defaultValue={activeProjectId ?? ''} className="input w-auto py-1.5 text-sm">
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={busy === 'agent-draft' || !aiConfigured}
+                onClick={() =>
+                  run('agent-draft', async () => {
+                    const sel = document.getElementById('agent-project') as HTMLSelectElement | null;
+                    const project = projects.find((p) => p.id === (sel?.value || activeProjectId));
+                    if (!project) return 'Vælg et projekt først.';
+                    const pt = tasks.filter((t) => t.projectId === project.id);
+                    const open = pt.filter((t) => t.status !== 'done' && t.status !== 'canceled');
+                    const overdue = open.filter(isOverdue);
+                    const r = await aiComplete([
+                      { role: 'system', content: 'Du er en dansk projektleder. Skriv en kort, professionel statusmail til en kunde/ledelse om projektet: 1) hvad er status, 2) hvad sker der nu, 3) hvad har vi brug for. Max 6 korte afsnit. Underskriv ikke.' },
+                      { role: 'user', content: `Projekt: ${project.name}\nÅbne opgaver: ${open.length} (${overdue.length} overskredne)\nFærdige: ${pt.length - open.length}\nTop-opgaver: ${open.slice(0, 6).map((t) => t.title).join(', ')}` },
+                    ]);
+                    if (!r.ok || !r.content) return r.reason ?? 'AI-assistenten er ikke konfigureret.';
+                    setAgentDraft({ projectId: project.id, text: r.content });
+                    return 'Kladde klar – kopiér og send den.';
+                  }, 'error')
+                }
+                className="btn-outline py-1.5 text-xs"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Skriv kladde
+              </button>
+            </div>
+            {agentDraft && (
+              <div className="mt-2 rounded-lg bg-zinc-50 p-3 dark:bg-white/[0.03]">
+                <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700 dark:text-zinc-200">{agentDraft.text}</p>
+                <button
+                  onClick={() => void navigator.clipboard?.writeText(agentDraft.text).then(() => say('Statusmail kopieret.'))}
+                  className="btn-ghost mt-2 px-2 py-1 text-xs"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  Kopiér kladde
+                </button>
+              </div>
+            )}
+          </div>
+        </Section>
+
+        {/* Regler 2.0 */}
+        <Section icon={<AlarmClock className="h-5 w-5" />} title="Regler & SLA" subtitle="Kolonnegrænser, aldring og automatisk eskalering">
+          <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-700 dark:text-zinc-200">
+            <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">WIP-grænser</span>
+            {(['todo', 'inprogress', 'inreview'] as const).map((key) => (
+              <label key={key} className="flex items-center gap-1.5 text-xs">
+                {{ todo: 'Planlagt', inprogress: 'I gang', inreview: 'Gennemgang' }[key]}
+                <input
+                  type="number"
+                  min={0}
+                  value={rules.wip[key] ?? ''}
+                  placeholder="∞"
+                  onChange={(e) =>
+                    setRules({ wip: { ...rules.wip, [key]: e.target.value === '' ? null : Math.max(0, Number(e.target.value)) } })
+                  }
+                  className="input w-16 py-1 text-xs"
+                />
+              </label>
+            ))}
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-zinc-700 dark:text-zinc-200">
+            <label className="flex items-center gap-2.5">
+              <input type="checkbox" checked={rules.escalate} onChange={(e) => setRules({ escalate: e.target.checked })} className="h-4 w-4 accent-indigo-500" />
+              Eskalér opgaver uden aktivitet efter
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={rules.agingDays}
+              onChange={(e) => setRules({ agingDays: Math.max(1, Number(e.target.value) || 7) })}
+              className="input w-20 py-1.5 text-sm"
+            />
+            <span>dage</span>
+          </div>
+          <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">
+            Grænser vises på tavlen (rødt ved overskridelse) og opgaver viser aldring. Eskalering kommer som notifikation i appen.
+          </p>
+        </Section>
+
+        {/* GitHub / GitLab */}
+        <Section icon={<Link2 className="h-5 w-5" />} title="GitHub / GitLab" subtitle="Hent issues og skriv status tilbage – to-vejs">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+            <select value={gitProvider} onChange={(e) => setGitProvider(e.target.value as 'github' | 'gitlab')} className="input py-1.5 text-sm">
+              <option value="github">GitHub</option>
+              <option value="gitlab">GitLab</option>
+            </select>
+            <input type="password" value={gitToken} onChange={(e) => setGitToken(e.target.value)} placeholder="Token (PAT / glpat-)" className="input py-1.5 font-mono text-xs" />
+            <input value={gitOwner} onChange={(e) => setGitOwner(e.target.value)} placeholder="Ejer / gruppe" className="input py-1.5 font-mono text-xs" />
+            <input value={gitRepo} onChange={(e) => setGitRepo(e.target.value)} placeholder="Repository" className="input py-1.5 font-mono text-xs" />
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('git-save', async () => {
+                  await saveGitConfig({ provider: gitProvider, token: gitToken, owner: gitOwner, repo: gitRepo });
+                  return 'Git-konfiguration gemt.';
+                })
+              }
+              className="btn-outline py-1.5 text-xs"
+            >
+              Gem konfiguration
+            </button>
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('git-fetch', async () => {
+                  const r = await fetchGitIssues();
+                  if (!r.ok || !r.items) return r.reason ?? 'Kunne ikke hente issues.';
+                  setGitItems(r.items);
+                  setGitSelected(new Set(r.items.map((i) => i.id)));
+                  return `${r.items.length} åbne issues fundet.`;
+                }, 'error')
+              }
+              className="btn-outline py-1.5 text-xs"
+            >
+              Hent issues
+            </button>
+          </div>
+          {gitItems && (
+            <div className="mt-3">
+              {gitItems.length === 0 ? (
+                <p className="text-sm text-zinc-400">Ingen åbne issues.</p>
+              ) : (
+                <>
+                  <ul className="mb-2 max-h-56 space-y-1 overflow-y-auto">
+                    {gitItems.map((item) => (
+                      <li key={item.id} className="flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-white/[0.04]">
+                        <input
+                          type="checkbox"
+                          checked={gitSelected.has(item.id)}
+                          onChange={() =>
+                            setGitSelected((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(item.id)) next.delete(item.id);
+                              else next.add(item.id);
+                              return next;
+                            })
+                          }
+                          className="h-4 w-4 accent-indigo-500"
+                        />
+                        <span className="w-12 shrink-0 text-xs font-bold tabular-nums text-zinc-500">#{item.id}</span>
+                        <span className="min-w-0 flex-1 truncate text-sm text-zinc-800 dark:text-zinc-100">{item.title}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    disabled={gitSelected.size === 0}
+                    onClick={() => {
+                      const projectId = activeProjectId ?? projects[0]?.id;
+                      if (!projectId || !gitItems) return;
+                      const chosen = gitItems.filter((i) => gitSelected.has(i.id));
+                      for (const item of chosen) {
+                        const t = useStore.getState().addTask({ title: item.title, projectId });
+                        setTaskExtIds(t.id, { gitProvider, gitIssue: item.id });
+                      }
+                      setGitItems(null);
+                      say(`${chosen.length} issues importeret – afslut dem i Orbit, og de lukkes i ${gitProvider === 'gitlab' ? 'GitLab' : 'GitHub'}.`);
+                    }}
+                    className="btn-primary py-1 text-xs"
+                  >
+                    Importér valgte ({gitSelected.size}) – med tilbage-skrivning
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">Bruger du Jira? Importer sprints via CSV under Import & skabeloner.</p>
         </Section>
       </div>
     </div>

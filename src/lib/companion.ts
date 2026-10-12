@@ -509,3 +509,44 @@ export async function postStandup(
     return { ok: false, reason: 'Companion-serveren svarer ikke' };
   }
 }
+
+// ---------------- GitHub / GitLab ----------------
+export interface GitIssue {
+  id: number;
+  title: string;
+  state: string;
+}
+
+export async function saveGitConfig(cfg: {
+  provider?: 'github' | 'gitlab';
+  token?: string;
+  owner?: string;
+  repo?: string;
+}): Promise<{ ok: boolean }> {
+  try {
+    return await post('/api/git/config', cfg);
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function fetchGitIssues(): Promise<{ ok: boolean; items?: GitIssue[]; reason?: string }> {
+  try {
+    const res = await fetch(`${BASE}/api/git/issues`, { headers: authHeaders(), signal: AbortSignal.timeout(20000) });
+    return (await res.json()) as { ok: boolean; items?: GitIssue[]; reason?: string };
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export async function closeGitIssue(id: number): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    return await post('/api/git/close', { id });
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export function approvalUrl(token: string): string {
+  return `http://${window.location.hostname}:4310/public/approve/${token}`;
+}

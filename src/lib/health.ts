@@ -18,7 +18,14 @@ export interface ProjectHealth {
   factors: HealthFactor[];
 }
 
-export function computeHealth(tasks: Task[], projects: Project[], users: User[], sprints: Sprint[]): ProjectHealth[] {
+export function computeHealth(
+  tasks: Task[],
+  projects: Project[],
+  users: User[],
+  sprints: Sprint[],
+  risks: { probability: number; impact: number; status: string }[] = [],
+  issues: { severity: string; status: string }[] = [],
+): ProjectHealth[] {
   const today = new Date().toISOString().slice(0, 10);
   return projects
     .filter((p) => !p.archived)
@@ -36,6 +43,8 @@ export function computeHealth(tasks: Task[], projects: Project[], users: User[],
       const sprintLoad = activeSprint
         ? open.filter((t) => t.sprintId === activeSprint.id).reduce((sum, t) => sum + (t.estimate ?? 1), 0)
         : 0;
+      const openRisks = risks.filter((r) => r.status === 'open' && r.probability * r.impact >= 15);
+      const severeIssues = issues.filter((i) => i.status !== 'resolved' && (i.severity === 'critical' || i.severity === 'high'));
 
       const factors: HealthFactor[] = [];
       if (overdue.length > 0) factors.push({ label: `${overdue.length} overskredne frister`, impact: Math.min(30, overdue.length * 8) });
@@ -47,6 +56,8 @@ export function computeHealth(tasks: Task[], projects: Project[], users: User[],
       if (open.length > 0 && open.every((t) => !t.assigneeId)) {
         factors.push({ label: 'Ingen åbne opgaver har en ansvarlig', impact: 10 });
       }
+      if (openRisks.length > 0) factors.push({ label: `${openRisks.length} høj risiko (matrix)`, impact: Math.min(15, openRisks.length * 7) });
+      if (severeIssues.length > 0) factors.push({ label: `${severeIssues.length} åbne alvorlige fejl`, impact: Math.min(15, severeIssues.length * 6) });
 
       const score = Math.max(5, Math.round(100 - factors.reduce((sum, f) => sum + f.impact, 0)));
       return {

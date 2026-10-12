@@ -4,11 +4,13 @@ import AppShell from './components/AppShell';
 import CommandPalette from './components/CommandPalette';
 import { ShortcutsOverlay, Tour } from './components/Onboarding';
 import Splash from './components/Splash';
+import SyncConflictsBanner from './components/SyncConflictsBanner';
 import TaskDrawer from './components/TaskDrawer';
 import { useStore } from './store/useStore';
 import type { Task } from './lib/types';
 import { taskRef } from './lib/utils';
-import { completeAdopsWorkItem, completeTodoTask, companionNotify, companionTeams } from './lib/companion';
+import { aiComplete } from './lib/companion';
+import { completeAdopsWorkItem, closeGitIssue, completeTodoTask, companionNotify, companionTeams } from './lib/companion';
 import { startSync } from './lib/sync';
 import ActivityView from './views/ActivityView';
 import BacklogView from './views/BacklogView';
@@ -18,6 +20,9 @@ import GraphView from './views/GraphView';
 import ImportView from './views/ImportView';
 import IntegrationsView from './views/IntegrationsView';
 import MyWorkView from './views/MyWorkView';
+import NotesView from './views/NotesView';
+import ReportsView from './views/ReportsView';
+import RisksView from './views/RisksView';
 import TableView from './views/TableView';
 import TeamView from './views/TeamView';
 import TimelineView from './views/TimelineView';
@@ -32,8 +37,71 @@ export default function App() {
   const [showShortcuts, setShowShortcuts] = useState(false);
 
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark');
+    document.documentElement.classList.toggle(
+      'dark',
+      theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches),
+    );
   }, [theme]);
+
+  // Følg Windows-temaet mens "system" er valgt
+  useEffect(() => {
+    if (theme !== 'system') return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const apply = () => document.documentElement.classList.toggle('dark', mq.matches);
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, [theme]);
+
+  // AI-agent: triage nye opgaver + advarsel om stillestående opgaver
+  const triagedRef = useRef<Set<string>>(new Set());
+  const staleWarnedRef = useRef<Map<string, string>>(new Map());
+  useEffect(() => {
+    const state = useStore.getState();
+    const now = Date.now();
+
+    if (state.agents.triage) {
+      for (const task of tasks) {
+        if (triagedRef.current.has(task.id)) continue;
+        triagedRef.current.add(task.id);
+        const isNew = now - new Date(task.createdAt).getTime() < 60_000;
+        const untouched = !task.assigneeId && task.priority === 'medium' && !task.labelIds.length;
+        if (isNew && untouched) {
+          void aiComplete([
+            { role: 'system', content: 'Du er en dansk projektassistent. For opgaven foreslå en passende PRIORITET (kritisk/høj/mellem/lav) og om den bør tildeles projektlederen. Svar KUN: prioritet | ja|nej' },
+            { role: 'user', content: `Opgave: ${task.title}\nBeskrivelse: ${task.description || '(ingen)'}` },
+          ]).then((r) => {
+            if (!r.ok || !r.content) return;
+            const [prioRaw, assignRaw] = r.content.split('|').map((s) => s.trim().toLowerCase());
+            const priorityMap: Record<string, Task['priority']> = { kritisk: 'urgent', høj: 'high', 'ho j': 'high', mellem: 'medium', lav: 'low' };
+            const priority = priorityMap[prioRaw] ?? null;
+            const assign = assignRaw === 'ja';
+            if (!priority && !assign) return;
+            state.updateTask(task.id, {
+              ...(priority ? { priority } : {}),
+              ...(assign ? { assigneeId: state.currentUserId } : {}),
+            });
+            state.addNotification(state.currentUserId, `AI triagerede: “${task.title}”${priority ? ` → ${priority}` : ''}${assign ? ' + tildelt dig' : ''}`, task.id);
+          });
+        }
+      }
+    }
+
+    if (state.agents.stale && state.rules.escalate) {
+      const limit = Date.now() - state.agents.staleDays * 86400000;
+      for (const task of tasks) {
+        if (task.status !== 'inprogress' && task.status !== 'inreview') continue;
+        if (new Date(task.updatedAt).getTime() > limit) continue;
+        const day = new Date().toISOString().slice(0, 10);
+        if (staleWarnedRef.current.get(task.id) === day) continue;
+        staleWarnedRef.current.set(task.id, day);
+        state.addNotification(
+          task.assigneeId ?? state.currentUserId,
+          `Stillestående opgave: “${task.title}” har ikke været aktiv i ${state.agents.staleDays} dage`,
+          task.id,
+        );
+      }
+    }
+  }, [tasks]);
 
   // "?" åbner genvejsoversigt (når man ikke skriver i et felt)
   useEffect(() => {
@@ -76,6 +144,9 @@ export default function App() {
         if (task.extIds?.adopsId) {
           void completeAdopsWorkItem(task.extIds.adopsId);
         }
+        if (task.extIds?.gitProvider && task.extIds.gitIssue) {
+          void closeGitIssue(task.extIds.gitIssue);
+        }
       }
       if (
         before.priority !== 'urgent' &&
@@ -105,6 +176,9 @@ export default function App() {
           <Route path="/dashboard" element={<DashboardView />} />
           <Route path="/aktivitet" element={<ActivityView />} />
           <Route path="/import" element={<ImportView />} />
+          <Route path="/noter" element={<NotesView />} />
+          <Route path="/risici" element={<RisksView />} />
+          <Route path="/rapporter" element={<ReportsView />} />
           <Route path="/integrationer" element={<IntegrationsView />} />
           <Route path="/outlook" element={<GraphView />} />
           <Route path="*" element={<Navigate to="/idag" replace />} />
@@ -114,6 +188,7 @@ export default function App() {
       <CommandPalette />
       <Splash />
       <Tour />
+      <SyncConflictsBanner />
       <ShortcutsOverlay open={showShortcuts} onClose={() => setShowShortcuts(false)} />
     </HashRouter>
   );
