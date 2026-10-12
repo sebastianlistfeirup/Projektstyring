@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { CalendarClock, CalendarPlus, Check, ClipboardCheck, Copy, FileText, FolderInput, Paperclip, Play, Plus, Sparkles, Square, Trash2, X } from 'lucide-react';
+import { CalendarClock, CalendarPlus, Check, ClipboardCheck, Copy, FileText, FolderInput, Paperclip, Pin, PinOff, Play, Plus, Sparkles, Square, Trash2, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { PRIORITY_META, STATUS_META } from '../lib/constants';
 import { cn, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
 import { useLang, t } from '../lib/i18n';
+import { celebrate } from '../components/Confetti';
 import {
   aiComplete,
   attachmentUrl,
@@ -43,12 +44,18 @@ export default function TaskDrawer() {
   const me = useStore((s) => s.users.find((u) => u.id === s.currentUserId));
   const requestApproval = useStore((s) => s.requestApproval);
   const clearApproval = useStore((s) => s.clearApproval);
+  const togglePinDay = useStore((s) => s.togglePinDay);
+  const setTaskEmoji = useStore((s) => s.setTaskEmoji);
+  const setReminder = useStore((s) => s.setReminder);
+  const toggleMilestone = useStore((s) => s.toggleMilestone);
+  const addKudo = useStore((s) => s.addKudo);
 
   const [comment, setComment] = useState('');
   const [subtaskTitle, setSubtaskTitle] = useState('');
   const [aiBusy, setAiBusy] = useState<'subtasks' | 'summary' | null>(null);
   const [aiFeedback, setAiFeedback] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
   const [summary, setSummary] = useState('');
+  const [emojiOpen, setEmojiOpen] = useState(false);
 
   useEffect(() => {
     if (!task) return;
@@ -107,6 +114,7 @@ export default function TaskDrawer() {
     setFiles([]);
     setAttFeedback(null);
     setApprovalFeedback(null);
+    setEmojiOpen(false);
     if (taskId) void refreshAttachments();
   }, [taskId, refreshAttachments]);
 
@@ -121,6 +129,14 @@ export default function TaskDrawer() {
 
   // Tidsregistrering
   const todayStr = new Date().toISOString().slice(0, 10);
+  const pinnedToday = task.pinnedDay === todayStr;
+  const reminderLocal = task.reminderAt
+    ? (() => {
+        const d = new Date(task.reminderAt);
+        const pad = (n: number) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      })()
+    : '';
   const taskEntries = timeEntries.filter((e) => e.taskId === task.id);
   const activeEntry = taskEntries.find((e) => e.endedAt === null) ?? null;
   const timerMine = activeEntry !== null && activeEntry.userId === currentUserId;
@@ -372,6 +388,69 @@ export default function TaskDrawer() {
             </span>
           )}
           <span className="flex-1" />
+
+          {/* Emoji-markør */}
+          <div className="relative">
+            <button
+              onClick={() => setEmojiOpen((o) => !o)}
+              title="Vælg emoji til opgaven"
+              className="grid h-8 w-8 place-items-center rounded-lg text-lg transition-colors hover:bg-zinc-100 dark:hover:bg-white/[0.07]"
+            >
+              <span aria-hidden="true">{task.emoji ?? '🏷️'}</span>
+            </button>
+            {emojiOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setEmojiOpen(false)} />
+                <div className="glass-panel absolute right-0 top-full z-50 mt-1 w-56 rounded-xl p-2 shadow-panel">
+                  <div className="grid grid-cols-4 gap-1">
+                    {TASK_EMOJIS.map((emoji) => (
+                      <button
+                        key={emoji}
+                        onClick={() => {
+                          setTaskEmoji(task.id, emoji);
+                          setEmojiOpen(false);
+                        }}
+                        className={cn(
+                          'grid h-9 w-full place-items-center rounded-lg text-lg transition-colors hover:bg-zinc-100 dark:hover:bg-white/[0.08]',
+                          task.emoji === emoji && 'bg-indigo-500/10 ring-1 ring-inset ring-indigo-500/40',
+                        )}
+                      >
+                        <span aria-hidden="true">{emoji}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => {
+                      setTaskEmoji(task.id, null);
+                      setEmojiOpen(false);
+                    }}
+                    className="btn-ghost mt-1.5 w-full justify-center px-2 py-1 text-xs"
+                  >
+                    Fjern
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Fastgør til Min dag */}
+          <button
+            onClick={() => togglePinDay(task.id)}
+            title="Fastgør til Min dag i dag"
+            className={cn(
+              'grid h-8 w-8 place-items-center rounded-lg transition-colors hover:bg-zinc-100 dark:hover:bg-white/[0.07]',
+              pinnedToday ? 'text-indigo-500 dark:text-indigo-400' : 'text-zinc-500 dark:text-zinc-400',
+            )}
+          >
+            {pinnedToday ? <Pin className="h-4 w-4" fill="currentColor" /> : <PinOff className="h-4 w-4" />}
+          </button>
+          {pinnedToday && (
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-indigo-500/10 px-2 py-0.5 text-[11px] font-medium text-indigo-600 dark:text-indigo-300">
+              <Pin className="h-3 w-3" />
+              Fastgjort til i dag
+            </span>
+          )}
+
           <StatusBadge status={task.status} />
           <button
             onClick={close}
@@ -523,6 +602,25 @@ export default function TaskDrawer() {
               <option value="monthly">Månedlig</option>
             </select>
 
+            <FieldLabel>Påmindelse</FieldLabel>
+            <div className="flex items-center gap-2">
+              <input
+                type="datetime-local"
+                value={reminderLocal}
+                onChange={(e) => setReminder(task.id, e.target.value ? new Date(e.target.value).toISOString() : null)}
+                className="input w-fit py-1.5 [color-scheme:light] dark:[color-scheme:dark]"
+              />
+              {task.reminderAt && (
+                <button
+                  onClick={() => setReminder(task.id, null)}
+                  title="Fjern påmindelse"
+                  className="grid h-6 w-6 place-items-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-white/[0.07] dark:hover:text-zinc-200"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+
             <FieldLabel>Blokeret af</FieldLabel>
             <div className="relative">
               <div className="flex flex-wrap items-center gap-1.5">
@@ -602,6 +700,27 @@ export default function TaskDrawer() {
               placeholder="—"
               className="input w-24 py-1.5"
             />
+
+            <FieldLabel>Milepæl</FieldLabel>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => toggleMilestone(task.id)}
+                title="Vis som milepæl på tidslinjen"
+                role="checkbox"
+                aria-checked={Boolean(task.isMilestone)}
+                className={cn(
+                  'grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[5px] border transition-colors',
+                  task.isMilestone
+                    ? 'border-indigo-500 bg-indigo-500 text-white'
+                    : 'border-zinc-300 hover:border-indigo-400 dark:border-zinc-600',
+                )}
+              >
+                {task.isMilestone && <Check className="h-3 w-3" strokeWidth={3} />}
+              </button>
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                {task.isMilestone ? 'Vises som milepæl på tidslinjen' : 'Ikke en milepæl'}
+              </span>
+            </div>
 
             <FieldLabel>Etiketter</FieldLabel>
             <div className="flex flex-wrap gap-1.5">
@@ -925,6 +1044,52 @@ export default function TaskDrawer() {
             )}
           </section>
 
+          {/* High five – kun for afsluttede opgaver */}
+          {task.status === 'done' && (
+            <section>
+              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                High five
+              </h3>
+              <div className="flex flex-wrap items-center gap-2">
+                {KUDO_EMOJIS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    onClick={() => {
+                      addKudo(task.id, emoji);
+                      celebrate(task.id);
+                    }}
+                    title="Giv et high five for leverancen"
+                    className="btn-ghost px-2.5 py-1 text-base"
+                  >
+                    <span aria-hidden="true">{emoji}</span>
+                  </button>
+                ))}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {KUDO_EMOJIS.map((emoji) => {
+                    const list = (task.kudos ?? []).filter((k) => k.emoji === emoji);
+                    if (list.length === 0) return null;
+                    return (
+                      <span
+                        key={emoji}
+                        className="flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 py-0.5 pl-1 pr-2 text-xs dark:border-white/10 dark:bg-white/[0.04]"
+                      >
+                        <span className="flex -space-x-1.5">
+                          {list.slice(0, 4).map((k, i) => (
+                            <Avatar key={`${k.userId}-${i}`} user={users.find((u) => u.id === k.userId)} size="xs" />
+                          ))}
+                        </span>
+                        <span aria-hidden="true">{emoji}</span>
+                        <span className="text-[10px] font-semibold tabular-nums text-zinc-500 dark:text-zinc-400">
+                          {list.length}
+                        </span>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            </section>
+          )}
+
           {/* Kommentarer */}
           <section>
             <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
@@ -1227,6 +1392,8 @@ function fmtSize(bytes: number): string {
 }
 
 const REACTION_EMOJIS = ['👍', '🎉', '❤️'];
+const KUDO_EMOJIS = ['👏', '🎉', '💪'];
+const TASK_EMOJIS = ['🚀', '✅', '📞', '📦', '🎨', '💰', '🔧', '📣', '🐛', '📚', '🏠', '✈️', '🎉', '⏰', '🔒', '🌱'];
 
 function CommentItem({
   taskId,

@@ -78,6 +78,7 @@ export async function companionSaveConfig(cfg: {
   reminders?: { enabled?: boolean; time?: string };
   reports?: { enabled?: boolean; day?: number; time?: string };
   ai?: { baseUrl?: string; apiKey?: string; model?: string };
+  brand?: { name?: string };
 }): Promise<{ ok: boolean }> {
   return post('/api/config', cfg);
 }

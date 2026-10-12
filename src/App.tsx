@@ -11,12 +11,14 @@ import type { Task } from './lib/types';
 import { taskRef } from './lib/utils';
 import { aiComplete } from './lib/companion';
 import { completeAdopsWorkItem, closeGitIssue, completeTodoTask, companionNotify, companionTeams } from './lib/companion';
+import { celebrate } from './components/Confetti';
 import { startSync } from './lib/sync';
 import ActivityView from './views/ActivityView';
 import BacklogView from './views/BacklogView';
 import BoardView from './views/BoardView';
 import DashboardView from './views/DashboardView';
 import GraphView from './views/GraphView';
+import GoalsView from './views/GoalsView';
 import ImportView from './views/ImportView';
 import IntegrationsView from './views/IntegrationsView';
 import MyWorkView from './views/MyWorkView';
@@ -119,6 +121,20 @@ export default function App() {
   // Tværgående synkronisering via companion-serveren
   useEffect(() => startSync(), []);
 
+  // PWA share target: del tekst/links fra mobil direkte ind som opgave
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('shared') !== '1') return;
+    const text = [params.get('title'), params.get('text'), params.get('url')].filter(Boolean).join(' ').trim();
+    window.history.replaceState(null, '', window.location.pathname + window.location.hash);
+    if (!text) return;
+    const state = useStore.getState();
+    const projectId = state.activeProjectId ?? state.projects[0]?.id;
+    if (!projectId) return;
+    const task = state.addTask({ title: text.slice(0, 120), projectId, description: text });
+    state.selectTask(task.id);
+  }, []);
+
   // Automatiseringsregler: afslutning -> Teams/notifikation/eksterne systemer, kritisk -> tildeling
   useEffect(() => {
     const prev = previousTasks.current;
@@ -131,6 +147,7 @@ export default function App() {
       }
       if (before.status !== 'done' && task.status === 'done' && !notifiedDone.current.has(task.id)) {
         notifiedDone.current.add(task.id);
+        celebrate();
         const text = `${taskRef(task, projects)} · ${task.title}`;
         void companionNotify('Opgave afsluttet', text);
         if (state.automation.doneTeams) void companionTeams('Opgave afsluttet i Orbit', text);
@@ -173,6 +190,7 @@ export default function App() {
           <Route path="/backlog" element={<BacklogView />} />
           <Route path="/min" element={<MyWorkView />} />
           <Route path="/team" element={<TeamView />} />
+          <Route path="/maal" element={<GoalsView />} />
           <Route path="/dashboard" element={<DashboardView />} />
           <Route path="/aktivitet" element={<ActivityView />} />
           <Route path="/import" element={<ImportView />} />

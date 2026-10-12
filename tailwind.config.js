@@ -10,12 +10,14 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['"InterVariable"', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+        // @fontsource-variable pakkerne (v5) erklærer familierne 'Inter Variable' / 'Outfit Variable'
+        sans: ['"Inter Variable"', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+        display: ['"Outfit Variable"', '"Inter Variable"', 'sans-serif'],
       },
       boxShadow: {
         card: '0 1px 2px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.08)',
         panel: '0 8px 30px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08)',
-        glow: '0 0 0 1px rgba(99,102,241,0.35), 0 4px 24px rgba(99,102,241,0.25)',
+        glow: '0 0 0 1px color-mix(in srgb, var(--acc-500) 35%, transparent), 0 4px 24px color-mix(in srgb, var(--acc-500) 25%, transparent)',
       },
       keyframes: {
         'fade-in': { from: { opacity: '0' }, to: { opacity: '1' } },

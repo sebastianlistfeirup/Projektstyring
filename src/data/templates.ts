@@ -64,3 +64,43 @@ export const PROJECT_TEMPLATES: ProjectTemplate[] = [
     ],
   },
 ];
+
+// Personlige checklistskabeloner – opretter ÉN opgave med underopgaver
+export interface ChecklistTemplate {
+  id: string;
+  name: string;
+  description: string;
+  emoji: string;
+  items: string[];
+}
+
+export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
+  {
+    id: 'chk-rejse',
+    name: 'Rejse',
+    emoji: '✈️',
+    description: 'Pakkeliste og praktik før afrejse.',
+    items: ['Pas og billetter', 'Opladere og adapter', 'Toiletgrej', 'Medicin og førstehjælp', 'Undertøj og sokker', 'Vejrudsigt tjekket', 'Aflys aviser og post', 'Lås dør og vinduer'],
+  },
+  {
+    id: 'chk-flytning',
+    name: 'Flytning',
+    emoji: '📦',
+    description: 'Fra adresseændring til nøgleoverdragelse.',
+    items: ['Adresseændring (Borger.dk)', 'Flyttefirma bestilt', 'El, vand og varme flyttet', 'Internet bestilt', 'Pakke køkken og skabe', 'Ændr postadresse hos bank/forsikring', 'Rengøring af gamle bolig', 'Nøgleoverdragelse'],
+  },
+  {
+    id: 'chk-indkob',
+    name: 'Ugeindkøb',
+    emoji: '🛒',
+    description: 'Standardlisten til den ugentlige tur.',
+    items: ['Mælk og smør', 'Brød og pålæg', 'Grøntsager og frugt', 'Kød og fisk', 'Mellemmåltider', 'Rengøringsmidler', 'Toiletpapir og husholdning'],
+  },
+  {
+    id: 'chk-event',
+    name: 'Privat arrangement',
+    emoji: '🎉',
+    description: 'Fødselsdag, konfirmation eller middagsselskab.',
+    items: ['Gæsteliste og invitationer', 'Menu og indkøb', 'Borddækning og service', 'Musik og stemning', 'Eventuel overnatning til gæster', 'Tak for sidst-besked'],
+  },
+];

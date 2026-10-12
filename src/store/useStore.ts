@@ -3,11 +3,15 @@ import { persist } from 'zustand/middleware';
 import { nanoid } from 'nanoid';
 import { addDays, addMonths, format } from 'date-fns';
 import type {
+  Accent,
   ActivityEntry,
   AgentsSettings,
   AppNotification,
   AutomationSettings,
+  Baseline,
   CustomFieldDef,
+  Density,
+  Goal,
   ImportItem,
   IssueEntry,
   Label,
@@ -44,6 +48,7 @@ export interface NewTaskInput {
   recurrence?: Task['recurrence'];
   labelIds?: string[];
   blockedBy?: string[];
+  emoji?: string;
 }
 
 interface OrbitState {
@@ -68,6 +73,11 @@ interface OrbitState {
   hourlyRate: number; // DKK pr. time (økonomi)
   rules: RulesSettings;
   agents: AgentsSettings;
+  accent: Accent;
+  density: Density;
+  simpleMode: boolean;
+  goals: Goal[];
+  baselines: Baseline[];
   syncConflicts: { taskId: string; local: Task; remote: Task }[];
   activeProjectId: string | null;
   selectedTaskId: string | null;
@@ -123,6 +133,22 @@ interface OrbitState {
   clearApproval: (taskId: string) => void;
   addSyncConflict: (conflict: { taskId: string; local: Task; remote: Task }) => void;
   resolveSyncConflict: (taskId: string, choice: 'local' | 'remote') => void;
+  setAccent: (accent: Accent) => void;
+  setDensity: (density: Density) => void;
+  toggleSimpleMode: () => void;
+  togglePinDay: (taskId: string) => void;
+  setTaskEmoji: (taskId: string, emoji: string | null) => void;
+  setReminder: (taskId: string, reminderAt: string | null) => void;
+  toggleMilestone: (taskId: string) => void;
+  addKudo: (taskId: string, emoji: string) => void;
+  togglePrivateZone: (projectId: string) => void;
+  shareIntake: (projectId: string) => void;
+  unshareIntake: (projectId: string) => void;
+  addGoal: (title: string, note?: string) => void;
+  updateGoal: (id: string, patch: Partial<Goal>) => void;
+  deleteGoal: (id: string) => void;
+  saveBaseline: (projectId: string) => void;
+  clearBaseline: (projectId: string) => void;
   shareProject: (projectId: string) => void;
   unshareProject: (projectId: string) => void;
 
@@ -208,6 +234,11 @@ export const useStore = create<OrbitState>()(
       hourlyRate: 950,
       rules: { wip: { todo: null, inprogress: null, inreview: null }, agingDays: 7, escalate: true },
       agents: { triage: false, stale: true, staleDays: 14 },
+      accent: 'indigo',
+      density: 'comfortable',
+      simpleMode: false,
+      goals: [],
+      baselines: [],
       syncConflicts: [],
       activeProjectId: 'p-app',
       selectedTaskId: null,
@@ -243,6 +274,7 @@ export const useStore = create<OrbitState>()(
           order,
           recurrence: input.recurrence ?? null,
           blockedBy: input.blockedBy ?? [],
+          emoji: input.emoji,
         };
         set((s) => ({
           tasks: [...s.tasks, task],
@@ -838,6 +870,94 @@ export const useStore = create<OrbitState>()(
         set((s) => ({ syncConflicts: s.syncConflicts.filter((c) => c.taskId !== taskId) }));
       },
 
+      setAccent: (accent) => set({ accent }),
+      setDensity: (density) => set({ density }),
+      toggleSimpleMode: () => set((s) => ({ simpleMode: !s.simpleMode })),
+
+      togglePinDay: (taskId) => {
+        const today = new Date().toISOString().slice(0, 10);
+        set((s) => ({
+          tasks: s.tasks.map((t) =>
+            t.id === taskId
+              ? { ...t, pinnedDay: t.pinnedDay ? null : today, updatedAt: new Date().toISOString() }
+              : t,
+          ),
+        }));
+      },
+
+      setTaskEmoji: (taskId, emoji) => {
+        set((s) => ({
+          tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, emoji: emoji || undefined, updatedAt: new Date().toISOString() } : t)),
+        }));
+      },
+
+      setReminder: (taskId, reminderAt) => {
+        set((s) => ({
+          tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reminderAt, updatedAt: new Date().toISOString() } : t)),
+        }));
+      },
+
+      toggleMilestone: (taskId) => {
+        set((s) => ({
+          tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, isMilestone: !t.isMilestone, updatedAt: new Date().toISOString() } : t)),
+        }));
+      },
+
+      addKudo: (taskId, emoji) => {
+        const me = get().currentUserId;
+        set((s) => ({
+          tasks: s.tasks.map((t) => {
+            if (t.id !== taskId) return t;
+            const kudos = [...(t.kudos ?? []).filter((k) => !(k.userId === me && k.emoji === emoji)), { userId: me, emoji, at: new Date().toISOString() }];
+            return { ...t, kudos };
+          }),
+        }));
+      },
+
+      togglePrivateZone: (projectId) => {
+        set((s) => ({
+          projects: s.projects.map((p) => (p.id === projectId ? { ...p, privateZone: !p.privateZone } : p)),
+        }));
+      },
+
+      shareIntake: (projectId) => {
+        set((s) => ({
+          projects: s.projects.map((p) => (p.id === projectId ? { ...p, intakeToken: nanoid(18) } : p)),
+        }));
+      },
+
+      unshareIntake: (projectId) => {
+        set((s) => ({
+          projects: s.projects.map((p) => (p.id === projectId ? { ...p, intakeToken: null } : p)),
+        }));
+      },
+
+      addGoal: (title, note = '') => {
+        if (!title.trim()) return;
+        set((s) => ({ goals: [...s.goals, { id: `g-${nanoid(8)}`, title: title.trim(), note, keyResults: [] }] }));
+      },
+
+      updateGoal: (id, patch) => {
+        set((s) => ({ goals: s.goals.map((g) => (g.id === id ? { ...g, ...patch } : g)) }));
+      },
+
+      deleteGoal: (id) => {
+        set((s) => ({ goals: s.goals.filter((g) => g.id !== id) }));
+      },
+
+      saveBaseline: (projectId) => {
+        const items = get()
+          .tasks.filter((t) => t.projectId === projectId && (t.startDate || t.dueDate))
+          .map((t) => ({ taskId: t.id, startDate: t.startDate, dueDate: t.dueDate }));
+        set((s) => ({
+          baselines: [...s.baselines.filter((b) => b.projectId !== projectId), { projectId, savedAt: new Date().toISOString(), items }],
+        }));
+      },
+
+      clearBaseline: (projectId) => {
+        set((s) => ({ baselines: s.baselines.filter((b) => b.projectId !== projectId) }));
+      },
+
       logActivity: (action, detail, taskId = null, projectId = null) => {
         set((s) => ({ activity: [makeEntry(s.currentUserId, action, detail, taskId, projectId), ...s.activity] }));
       },
@@ -863,6 +983,11 @@ export const useStore = create<OrbitState>()(
           hourlyRate: 950,
           rules: { wip: { todo: null, inprogress: null, inreview: null }, agingDays: 7, escalate: true },
           agents: { triage: false, stale: true, staleDays: 14 },
+          accent: 'indigo',
+          density: 'comfortable',
+          simpleMode: false,
+          goals: [],
+          baselines: [],
           syncConflicts: [],
           activeProjectId: 'p-app',
           selectedTaskId: null,

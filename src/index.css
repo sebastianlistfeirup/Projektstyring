@@ -115,3 +115,561 @@
     color: #18181b !important;
   }
 }
+
+/* ============================================================
+   ORBIT DESIGN-LØFT – aurora, accenter, mikrointeraktioner
+   Alt herunder er append'et: eksisterende klasser er urørte.
+   Ulagrede regler slår Tailwinds @layer-regler (base/components/
+   utilities), så overrides nedenfor vinder kaskaden.
+   ============================================================ */
+
+/* ---- 1) Levende aurora-baggrund ---- */
+.aurora {
+  position: fixed;
+  inset: 0;
+  z-index: -10;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.aurora-blob {
+  position: absolute;
+  width: 55vw;
+  height: 55vw;
+  border-radius: 9999px;
+  filter: blur(64px);
+  opacity: 0.3;
+  animation-name: aurora-drift;
+  animation-duration: 36s;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+  will-change: transform;
+}
+
+.dark .aurora-blob {
+  opacity: 0.5;
+}
+
+/* Forskudte faser og retninger – animation slår kun igennem fra ulagret CSS */
+.aurora-blob:nth-of-type(2) {
+  animation-delay: -12s;
+  animation-direction: alternate-reverse;
+}
+
+.aurora-blob:nth-of-type(3) {
+  animation-delay: -24s;
+}
+
+@keyframes aurora-drift {
+  0% {
+    transform: translate3d(-8%, -6%, 0) scale(1) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(6%, 9%, 0) scale(1.18) rotate(45deg);
+  }
+  100% {
+    transform: translate3d(14%, -5%, 0) scale(0.92) rotate(-30deg);
+  }
+}
+
+.aurora-noise {
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.03;
+  mix-blend-mode: overlay;
+}
+
+/* ---- 1b) Accent-temaer: CSS-variabler pr. tema ---- */
+html[data-accent='indigo'] {
+  --acc-400: #818cf8;
+  --acc-500: #6366f1;
+  --acc-600: #4f46e5;
+  --acc-soft: rgba(99, 102, 241, 0.12);
+  --acc-glow: rgba(99, 102, 241, 0.35);
+}
+
+html[data-accent='violet'] {
+  --acc-400: #a78bfa;
+  --acc-500: #8b5cf6;
+  --acc-600: #7c3aed;
+  --acc-soft: rgba(139, 92, 246, 0.12);
+  --acc-glow: rgba(139, 92, 246, 0.35);
+}
+
+html[data-accent='emerald'] {
+  --acc-400: #34d399;
+  --acc-500: #10b981;
+  --acc-600: #059669;
+  --acc-soft: rgba(16, 185, 129, 0.12);
+  --acc-glow: rgba(16, 185, 129, 0.35);
+}
+
+html[data-accent='sunset'] {
+  --acc-400: #fb923c;
+  --acc-500: #f97316;
+  --acc-600: #ea580c;
+  --acc-soft: rgba(249, 115, 22, 0.12);
+  --acc-glow: rgba(249, 115, 22, 0.35);
+}
+
+html[data-accent='graphite'] {
+  --acc-400: #a1a1aa;
+  --acc-500: #71717a;
+  --acc-600: #52525b;
+  --acc-soft: rgba(113, 113, 122, 0.14);
+  --acc-glow: rgba(113, 113, 122, 0.4);
+}
+
+html[data-accent='ocean'] {
+  --acc-400: #38bdf8;
+  --acc-500: #0ea5e9;
+  --acc-600: #0284c7;
+  --acc-soft: rgba(14, 165, 233, 0.12);
+  --acc-glow: rgba(14, 165, 233, 0.35);
+}
+
+/* Fallback når JS ikke har sat data-accent endnu */
+:root {
+  --acc-400: #818cf8;
+  --acc-500: #6366f1;
+  --acc-600: #4f46e5;
+  --acc-soft: rgba(99, 102, 241, 0.12);
+  --acc-glow: rgba(99, 102, 241, 0.35);
+}
+
+/*
+ * Utility-overrides: hele appen følger accent-variablerne.
+ * Én generisk blok (gælder for alle data-accent-temaer) i stedet for
+ * seks identiske blokke – samme effekt, én kilde til sandhed.
+ * Dækker alle indigo/violet-klasser kodebasen faktisk bruger
+ * (inkl. dark:-varianter, da lag-de regler taber til ulagraede).
+ */
+html[data-accent] .bg-indigo-400 {
+  background-color: var(--acc-400);
+}
+
+html[data-accent] .bg-indigo-500 {
+  background-color: var(--acc-500);
+}
+
+html[data-accent] .bg-violet-500 {
+  background-color: var(--acc-500);
+}
+
+html[data-accent] .text-indigo-200 {
+  color: color-mix(in srgb, var(--acc-400) 55%, white);
+}
+
+html[data-accent] .text-indigo-300 {
+  color: color-mix(in srgb, var(--acc-400) 70%, white);
+}
+
+html[data-accent] .text-violet-300 {
+  color: color-mix(in srgb, var(--acc-400) 70%, white);
+}
+
+html[data-accent] .text-indigo-400 {
+  color: var(--acc-400);
+}
+
+html[data-accent] .text-violet-400 {
+  color: var(--acc-400);
+}
+
+html[data-accent] .text-indigo-500 {
+  color: var(--acc-500);
+}
+
+html[data-accent] .text-violet-500 {
+  color: var(--acc-500);
+}
+
+html[data-accent] .text-indigo-600 {
+  color: var(--acc-600);
+}
+
+html[data-accent] .text-violet-600 {
+  color: var(--acc-600);
+}
+
+html[data-accent] .text-indigo-700 {
+  color: color-mix(in srgb, var(--acc-600) 80%, black);
+}
+
+html[data-accent] .text-violet-700 {
+  color: color-mix(in srgb, var(--acc-600) 80%, black);
+}
+
+html[data-accent] .border-indigo-400 {
+  border-color: var(--acc-400);
+}
+
+html[data-accent] .border-indigo-500 {
+  border-color: var(--acc-500);
+}
+
+html[data-accent] .ring-indigo-400 {
+  --tw-ring-color: var(--acc-400);
+}
+
+html[data-accent] .ring-indigo-500 {
+  --tw-ring-color: var(--acc-500);
+}
+
+html[data-accent] .from-indigo-400 {
+  --tw-gradient-from: var(--acc-400) var(--tw-gradient-from-position);
+  --tw-gradient-to: color-mix(in srgb, var(--acc-400) 0%, transparent) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+}
+
+html[data-accent] .from-indigo-500 {
+  --tw-gradient-from: var(--acc-500) var(--tw-gradient-from-position);
+  --tw-gradient-to: color-mix(in srgb, var(--acc-500) 0%, transparent) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+}
+
+html[data-accent] .to-violet-500 {
+  --tw-gradient-to: var(--acc-500) var(--tw-gradient-to-position);
+}
+
+html[data-accent] .to-violet-600 {
+  --tw-gradient-to: var(--acc-600) var(--tw-gradient-to-position);
+}
+
+html[data-accent] .accent-indigo-500 {
+  accent-color: var(--acc-500);
+}
+
+/* Gennemsigtigheds-varianter (fx bg-indigo-500/10) */
+html[data-accent] .bg-indigo-400\/5 {
+  background-color: color-mix(in srgb, var(--acc-400) 5%, transparent);
+}
+
+html[data-accent] .bg-indigo-400\/10 {
+  background-color: color-mix(in srgb, var(--acc-400) 10%, transparent);
+}
+
+html[data-accent] .bg-indigo-400\/15 {
+  background-color: color-mix(in srgb, var(--acc-400) 15%, transparent);
+}
+
+html[data-accent] .bg-violet-400\/10 {
+  background-color: color-mix(in srgb, var(--acc-400) 10%, transparent);
+}
+
+html[data-accent] .bg-indigo-500\/5 {
+  background-color: color-mix(in srgb, var(--acc-500) 5%, transparent);
+}
+
+html[data-accent] .bg-indigo-500\/10 {
+  background-color: color-mix(in srgb, var(--acc-500) 10%, transparent);
+}
+
+html[data-accent] .bg-indigo-500\/15 {
+  background-color: color-mix(in srgb, var(--acc-500) 15%, transparent);
+}
+
+html[data-accent] .bg-indigo-500\/20 {
+  background-color: color-mix(in srgb, var(--acc-500) 20%, transparent);
+}
+
+html[data-accent] .bg-indigo-500\/30 {
+  background-color: color-mix(in srgb, var(--acc-500) 30%, transparent);
+}
+
+html[data-accent] .bg-violet-500\/10 {
+  background-color: color-mix(in srgb, var(--acc-500) 10%, transparent);
+}
+
+html[data-accent] .bg-violet-500\/15 {
+  background-color: color-mix(in srgb, var(--acc-500) 15%, transparent);
+}
+
+html[data-accent] .border-indigo-400\/30 {
+  border-color: color-mix(in srgb, var(--acc-400) 30%, transparent);
+}
+
+html[data-accent] .border-indigo-400\/60 {
+  border-color: color-mix(in srgb, var(--acc-400) 60%, transparent);
+}
+
+html[data-accent] .border-indigo-500\/30 {
+  border-color: color-mix(in srgb, var(--acc-500) 30%, transparent);
+}
+
+html[data-accent] .border-indigo-500\/40 {
+  border-color: color-mix(in srgb, var(--acc-500) 40%, transparent);
+}
+
+html[data-accent] .border-indigo-500\/60 {
+  border-color: color-mix(in srgb, var(--acc-500) 60%, transparent);
+}
+
+html[data-accent] .ring-indigo-400\/20 {
+  --tw-ring-color: color-mix(in srgb, var(--acc-400) 20%, transparent);
+}
+
+html[data-accent] .ring-indigo-400\/60 {
+  --tw-ring-color: color-mix(in srgb, var(--acc-400) 60%, transparent);
+}
+
+html[data-accent] .ring-indigo-500\/15 {
+  --tw-ring-color: color-mix(in srgb, var(--acc-500) 15%, transparent);
+}
+
+html[data-accent] .ring-indigo-500\/20 {
+  --tw-ring-color: color-mix(in srgb, var(--acc-500) 20%, transparent);
+}
+
+html[data-accent] .ring-indigo-500\/25 {
+  --tw-ring-color: color-mix(in srgb, var(--acc-500) 25%, transparent);
+}
+
+html[data-accent] .ring-indigo-500\/30 {
+  --tw-ring-color: color-mix(in srgb, var(--acc-500) 30%, transparent);
+}
+
+html[data-accent] .ring-indigo-500\/60 {
+  --tw-ring-color: color-mix(in srgb, var(--acc-500) 60%, transparent);
+}
+
+html[data-accent] .text-indigo-300\/90 {
+  color: color-mix(in srgb, color-mix(in srgb, var(--acc-400) 70%, white) 90%, transparent);
+}
+
+html[data-accent] .text-indigo-600\/90 {
+  color: color-mix(in srgb, var(--acc-600) 90%, transparent);
+}
+
+/* ---- 3) Mikrointeraktioner: knapper ---- */
+.btn,
+.btn-primary,
+.btn-ghost,
+.btn-outline {
+  transition:
+    transform 0.12s ease,
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.btn:active {
+  transform: scale(0.96);
+}
+
+/* ---- 3b) Tegn-checkboks: stregen tegner sig ved afkrydsning ---- */
+.draw-check {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.draw-check input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+}
+
+.draw-check .box {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 1.5px solid var(--acc-500);
+  border-radius: 5px;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.draw-check svg {
+  width: 12px;
+  height: 12px;
+}
+
+.draw-check svg path {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 20;
+  stroke-dashoffset: 20;
+  transition: stroke-dashoffset 0.25s ease 0.05s;
+}
+
+.draw-check input:checked ~ .box {
+  background-color: var(--acc-500);
+  border-color: var(--acc-500);
+}
+
+.draw-check input:checked ~ .box path {
+  stroke-dashoffset: 0;
+}
+
+.draw-check input:focus-visible ~ .box {
+  outline: 2px solid var(--acc-500);
+  outline-offset: 2px;
+}
+
+/* ---- 3c) Skelet med glidende shimmer ---- */
+@keyframes shimmer {
+  0% {
+    background-position: -200px 0;
+  }
+  100% {
+    background-position: 200px 0;
+  }
+}
+
+.skeleton {
+  border-radius: 0.5rem;
+  background: linear-gradient(
+    90deg,
+    rgba(120, 120, 130, 0.12) 25%,
+    rgba(120, 120, 130, 0.24) 50%,
+    rgba(120, 120, 130, 0.12) 75%
+  );
+  background-size: 400px 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+/* ---- 3d) Fokus-ringe i accentfarve ---- */
+*:focus-visible {
+  outline: 2px solid var(--acc-500);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+/* ---- 3e) Scrollbar i accentfarve ---- */
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--acc-500) 35%, transparent);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--acc-500) 55%, transparent);
+}
+
+/* ---- 3f) Kaskader: forsinket indtoning af børn ---- */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.stagger > * {
+  animation: fade-in 0.3s both;
+}
+
+.stagger > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+
+.stagger > *:nth-child(2) {
+  animation-delay: 20ms;
+}
+
+.stagger > *:nth-child(3) {
+  animation-delay: 40ms;
+}
+
+.stagger > *:nth-child(4) {
+  animation-delay: 60ms;
+}
+
+.stagger > *:nth-child(5) {
+  animation-delay: 80ms;
+}
+
+.stagger > *:nth-child(6) {
+  animation-delay: 100ms;
+}
+
+.stagger > *:nth-child(7) {
+  animation-delay: 120ms;
+}
+
+.stagger > *:nth-child(8) {
+  animation-delay: 140ms;
+}
+
+.stagger > *:nth-child(9) {
+  animation-delay: 160ms;
+}
+
+.stagger > *:nth-child(10) {
+  animation-delay: 180ms;
+}
+
+.stagger > *:nth-child(11) {
+  animation-delay: 200ms;
+}
+
+.stagger > *:nth-child(12) {
+  animation-delay: 220ms;
+}
+
+/* ---- 3g) Fejring: accent-puls der udvider sig og falmer ---- */
+@keyframes ring-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--acc-500) 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 18px transparent;
+  }
+}
+
+.celebrate-pulse {
+  animation: ring-pulse 0.6s ease-out;
+}
+
+/* ---- 3h) Luksus-kort: blød accent-kant ved hover ---- */
+.card-luxe {
+  border-radius: 1rem;
+  transition:
+    box-shadow 0.18s ease,
+    transform 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.card-luxe:hover {
+  box-shadow:
+    0 0 0 1px var(--acc-400),
+    0 12px 32px -8px rgba(0, 0, 0, 0.35);
+}
+
+/* ---- 4) Tæthed: kompakt tilstand ---- */
+html[data-density='compact'] {
+  font-size: 13px;
+}
+
+html[data-density='compact'] .input {
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+}
+
+html[data-density='compact'] .btn {
+  padding-top: 0.125rem;
+  padding-bottom: 0.125rem;
+}
+
+html[data-density='compact'] ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+/* ---- Print: aurora'en skal ikke med på papir ---- */
+@media print {
+  .aurora {
+    display: none !important;
+  }
+}

@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { Activity, BarChart3, CalendarRange, FolderInput, Kanban, LayoutDashboard, ListChecks, ListTodo, Mail, NotebookPen, Plug, ShieldAlert, Sun, Table2, Users } from 'lucide-react';
+import { Activity, BarChart3, CalendarRange, FolderInput, Kanban, LayoutDashboard, ListChecks, ListTodo, Mail, NotebookPen, Plug, ShieldAlert, Sun, Table2, Target, Users } from 'lucide-react';
 
 export interface NavItem {
   to: string;
@@ -18,6 +18,7 @@ export const VIEWS: NavItem[] = [
   { to: '/backlog', label: 'Backlog & Sprints', labelKey: 'nav.backlog', icon: ListChecks, keywords: ['sprint', 'planlægning', 'roadmap'] },
   { to: '/min', label: 'Min arbejdsliste', labelKey: 'nav.mywork', icon: ListTodo, keywords: ['mine', 'opgaver', 'todo'] },
   { to: '/team', label: 'Team & kapacitet', labelKey: 'nav.team', icon: Users, keywords: ['team', 'kapacitet', 'ressourcer', 'belastning'] },
+  { to: '/maal', label: 'Mål', labelKey: 'nav.goals', icon: Target, keywords: ['okr', 'mål', 'key results'] },
   { to: '/noter', label: 'Noter', labelKey: 'nav.notes', icon: NotebookPen, keywords: ['wiki', 'mødenoter', 'beslutninger'] },
   { to: '/risici', label: 'Risici & fejl', labelKey: 'nav.risks', icon: ShieldAlert, keywords: ['risiko', 'issue', 'heatmap', 'matrix'] },
   { to: '/dashboard', label: 'Dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard, keywords: ['rapport', 'diagram', 'status'] },

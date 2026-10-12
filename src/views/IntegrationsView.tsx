@@ -112,6 +112,8 @@ export default function IntegrationsView() {
   const setAgents = useStore((s) => s.setAgents);
   const rules = useStore((s) => s.rules);
   const setRules = useStore((s) => s.setRules);
+  const shareIntake = useStore((s) => s.shareIntake);
+  const unshareIntake = useStore((s) => s.unshareIntake);
 
   const [status, setStatus] = useState<CompanionStatus | null>(null);
   const [webhook, setWebhook] = useState('');
@@ -149,6 +151,7 @@ export default function IntegrationsView() {
   const [gitItems, setGitItems] = useState<GitIssue[] | null>(null);
   const [gitSelected, setGitSelected] = useState<Set<number>>(new Set());
   const [agentDraft, setAgentDraft] = useState<{ projectId: string; text: string } | null>(null);
+  const [brandName, setBrandName] = useState(() => localStorage.getItem('orbit-brand') ?? 'Orbit');
   const prefilled = useRef(false);
 
   useEffect(() => {
@@ -1255,6 +1258,118 @@ export default function IntegrationsView() {
             </div>
           )}
           <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">Bruger du Jira? Importer sprints via CSV under Import & skabeloner.</p>
+        </Section>
+        {/* Formularer & hvid-label portal */}
+        <Section icon={<Share2 className="h-5 w-5" />} title="Formularer & portal" subtitle="Lad kunder indsende opgaver uden login – og giv dem en portal med dit navn">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <input
+              value={brandName}
+              onChange={(e) => setBrandName(e.target.value)}
+              placeholder="Virksomhedsnavn (vises på portalen)"
+              className="input flex-1 py-1.5 text-sm"
+            />
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('brand-save', async () => {
+                  localStorage.setItem('orbit-brand', brandName);
+                  await companionSaveConfig({ brand: { name: brandName } });
+                  return 'Navn gemt – portalen viser det nu.';
+                })
+              }
+              className="btn-outline shrink-0 py-1.5 text-xs"
+            >
+              Gem navn
+            </button>
+          </div>
+          {(() => {
+            const intakeProjects = projects.filter((p) => p.intakeToken);
+            return (
+              <div className="space-y-3">
+                {intakeProjects.map((p) => {
+                  const url = `http://${window.location.hostname}:4310/public/intake/${p.intakeToken}`;
+                  const portalUrl = `http://${window.location.hostname}:4310/public/portal/${p.publicToken ?? p.intakeToken}`;
+                  return (
+                    <div key={p.id} className="rounded-lg border border-zinc-200/70 px-3 py-2 dark:border-white/[0.07]">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={cn('h-2 w-2 rounded-sm', `bg-${p.color}-500`)} />
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-800 dark:text-zinc-100">{p.name}</span>
+                        <button onClick={() => void navigator.clipboard?.writeText(url).then(() => say('Formular-link kopieret.'))} className="btn-ghost px-2 py-1 text-xs">
+                          <Copy className="h-3.5 w-3.5" />
+                          Formular
+                        </button>
+                        <button onClick={() => window.open(portalUrl, '_blank')} className="btn-ghost px-2 py-1 text-xs">
+                          <FolderOpen className="h-3.5 w-3.5" />
+                          Portal
+                        </button>
+                        <button
+                          onClick={() => {
+                            unshareIntake(p.id);
+                            say(`Formular deaktiveret for ${p.name}.`);
+                          }}
+                          className="btn-ghost px-2 py-1 text-xs text-rose-600 dark:text-rose-400"
+                        >
+                          Deaktivér
+                        </button>
+                      </div>
+                      <p className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">
+                        Formular: indsendte opgaver lander direkte på tavlen. Portal: kunden ser status, godkendelser og senest afsluttet.
+                      </p>
+                    </div>
+                  );
+                })}
+                <div className="flex flex-wrap items-center gap-2">
+                  <select id="intake-project" defaultValue="" className="input w-auto py-1.5 text-sm" title="Projekt der skal have formular">
+                    <option value="" disabled>
+                      Vælg projekt…
+                    </option>
+                    {projects
+                      .filter((p) => !p.intakeToken)
+                      .map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                  </select>
+                  <button
+                    onClick={() => {
+                      const sel = document.getElementById('intake-project') as HTMLSelectElement | null;
+                      if (sel?.value) {
+                        shareIntake(sel.value);
+                        say('Formular aktiveret – linket vises ovenfor.');
+                      }
+                    }}
+                    className="btn-outline py-1.5 text-xs"
+                  >
+                    <Share2 className="h-3.5 w-3.5" />
+                    Aktivér formular
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+        </Section>
+
+        {/* Sikkerhed */}
+        <Section icon={<HardDrive className="h-5 w-5" />} title="Sikkerhed" subtitle="Backup krypteres automatisk, og alt logges lokalt">
+          <ul className="space-y-1.5 text-sm text-zinc-600 dark:text-zinc-300">
+            <li className="flex items-start gap-2">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+              Daglige backups ligger i Documents/Orbit/backup – kun på din egen PC.
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+              Sync over internet kræver token (server/sync-server.mjs) – sæt altid ORBIT_SYNC_TOKEN.
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+              Microsoft-login bruger device code – Orbit ser aldrig din adgangskode.
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+              API-token kan rulles: opret et nyt under Webhooks & API (det gamle bliver erstattet).
+            </li>
+          </ul>
         </Section>
       </div>
     </div>

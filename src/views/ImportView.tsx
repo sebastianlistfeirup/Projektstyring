@@ -8,12 +8,13 @@ import {
   Globe,
   Info,
   LayoutTemplate,
+  ListChecks,
   UserPlus,
   Zap,
   type LucideIcon,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
-import { PROJECT_TEMPLATES, type ProjectTemplate } from '../data/templates';
+import { CHECKLIST_TEMPLATES, PROJECT_TEMPLATES, type ProjectTemplate } from '../data/templates';
 import { parseImportFile, type ParsedImport } from '../lib/importers';
 import { useLang, t } from '../lib/i18n';
 import { cn, formatDate } from '../lib/utils';
@@ -110,6 +111,9 @@ export default function ImportView() {
   const projects = useStore((s) => s.projects);
   const activeProjectId = useStore((s) => s.activeProjectId);
   const importTasks = useStore((s) => s.importTasks);
+  const addTask = useStore((s) => s.addTask);
+  const addSubtask = useStore((s) => s.addSubtask);
+  const [createdChecklist, setCreatedChecklist] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -170,6 +174,49 @@ export default function ImportView() {
               <TemplateCard key={tpl.id} tpl={tpl} />
             ))}
           </div>
+        </section>
+
+        {/* Sektion: personlige checklister */}
+        <section className="animate-fade-in">
+          <div className="flex items-center gap-2 pb-3">
+            <ListChecks className="h-4 w-4 text-indigo-500 dark:text-indigo-400" />
+            <h2 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">Personlige checklister</h2>
+            <span className="text-xs text-zinc-400 dark:text-zinc-500">én opgave med underopgaver – klar på 2 sekunder</span>
+          </div>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {CHECKLIST_TEMPLATES.map((chk) => (
+              <div key={chk.id} className="glass-panel card-hover flex flex-col rounded-xl p-4">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-2xl">{chk.emoji}</span>
+                  <div className="min-w-0">
+                    <h3 className="truncate text-sm font-semibold text-zinc-800 dark:text-zinc-100">{chk.name}</h3>
+                    <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{chk.description}</p>
+                  </div>
+                </div>
+                <p className="pt-2 text-[11px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+                  {chk.items.length} punkter
+                </p>
+                <button
+                  onClick={() => {
+                    const projectId = activeProjectId ?? projects[0]?.id;
+                    if (!projectId) return;
+                    const task = addTask({ title: chk.name, projectId, emoji: chk.emoji });
+                    for (const item of chk.items) addSubtask(task.id, item);
+                    setCreatedChecklist(chk.name);
+                  }}
+                  className="btn-primary mt-3 self-stretch justify-center py-1 text-xs"
+                >
+                  Tilføj til tavlen
+                </button>
+              </div>
+            ))}
+          </div>
+          {createdChecklist && (
+            <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-emerald-600 animate-fade-in dark:text-emerald-400">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Checklisten "{createdChecklist}" ligger nu på tavlen med alle punkter.
+            </p>
+          )}
         </section>
 
         {/* Sektion B */}

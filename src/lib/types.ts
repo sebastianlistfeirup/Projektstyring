@@ -67,6 +67,11 @@ export interface Task {
     gitIssue?: number;
   }; // eksterne systemer
   approval?: Approval | null; // kundegodkendelse via offentligt link
+  emoji?: string; // lille visuel markør på kortet
+  pinnedDay?: string | null; // fastgjort til "Min dag" (ISO-dato, ryddes automatisk)
+  reminderAt?: string | null; // påmindelse på klokkeslæt (ISO)
+  isMilestone?: boolean; // vises som diamant på tidslinjen
+  kudos?: Kudo[]; // high-fives på afsluttede opgaver
 }
 
 export type NoteKind = 'note' | 'meeting' | 'decision';
@@ -120,6 +125,40 @@ export interface Approval {
   by?: string;
   at?: string;
   comment?: string;
+}
+
+export type Accent = 'indigo' | 'violet' | 'emerald' | 'sunset' | 'graphite' | 'ocean';
+export type Density = 'comfortable' | 'compact';
+
+export interface Kudo {
+  userId: string;
+  emoji: string;
+  at: string;
+}
+
+export interface KeyResult {
+  id: string;
+  title: string;
+  taskIds: string[];
+}
+
+export interface Goal {
+  id: string;
+  title: string;
+  note: string;
+  keyResults: KeyResult[];
+}
+
+export interface BaselineEntry {
+  taskId: string;
+  startDate: string | null;
+  dueDate: string | null;
+}
+
+export interface Baseline {
+  projectId: string;
+  savedAt: string;
+  items: BaselineEntry[];
 }
 
 export interface StandupEntry {
@@ -196,6 +235,8 @@ export interface Project {
   publicToken?: string | null; // kunde-statusside ( companion /public/status/<token> )
   archived?: boolean; // arkiverede projekter gemmes væk, men kan gendannes
   budget?: number | null; // budget i DKK (økonomi-modul)
+  privateZone?: boolean; // tilhører "Privat"-zonen (personlige projekter)
+  intakeToken?: string | null; // offentlig indsendelsesformular
 }
 
 export interface ActivityEntry {

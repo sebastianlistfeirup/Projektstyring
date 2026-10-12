@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Archive, ChevronRight, Moon, Plus, RotateCcw, Search, Sun, Trash2, X } from 'lucide-react';
+import { Archive, ChevronRight, Crosshair, Moon, Plus, RotateCcw, Search, Sun, Trash2, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { VIEWS } from '../lib/nav';
+import type { Project } from '../lib/types';
 import { useI18n, useLang, t } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { Avatar } from './common';
 import NotificationCenter from './NotificationCenter';
 import PresenceCursors from './PresenceCursors';
 import RouteTransition from './RouteTransition';
+import ThemePicker from './ThemePicker';
 import TvMode from './TvMode';
 
 function openPalette() {
@@ -27,6 +29,9 @@ export default function AppShell() {
   const deleteProject = useStore((s) => s.deleteProject);
   const theme = useStore((s) => s.theme);
   const toggleTheme = useStore((s) => s.toggleTheme);
+  const accent = useStore((s) => s.accent);
+  const density = useStore((s) => s.density);
+  const simpleMode = useStore((s) => s.simpleMode);
   const toggleLang = useI18n((s) => s.toggleLang);
 
   // Abonnér på sprog, så alle tekster re-render'er ved skift
@@ -37,6 +42,7 @@ export default function AppShell() {
   const [name, setName] = useState('');
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [tvMode, setTvMode] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
 
   // TV-tilstand: TvMode-komponenten dispatcher 'orbit:tv' – skjul app-chrome
   useEffect(() => {
@@ -45,11 +51,41 @@ export default function AppShell() {
     return () => window.removeEventListener('orbit:tv', onTv);
   }, []);
 
+  // Accent + tæthed på <html>, så CSS-variabler og utility-overrides slår igennem
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.accent = accent;
+    root.dataset.density = density;
+  }, [accent, density]);
+
+  // Fokus-tilstand: Ctrl+. toggler, Esc slukker
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === '.' && e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        setFocusMode((v) => !v);
+      } else if (e.key === 'Escape') {
+        setFocusMode(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const me = users.find((u) => u.id === currentUserId);
   const currentView = VIEWS.find((v) => location.pathname.startsWith(v.to));
   const activeProject = projects.find((p) => p.id === activeProjectId);
   const activeProjects = projects.filter((p) => !p.archived);
   const archivedProjects = projects.filter((p) => p.archived);
+
+  // Enkel tilstand: kun kernevisninger (+ integrationer nederst)
+  const visibleViews = simpleMode
+    ? VIEWS.filter((v) => ['/idag', '/tavle', '/noter', '/min', '/aktivitet', '/integrationer'].includes(v.to))
+    : VIEWS;
+
+  // Enkel tilstand: projekter grupperes i Arbejde / Privat
+  const workProjects = activeProjects.filter((p) => !p.privateZone);
+  const privateProjects = activeProjects.filter((p) => p.privateZone);
 
   const activeCount = (projectId: string) =>
     tasks.filter((t) => t.projectId === projectId && t.status !== 'done' && t.status !== 'canceled').length;
@@ -63,14 +99,53 @@ export default function AppShell() {
     setAdding(false);
   };
 
+  const renderProjectRow = (p: Project) => (
+    <div
+      key={p.id}
+      className={cn(
+        'group flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm transition-colors',
+        activeProjectId === p.id
+          ? 'bg-zinc-200/70 font-medium text-zinc-900 dark:bg-white/[0.08] dark:text-white'
+          : 'text-zinc-600 hover:bg-zinc-200/50 dark:text-zinc-300 dark:hover:bg-white/[0.05]',
+      )}
+      onClick={() => setActiveProject(p.id)}
+    >
+      <span className={cn('h-2.5 w-2.5 shrink-0 rounded-sm', `bg-${p.color}-500`)} />
+      <span className="flex-1 truncate text-left">{p.name}</span>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          updateProject(p.id, { archived: true });
+        }}
+        title={t('shell.archiveProject')}
+        className="hidden shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-amber-500 group-hover:grid dark:text-zinc-500 dark:hover:text-amber-400"
+      >
+        <Archive className="h-3.5 w-3.5" />
+      </button>
+      <span className="text-[11px] tabular-nums text-zinc-400 group-hover:hidden dark:text-zinc-500">
+        {activeCount(p.id)}
+      </span>
+    </div>
+  );
+
   return (
     <div className="relative z-10 flex h-screen overflow-hidden">
-      {/* Ambient lys bag indholdet */}
-      <div aria-hidden className="pointer-events-none fixed inset-0 z-0">
-        <div className="absolute -top-44 left-1/3 h-96 w-[36rem] rounded-full bg-indigo-500/[0.06] blur-3xl dark:bg-indigo-500/[0.11]" />
-        <div className="absolute -bottom-24 right-0 h-80 w-[30rem] rounded-full bg-violet-500/[0.05] blur-3xl dark:bg-violet-500/[0.08]" />
-        <div className="absolute -left-32 top-1/2 h-72 w-72 rounded-full bg-sky-500/[0.04] blur-3xl dark:bg-sky-500/[0.06]" />
+      {/* Levende aurora-baggrund */}
+      <div className="aurora" aria-hidden>
+        <div className="aurora-blob left-[-12vw] top-[-18vw] bg-[var(--acc-500)]" />
+        <div className="aurora-blob right-[-15vw] top-[18vh] bg-[var(--acc-400)]" />
+        <div className="aurora-blob bottom-[-22vw] left-[22vw] bg-[var(--acc-600)]" />
+        <div className="aurora-noise" />
       </div>
+
+      {/* Fokus-tilstand: dæmper appen, mens drawer/dialoger (z-40+) forbliver lysere */}
+      <div
+        aria-hidden
+        className={cn(
+          'pointer-events-none fixed inset-0 z-30 bg-zinc-950/50 backdrop-blur-[1px] transition-opacity duration-300',
+          focusMode ? 'opacity-100' : 'opacity-0',
+        )}
+      />
       {/* Ikon-rail */}
       <nav
         className={cn(
@@ -84,7 +159,7 @@ export default function AppShell() {
         >
           O
         </div>
-        {VIEWS.map((view) => (
+        {visibleViews.map((view) => (
           <NavLink
             key={view.to}
             to={view.to}
@@ -174,34 +249,28 @@ export default function AppShell() {
             </span>
           </button>
 
-          {activeProjects.map((p) => (
-            <div
-              key={p.id}
-              className={cn(
-                'group flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm transition-colors',
-                activeProjectId === p.id
-                  ? 'bg-zinc-200/70 font-medium text-zinc-900 dark:bg-white/[0.08] dark:text-white'
-                  : 'text-zinc-600 hover:bg-zinc-200/50 dark:text-zinc-300 dark:hover:bg-white/[0.05]',
+          {simpleMode ? (
+            <>
+              {workProjects.length > 0 && (
+                <>
+                  <p className="px-2 pt-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+                    Arbejde
+                  </p>
+                  {workProjects.map(renderProjectRow)}
+                </>
               )}
-              onClick={() => setActiveProject(p.id)}
-            >
-              <span className={cn('h-2.5 w-2.5 shrink-0 rounded-sm', `bg-${p.color}-500`)} />
-              <span className="flex-1 truncate text-left">{p.name}</span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  updateProject(p.id, { archived: true });
-                }}
-                title={t('shell.archiveProject')}
-                className="hidden shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-amber-500 group-hover:grid dark:text-zinc-500 dark:hover:text-amber-400"
-              >
-                <Archive className="h-3.5 w-3.5" />
-              </button>
-              <span className="text-[11px] tabular-nums text-zinc-400 group-hover:hidden dark:text-zinc-500">
-                {activeCount(p.id)}
-              </span>
-            </div>
-          ))}
+              {privateProjects.length > 0 && (
+                <>
+                  <p className="px-2 pt-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+                    Privat
+                  </p>
+                  {privateProjects.map(renderProjectRow)}
+                </>
+              )}
+            </>
+          ) : (
+            activeProjects.map(renderProjectRow)
+          )}
 
           {adding && (
             <div className="animate-fade-in px-1 pt-1">
@@ -291,7 +360,7 @@ export default function AppShell() {
             tvMode && 'hidden',
           )}
         >
-          <h1 className="truncate text-[15px] font-semibold">
+          <h1 className="font-display truncate text-[15px] font-semibold tracking-tight">
             {currentView ? t(currentView.labelKey) : 'Orbit'}
           </h1>
           {activeProject && (
@@ -304,6 +373,15 @@ export default function AppShell() {
             </>
           )}
           <div className="ml-auto flex items-center gap-2">
+            <ThemePicker />
+            <button
+              onClick={() => setFocusMode((v) => !v)}
+              title="Fokus-tilstand (Ctrl+.)"
+              aria-pressed={focusMode}
+              className={cn('btn-ghost px-2', focusMode && 'text-indigo-500 dark:text-indigo-300')}
+            >
+              <Crosshair className="h-4 w-4" />
+            </button>
             <NotificationCenter />
             <TvMode />
             <button

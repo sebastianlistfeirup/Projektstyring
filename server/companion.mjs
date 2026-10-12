@@ -231,6 +231,7 @@ async function runWeeklyReport() {
 let lastReminderDate = null;
 let lastReportWeek = null;
 let lastBackupDate = null;
+const firedReminders = new Set();
 setInterval(() => {
   const now = new Date();
   const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -252,6 +253,17 @@ setInterval(() => {
       writeFileSync(p, JSON.stringify(lastSnapshot.snapshot, null, 2), 'utf8');
       console.log(`Backup gemt: ${p}`);
     } catch { /* ignorer */ }
+  }
+  // Tids-påmindelser på opgaver
+  if (lastSnapshot) {
+    const soon = new Date(now.getTime() + 30 * 1000).toISOString();
+    for (const t of lastSnapshot.snapshot.tasks ?? []) {
+      if (t.reminderAt && t.reminderAt <= soon && !firedReminders.has(`${t.id}:${t.reminderAt}`)) {
+        firedReminders.add(`${t.id}:${t.reminderAt}`);
+        windowsNotify('Orbit – påmindelse', t.title);
+      }
+    }
+    if (firedReminders.size > 500) firedReminders.clear();
   }
 }, 30000);
 
@@ -427,12 +439,13 @@ app.get('/api/status', (_req, res) => {
 
 app.post('/api/config', (req, res) => {
   const cfg = loadConfig();
-  const { teamsWebhook, graphClientId, reminders, reports, ai } = req.body ?? {};
+  const { teamsWebhook, graphClientId, reminders, reports, ai, brand } = req.body ?? {};
   if (teamsWebhook !== undefined) cfg.teamsWebhook = teamsWebhook || undefined;
   if (graphClientId !== undefined) cfg.graphClientId = graphClientId || undefined;
   if (reminders !== undefined) cfg.reminders = { ...(cfg.reminders ?? {}), ...reminders };
   if (reports !== undefined) cfg.reports = { ...(cfg.reports ?? {}), ...reports };
   if (ai !== undefined) cfg.ai = { ...(cfg.ai ?? {}), ...ai };
+  if (brand !== undefined) cfg.brand = { ...(cfg.brand ?? {}), ...brand };
   saveConfig(cfg);
   res.json({ ok: true });
 });
@@ -1176,6 +1189,134 @@ app.post('/api/git/close', async (req, res) => {
   } catch (err) {
     res.json({ ok: false, reason: String(err) });
   }
+});
+
+// ---------------- Intake-formularer (offentlig indsendelse -> opgaver) ----------------
+function findProjectByIntakeToken(token) {
+  const snap = lastSnapshot?.snapshot;
+  if (!snap) return null;
+  const project = (snap.projects ?? []).find((p) => p.intakeToken === token);
+  return project ? { snap, project } : null;
+}
+
+app.get('/public/intake/:token', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  const found = findProjectByIntakeToken(req.params.token);
+  if (!found) {
+    return res.status(404).send('<!doctype html><html lang="da"><body style="font-family:sans-serif;padding:2rem">Ukendt eller inaktiv formular.</body></html>');
+  }
+  const html = `<!doctype html>
+<html lang="da"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Indsend opgave – ${esc(found.project.name)}</title>
+<style>
+  body{font-family:'Segoe UI',system-ui,sans-serif;background:#17181c;color:#e4e4e7;margin:0;padding:2.5rem 1.5rem;display:flex;justify-content:center}
+  main{max-width:480px;width:100%}
+  .card{background:#1e1f24;border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:1.5rem;margin-bottom:1rem}
+  h1{font-size:1.4rem;margin:.25rem 0 0}
+  .lbl{font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;color:#a1a1aa}
+  input,textarea{width:100%;box-sizing:border-box;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:#17181c;color:#e4e4e7;padding:.75rem;font-family:inherit;margin-top:.4rem}
+  button{width:100%;border:0;border-radius:10px;padding:.85rem;font-size:1rem;font-weight:600;cursor:pointer;background:#6366f1;color:#fff;margin-top:1rem}
+  .ok{display:none;text-align:center;padding:1rem;border-radius:10px;background:rgba(16,185,129,.15);color:#34d399;font-weight:600}
+</style></head><body><main>
+<div class="card"><span class="lbl">Opgaveformular</span><h1>${esc(found.project.name)}</h1></div>
+<div class="card" id="form">
+  <span class="lbl">Kort titel</span>
+  <input id="title" placeholder="Fx 'Skift tekst på forsiden'">
+  <div style="margin-top:.75rem"><span class="lbl">Beskrivelse (valgfri)</span></div>
+  <textarea id="body" rows="4" placeholder="Beskriv kort, hvad der skal ske…"></textarea>
+  <button onclick="submit()">Send opgave</button>
+  <p id="err" style="color:#fb7185;font-size:.85rem"></p>
+</div>
+<div class="card ok" id="done">Tak! Din opgave er modtaget.</div>
+<script>
+async function submit() {
+  const title = document.getElementById('title').value.trim();
+  if (!title) { document.getElementById('err').textContent = 'Skriv en titel først.'; return; }
+  const r = await fetch(location.pathname, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, body: document.getElementById('body').value.trim() }) });
+  if (r.ok) { document.getElementById('form').style.display = 'none'; document.getElementById('done').style.display = 'block'; }
+  else document.getElementById('err').textContent = 'Noget gik galt – prøv igen.';
+}
+</script>
+</main></body></html>`;
+  res.send(html);
+});
+
+app.post('/public/intake/:token', (req, res) => {
+  const found = findProjectByIntakeToken(req.params.token);
+  if (!found) return res.status(404).json({ ok: false, reason: 'Ukendt token' });
+  const { title, body } = req.body ?? {};
+  if (!title?.trim()) return res.status(400).json({ ok: false, reason: 'Mangler titel' });
+  const snap = found.snap;
+  const maxNumber = (snap.tasks ?? []).filter((t) => t.projectId === found.project.id).reduce((m, t) => Math.max(m, t.number ?? 0), 0);
+  snap.tasks = [
+    ...(snap.tasks ?? []),
+    {
+      id: `t-ext-${Date.now()}`,
+      number: maxNumber + 1,
+      projectId: found.project.id,
+      sprintId: null,
+      title: String(title).slice(0, 200),
+      description: body ? `Indsendt via formular:\n${String(body).slice(0, 1000)}` : 'Indsendt via formular',
+      status: 'todo',
+      priority: 'medium',
+      assigneeId: null,
+      reporterId: 'external',
+      labelIds: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      startDate: null,
+      dueDate: null,
+      estimate: null,
+      subtasks: [],
+      comments: [],
+      order: 0,
+    },
+  ];
+  broadcast({ type: 'sync', from: 'intake' });
+  windowsNotify('Orbit – ny opgave', `“${String(title).slice(0, 60)}” indsendt til ${found.project.name}`);
+  res.json({ ok: true });
+});
+
+// ---------------- Hvid-label kundeportal ----------------
+app.get('/public/portal/:token', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  const found = findProjectByIntakeToken(req.params.token) ?? (() => {
+    const snap = lastSnapshot?.snapshot;
+    const project = snap?.projects?.find((p) => p.publicToken === req.params.token);
+    return project ? { snap, project } : null;
+  })();
+  if (!found) return res.status(404).send('<!doctype html><html lang="da"><body style="font-family:sans-serif;padding:2rem">Ukendt portal.</body></html>');
+  const { snap, project } = found;
+  const brand = loadConfig().brand?.name || 'Orbit';
+  const tasks = (snap.tasks ?? []).filter((t) => t.projectId === project.id);
+  const open = tasks.filter((t) => t.status !== 'done' && t.status !== 'canceled');
+  const done = tasks.filter((t) => t.status === 'done');
+  const pending = open.filter((t) => t.approval?.status === 'pending');
+  const row = (t) => `<li><strong>${esc(project.key)}-${t.number}</strong> ${esc(t.title)} <span class="due">${t.dueDate ? `· frist ${esc(t.dueDate)}` : ''}${t.approval?.status === 'pending' ? ' · afventer godkendelse' : ''}</span></li>`;
+  const html = `<!doctype html>
+<html lang="da"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(brand)} – ${esc(project.name)}</title>
+<style>
+  body{font-family:'Segoe UI',system-ui,sans-serif;background:#fafafa;color:#18181b;margin:0;padding:2.5rem 1.5rem;display:flex;justify-content:center}
+  main{max-width:640px;width:100%}
+  .brand{font-size:.85rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#6366f1}
+  h1{font-size:1.7rem;margin:.25rem 0 1.5rem}
+  .card{background:#fff;border:1px solid #e4e4e7;border-radius:14px;padding:1.25rem 1.5rem;margin-bottom:1rem;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  h2{font-size:.9rem;text-transform:uppercase;letter-spacing:.05em;color:#71717a;margin:0 0 .75rem}
+  ul{list-style:none;margin:0;padding:0}
+  li{padding:.5rem 0;border-top:1px solid #f0f0f2;font-size:.95rem}
+  .due{color:#a1a1aa;font-size:.85rem}
+  .empty{color:#a1a1aa;font-style:italic}
+  .foot{color:#a1a1aa;font-size:.75rem;margin-top:1.5rem;text-align:center}
+</style></head><body><main>
+<div class="brand">${esc(brand)}</div>
+<h1>${esc(project.name)}</h1>
+<div class="card"><h2>Igangværende</h2><ul>${open.length ? open.map(row).join('') : '<li class="empty">Ingen åbne opgaver.</li>'}</ul></div>
+<div class="card"><h2>Afventer jeres godkendelse (${pending.length})</h2><ul>${pending.length ? pending.map(row).join('') : '<li class="empty">Intet afventer.</li>'}</ul></div>
+<div class="card"><h2>Senest afsluttet</h2><ul>${done.length ? done.slice(-5).reverse().map(row).join('') : '<li class="empty">Endnu ingen.</li>'}</ul></div>
+<p class="foot">Leveret af ${esc(brand)} · opdateres automatisk</p>
+</main></body></html>`;
+  res.send(html);
 });
 
 server.listen(PORT, () => {
