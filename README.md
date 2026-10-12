@@ -38,7 +38,9 @@ Et moderne, dansksproget projektstyringsværktøj til Windows – inspireret af 
 |---|---|---|
 | ![Team](docs/screenshots/team.png) | ![Integrationer](docs/screenshots/integrationer.png) | ![Outlook](docs/screenshots/outlook.png) |
 
-![Opgavedetalje](docs/screenshots/opgave.png)
+| Dashboard | Min arbejdsliste | Opgavedetalje |
+|---|---|---|
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Min arbejdsliste](docs/screenshots/min-arbejdsliste.png) | ![Opgave](docs/screenshots/opgave.png) |
 
 ## Kom i gang
 

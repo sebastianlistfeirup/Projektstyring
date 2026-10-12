@@ -9,6 +9,6 @@
     { "id": "c2", "name": "Lav wireframe til forsiden", "due": "2026-10-22T12:00:00.000Z", "desc": "", "idList": "l1" },
     { "id": "c3", "name": "Skriv tekster til om-siden", "due": null, "desc": " tone of voice: venlig og professionel", "idList": "l1" },
     { "id": "c4", "name": "Opsæt nyhedsbrev", "due": "2026-10-28T12:00:00.000Z", "desc": "", "idList": "l2" },
-    { "id": "c5", "name": "Afhold kickoff-møde", "due": "2026-10-13T12:00:00.000Z", "desc": "", "idList": "l3" }
+    { "id": "c5", "name": "Afhold kickoff-møde", "due": "2026-10-13T12:00:00.000Z", "dueComplete": true, "desc": "", "idList": "l3" }
   ]
 }

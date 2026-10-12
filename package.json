@@ -11,7 +11,8 @@
     "tauri": "tauri",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test:smoke": "node scripts/smoke-test.mjs"
+    "test:smoke": "node scripts/smoke-test.mjs",
+    "test:imports": "tsx scripts/test-imports.ts"
   },
   "dependencies": {
     "@azure/msal-node": "^7.0.1",
@@ -44,6 +45,7 @@
     "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^6.1.1",
     "oxlint": "^1.81.0",
+    "tsx": "^4.23.15",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
   }
