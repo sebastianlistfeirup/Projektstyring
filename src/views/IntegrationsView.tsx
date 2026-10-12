@@ -23,6 +23,7 @@ import {
 import { useStore } from '../store/useStore';
 import {
   aiComplete,
+  addWebhook,
   companionExport,
   companionNotify,
   companionOpenExport,
@@ -30,18 +31,26 @@ import {
   companionSaveConfig,
   companionStatus,
   companionTeams,
+  createApiToken,
   createBackup,
+  fetchAdopsWorkItems,
   getSyncToken,
+  getWebhooks,
   listBackups,
+  postStandup,
+  removeWebhook,
   restoreBackup,
   runRemindersNow,
   runReportNow,
+  saveAdopsConfig,
   setSyncToken,
+  type AdopsWorkItem,
   type BackupFile,
   type CompanionStatus,
 } from '../lib/companion';
 import { applySnapshot, getSyncUrl, isSyncEnabled, restartSync, setSyncEnabled, setSyncUrl } from '../lib/sync';
 import { cn, formatDate, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
+import { Avatar } from '../components/common';
 import { STATUS_META } from '../lib/constants';
 
 function Section({
@@ -85,6 +94,7 @@ export default function IntegrationsView() {
   const projects = useStore((s) => s.projects);
   const users = useStore((s) => s.users);
   const sprints = useStore((s) => s.sprints);
+  const activeProjectId = useStore((s) => s.activeProjectId);
   const automation = useStore((s) => s.automation);
   const setAutomation = useStore((s) => s.setAutomation);
   const shareProject = useStore((s) => s.shareProject);
@@ -92,6 +102,9 @@ export default function IntegrationsView() {
   const trash = useStore((s) => s.trash);
   const restoreTask = useStore((s) => s.restoreTask);
   const emptyTrash = useStore((s) => s.emptyTrash);
+  const standups = useStore((s) => s.standups);
+  const addStandup = useStore((s) => s.addStandup);
+  const setTaskExtIds = useStore((s) => s.setTaskExtIds);
 
   const [status, setStatus] = useState<CompanionStatus | null>(null);
   const [webhook, setWebhook] = useState('');
@@ -113,6 +126,15 @@ export default function IntegrationsView() {
   const [aiConfigured, setAiConfigured] = useState(false);
   const [syncTokenInput, setSyncTokenInput] = useState(getSyncToken());
   const [backups, setBackups] = useState<BackupFile[]>([]);
+  const [adopsOrg, setAdopsOrg] = useState('');
+  const [adopsProject, setAdopsProject] = useState('');
+  const [adopsPat, setAdopsPat] = useState('');
+  const [adopsItems, setAdopsItems] = useState<AdopsWorkItem[] | null>(null);
+  const [adopsSelected, setAdopsSelected] = useState<Set<number>>(new Set());
+  const [webhooks, setWebhooks] = useState<string[]>([]);
+  const [webhookInput, setWebhookInput] = useState('');
+  const [apiTokenValue, setApiTokenValue] = useState('');
+  const [standupText, setStandupText] = useState('');
   const prefilled = useRef(false);
 
   useEffect(() => {
@@ -140,8 +162,9 @@ export default function IntegrationsView() {
     const s = await companionStatus();
     setStatus(s);
     if (s) {
-      const b = await listBackups();
+      const [b, w] = await Promise.all([listBackups(), getWebhooks()]);
       if (b.ok && b.files) setBackups(b.files);
+      if (w.ok && w.urls) setWebhooks(w.urls);
     }
   }, []);
 
@@ -800,6 +823,222 @@ export default function IntegrationsView() {
                 Tøm papirkurv
               </button>
             </>
+          )}
+        </Section>
+        {/* Azure DevOps */}
+        <Section icon={<Zap className="h-5 w-5" />} title="Azure DevOps" subtitle="Hent work items og skriv status tilbage – to-vejs">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <input value={adopsOrg} onChange={(e) => setAdopsOrg(e.target.value)} placeholder="Organisation (fx dit-org)" className="input py-1.5 font-mono text-xs" />
+            <input value={adopsProject} onChange={(e) => setAdopsProject(e.target.value)} placeholder="Projekt (fx App 2.0)" className="input py-1.5 font-mono text-xs" />
+            <input type="password" value={adopsPat} onChange={(e) => setAdopsPat(e.target.value)} placeholder="Personal Access Token" className="input py-1.5 font-mono text-xs" />
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('adops-save', async () => {
+                  await saveAdopsConfig({ org: adopsOrg, project: adopsProject, pat: adopsPat });
+                  return 'Azure DevOps-konfiguration gemt.';
+                })
+              }
+              className="btn-outline py-1.5 text-xs"
+            >
+              Gem konfiguration
+            </button>
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('adops-fetch', async () => {
+                  const r = await fetchAdopsWorkItems();
+                  if (!r.ok || !r.items) return r.reason ?? 'Kunne ikke hente work items.';
+                  setAdopsItems(r.items);
+                  setAdopsSelected(new Set(r.items.map((i) => i.id)));
+                  return `${r.items.length} åbne work items fundet.`;
+                }, 'error')
+              }
+              className="btn-outline py-1.5 text-xs"
+            >
+              Hent work items
+            </button>
+          </div>
+          {adopsItems && (
+            <div className="mt-3">
+              {adopsItems.length === 0 ? (
+                <p className="text-sm text-zinc-400">Ingen åbne work items.</p>
+              ) : (
+                <>
+                  <ul className="mb-2 max-h-56 space-y-1 overflow-y-auto">
+                    {adopsItems.map((item) => (
+                      <li key={item.id} className="flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-white/[0.04]">
+                        <input
+                          type="checkbox"
+                          checked={adopsSelected.has(item.id)}
+                          onChange={() =>
+                            setAdopsSelected((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(item.id)) next.delete(item.id);
+                              else next.add(item.id);
+                              return next;
+                            })
+                          }
+                          className="h-4 w-4 accent-indigo-500"
+                        />
+                        <span className="w-12 shrink-0 text-xs font-bold tabular-nums text-zinc-500">#{item.id}</span>
+                        <span className="min-w-0 flex-1 truncate text-sm text-zinc-800 dark:text-zinc-100">{item.title}</span>
+                        <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-white/[0.06] dark:text-zinc-400">
+                          {item.type} · {item.state}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    disabled={adopsSelected.size === 0}
+                    onClick={() => {
+                      const projectId = activeProjectId ?? projects[0]?.id;
+                      if (!projectId || !adopsItems) return;
+                      const chosen = adopsItems.filter((i) => adopsSelected.has(i.id));
+                      const state = (s: string): 'todo' | 'inprogress' | 'done' =>
+                        /done|closed|resolved/i.test(s) ? 'done' : /progress|active|committed/i.test(s) ? 'inprogress' : 'todo';
+                      let created = 0;
+                      for (const item of chosen) {
+                        const t = useStore.getState().addTask({ title: item.title, projectId, status: state(item.state) });
+                        setTaskExtIds(t.id, { adopsId: item.id });
+                        created += 1;
+                      }
+                      setAdopsItems(null);
+                      say(`${created} work items importeret – afslut dem i Orbit, og status skrives tilbage til DevOps.`);
+                    }}
+                    className="btn-primary py-1 text-xs"
+                  >
+                    Importér valgte ({adopsSelected.size}) – med tilbage-skrivning
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </Section>
+
+        {/* Webhooks + åbent API */}
+        <Section icon={<Link2 className="h-5 w-5" />} title="Webhooks & åbent API" subtitle="Lad andre systemer reagere på Orbit – fx Power Automate">
+          <div className="space-y-2">
+            {webhooks.map((url) => (
+              <div key={url} className="flex items-center gap-2 rounded-lg border border-zinc-200/70 px-3 py-1.5 dark:border-white/[0.07]">
+                <span className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-600 dark:text-zinc-300">{url}</span>
+                <button
+                  disabled={!connected}
+                  onClick={() =>
+                    run('webhook-del', async () => {
+                      await removeWebhook(url);
+                      setWebhooks((prev) => prev.filter((u) => u !== url));
+                      return 'Webhook fjernet.';
+                    })
+                  }
+                  className="btn-ghost shrink-0 px-2 py-0.5 text-xs text-rose-600 dark:text-rose-400"
+                >
+                  Fjern
+                </button>
+              </div>
+            ))}
+            <div className="flex gap-2">
+              <input
+                value={webhookInput}
+                onChange={(e) => setWebhookInput(e.target.value)}
+                placeholder="https://… (fx Power Automate HTTP-endpoint)"
+                className="input flex-1 py-1.5 font-mono text-xs"
+              />
+              <button
+                disabled={!connected}
+                onClick={() =>
+                  run('webhook-add', async () => {
+                    const r = await addWebhook(webhookInput);
+                    if (!r.ok) return r.reason ?? 'Kunne ikke tilføje webhook.';
+                    setWebhookInput('');
+                    if (r.urls) setWebhooks(r.urls);
+                    return 'Webhook tilføjet – event "task.completed" sendes fremover.';
+                  }, 'error')
+                }
+                className="btn-outline shrink-0 py-1.5 text-xs"
+              >
+                Tilføj
+              </button>
+            </div>
+          </div>
+          <div className="mt-4 border-t border-zinc-200/70 pt-3 dark:border-white/[0.06]">
+            <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Åbent API (læs)</p>
+            <p className="mb-2 text-[11px] leading-relaxed text-zinc-400 dark:text-zinc-500">
+              <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[10px] dark:bg-white/10">GET {`http://<din-pc>:4310/api/v1/tasks`}</code> med header{' '}
+              <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[10px] dark:bg-white/10">X-Orbit-Api-Token</code> – se docs/api.md for eksempler med Power Automate.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                disabled={!connected}
+                onClick={() =>
+                  run('api-token', async () => {
+                    const r = await createApiToken();
+                    if (!r.ok || !r.token) return 'Kunne ikke oprette token.';
+                    setApiTokenValue(r.token);
+                    return 'API-token oprettet – vises kun denne gang, så gem det.';
+                  }, 'error')
+                }
+                className="btn-outline py-1.5 text-xs"
+              >
+                Opret API-token
+              </button>
+              {apiTokenValue && (
+                <code className="rounded bg-indigo-500/10 px-2 py-1 font-mono text-xs text-indigo-600 dark:text-indigo-300">{apiTokenValue}</code>
+              )}
+            </div>
+          </div>
+        </Section>
+
+        {/* Asynkron standup */}
+        <Section icon={<Users className="h-5 w-5" />} title="Asynkron standup" subtitle="Skriv dagens status – postes til Teams og gemmes i arbejdsområdet">
+          <textarea
+            value={standupText}
+            onChange={(e) => setStandupText(e.target.value)}
+            rows={2}
+            placeholder="Hvad arbejder du på – og er du blokeret? …"
+            className="input resize-none"
+          />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              disabled={!connected || !standupText.trim()}
+              onClick={() =>
+                run('standup', async () => {
+                  const me = users.find((u) => u.id === useStore.getState().currentUserId);
+                  const r = await postStandup(me?.name ?? 'Ukendt', standupText.trim());
+                  if (!r.ok) return r.reason ?? 'Kunne ikke sende.';
+                  addStandup(standupText.trim());
+                  setStandupText('');
+                  return r.teams?.ok === false && r.teams.reason
+                    ? `Standup gemt – men Teams: ${r.teams.reason}`
+                    : 'Standup sendt til Teams og gemt.';
+                }, 'error')
+              }
+              className="btn-primary py-1.5 text-xs"
+            >
+              <Send className="h-3.5 w-3.5" />
+              Send standup
+            </button>
+            <span className="text-[11px] text-zinc-400 dark:text-zinc-500">Kræver Teams-webhook (øverst på siden)</span>
+          </div>
+          {standups.length > 0 && (
+            <ul className="mt-3 space-y-2">
+              {standups.slice(0, 4).map((s) => {
+                const author = users.find((u) => u.id === s.userId);
+                return (
+                  <li key={s.id} className="flex items-start gap-2.5 rounded-lg bg-zinc-50 px-3 py-2 dark:bg-white/[0.03]">
+                    <Avatar user={author} size="xs" className="mt-0.5" />
+                    <div className="min-w-0">
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                        <span className="font-semibold text-zinc-700 dark:text-zinc-200">{author?.name ?? 'Ukendt'}</span> · {timeAgo(s.createdAt)}
+                      </p>
+                      <p className="whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-200">{s.text}</p>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </Section>
       </div>

@@ -1,10 +1,19 @@
-import { useEffect, useState } from 'react';
-import { CalendarClock, Check, Play, Plus, Sparkles, Square, Trash2, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { CalendarClock, CalendarPlus, Check, Copy, FileText, FolderInput, Paperclip, Play, Plus, Sparkles, Square, Trash2, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { PRIORITY_META, STATUS_META } from '../lib/constants';
-import { cn, formatDateShort, isOverdue, taskRef } from '../lib/utils';
-import { aiComplete } from '../lib/companion';
-import type { CustomFieldDef, Priority, Task, TaskStatus } from '../lib/types';
+import { cn, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
+import {
+  aiComplete,
+  attachmentUrl,
+  createCalendarEvent,
+  deleteAttachment,
+  listAttachments,
+  openAttachment,
+  uploadAttachment,
+  type AttachmentMeta,
+} from '../lib/companion';
+import type { Comment, CustomFieldDef, Priority, Task, TaskStatus } from '../lib/types';
 import { Avatar, LabelChip, ProgressBar, StatusBadge } from '../components/common';
 
 export default function TaskDrawer() {
@@ -16,6 +25,8 @@ export default function TaskDrawer() {
   const sprints = useStore((s) => s.sprints);
   const updateTask = useStore((s) => s.updateTask);
   const deleteTask = useStore((s) => s.deleteTask);
+  const duplicateTask = useStore((s) => s.duplicateTask);
+  const moveTaskToProject = useStore((s) => s.moveTaskToProject);
   const addComment = useStore((s) => s.addComment);
   const addSubtask = useStore((s) => s.addSubtask);
   const toggleSubtask = useStore((s) => s.toggleSubtask);
@@ -57,6 +68,40 @@ export default function TaskDrawer() {
   const [newFieldType, setNewFieldType] = useState<'text' | 'number' | 'select'>('text');
   const [newFieldOptions, setNewFieldOptions] = useState('');
 
+  // Vedhæftninger
+  const [files, setFiles] = useState<AttachmentMeta[]>([]);
+  const [attLoading, setAttLoading] = useState(false);
+  const [attFeedback, setAttFeedback] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // @-omtaler i kommentarfeltet
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionClosed, setMentionClosed] = useState(false);
+
+  // Footer: flyt til projekt + Outlook-kalender
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [moveTarget, setMoveTarget] = useState('');
+  const [calBusy, setCalBusy] = useState(false);
+  const [calFeedback, setCalFeedback] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
+
+  const taskId = task?.id;
+  const refreshAttachments = useCallback(async () => {
+    if (!taskId) return;
+    setAttLoading(true);
+    try {
+      const r = await listAttachments(taskId);
+      setFiles(r.ok && r.files ? r.files : []);
+    } finally {
+      setAttLoading(false);
+    }
+  }, [taskId]);
+
+  useEffect(() => {
+    setFiles([]);
+    setAttFeedback(null);
+    if (taskId) void refreshAttachments();
+  }, [taskId, refreshAttachments]);
+
   if (!task) return null;
 
   const project = projects.find((p) => p.id === task.projectId);
@@ -91,6 +136,21 @@ export default function TaskDrawer() {
   // Tilpassede felter
   const projectFieldDefs = fieldDefs.filter((f) => f.projectId === task.projectId);
 
+  // Kommentarer: kun topniveau vises – svar hænger under deres forælder
+  const topLevelComments = task.comments.filter(
+    (c) => !c.replyToId || !task.comments.some((p) => p.id === c.replyToId),
+  );
+
+  // @-omtale-autocomplete i kommentarfeltet (regex på hele teksten)
+  const mentionMatch = comment.match(/@(\w*)$/);
+  const mentionQuery = mentionMatch ? mentionMatch[1].toLowerCase() : '';
+  const mentionUsers =
+    mentionMatch && !mentionClosed
+      ? users.filter((u) => u.name.split(' ')[0].toLowerCase().startsWith(mentionQuery))
+      : [];
+  const showMentions = mentionUsers.length > 0;
+  const activeMentionIndex = Math.min(mentionIndex, Math.max(0, mentionUsers.length - 1));
+
   const close = () => selectTask(null);
 
   const addBlocker = (id: string) => {
@@ -118,6 +178,81 @@ export default function TaskDrawer() {
     if (!comment.trim()) return;
     addComment(task.id, comment);
     setComment('');
+    setMentionClosed(false);
+    setMentionIndex(0);
+  };
+
+  const onFilePicked = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.size > 40 * 1024 * 1024) {
+      setAttFeedback({ text: 'Filen er større end 40 MB og kan ikke uploades.', tone: 'error' });
+      return;
+    }
+    setAttLoading(true);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const base64 = String(reader.result ?? '').split(',')[1] ?? '';
+        const r = await uploadAttachment(task.id, file.name, base64);
+        if (r.ok) {
+          setAttFeedback({ text: `${file.name} er uploadet.`, tone: 'ok' });
+          await refreshAttachments();
+        } else {
+          setAttFeedback({ text: r.reason ?? 'Upload mislykkedes.', tone: 'error' });
+        }
+      } finally {
+        setAttLoading(false);
+      }
+    };
+    reader.onerror = () => {
+      setAttLoading(false);
+      setAttFeedback({ text: 'Filen kunne ikke læses.', tone: 'error' });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removeAttachment = async (name: string) => {
+    if (!window.confirm(`Slet vedhæftningen "${name}"?`)) return;
+    await deleteAttachment(task.id, name);
+    await refreshAttachments();
+  };
+
+  const insertMention = (user: (typeof users)[number]) => {
+    const m = comment.match(/@(\w*)$/);
+    if (!m) return;
+    const firstName = user.name.split(' ')[0];
+    const start = m.index ?? comment.length - m[0].length;
+    setComment(`${comment.slice(0, start)}@${firstName} ${comment.slice(start + m[0].length)}`);
+    setMentionIndex(0);
+    setMentionClosed(false);
+  };
+
+  const addToCalendar = async () => {
+    if (!task.dueDate) return;
+    setCalBusy(true);
+    try {
+      const r = await createCalendarEvent(`${taskRef(task, projects)}: ${task.title}`, task.dueDate, assignee?.email);
+      setCalFeedback(
+        r.ok
+          ? { text: 'Begivenhed oprettet i din kalender', tone: 'ok' }
+          : { text: r.reason ?? 'Begivenheden kunne ikke oprettes.', tone: 'error' },
+      );
+    } finally {
+      setCalBusy(false);
+    }
+  };
+
+  const openMovePopup = () => {
+    setMoveTarget(projects.find((p) => p.id !== task.projectId)?.id ?? '');
+    setMoveOpen(true);
+  };
+
+  const submitMove = () => {
+    if (!moveTarget) return;
+    moveTaskToProject(task.id, moveTarget);
+    setMoveOpen(false);
   };
 
   const submitSubtask = () => {
@@ -319,6 +454,30 @@ export default function TaskDrawer() {
                 </span>
               )}
             </div>
+
+            {task.dueDate && (
+              <div className="contents">
+                <FieldLabel>Outlook</FieldLabel>
+                <div>
+                  <button onClick={() => void addToCalendar()} disabled={calBusy} className="btn-outline px-2.5 py-1.5 text-xs">
+                    <CalendarPlus className="h-3.5 w-3.5" />
+                    Tilføj til Outlook-kalender
+                  </button>
+                  {calFeedback && (
+                    <p
+                      className={cn(
+                        'mt-1 text-xs font-medium',
+                        calFeedback.tone === 'ok'
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : 'text-rose-600 dark:text-rose-400',
+                      )}
+                    >
+                      {calFeedback.text}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
 
             <FieldLabel>Gentagelse</FieldLabel>
             <select
@@ -667,47 +826,156 @@ export default function TaskDrawer() {
             </div>
           </section>
 
+          {/* Vedhæftninger */}
+          <section>
+            <div className="mb-2 flex items-center gap-3">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                Vedhæftninger
+              </h3>
+              {files.length > 0 && <span className="text-[11px] text-zinc-400">{files.length}</span>}
+              <span className="flex-1" />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={attLoading}
+                className="btn-outline px-2 py-1 text-[11px]"
+              >
+                <Paperclip className="h-3 w-3" />
+                Upload
+              </button>
+              <input ref={fileInputRef} type="file" className="hidden" onChange={onFilePicked} />
+            </div>
+            {attFeedback && (
+              <p
+                className={cn(
+                  'mb-1.5 text-xs font-medium',
+                  attFeedback.tone === 'ok'
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-rose-600 dark:text-rose-400',
+                )}
+              >
+                {attFeedback.text}
+              </p>
+            )}
+            {files.length === 0 ? (
+              <p className="text-sm text-zinc-400">{attLoading ? 'Henter vedhæftninger …' : 'Ingen vedhæftninger'}</p>
+            ) : (
+              <ul className="space-y-1">
+                {files.map((f) => (
+                  <li
+                    key={f.name}
+                    className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-white/[0.04]"
+                  >
+                    <FileText className="h-4 w-4 shrink-0 text-zinc-400" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm text-zinc-800 dark:text-zinc-100" title={f.name}>
+                        {f.name}
+                      </p>
+                      <p className="text-[11px] text-zinc-400">
+                        {fmtSize(f.size)} · {timeAgo(f.mtime)}
+                      </p>
+                    </div>
+                    <button onClick={() => void openAttachment(task.id, f.name)} className="btn-ghost px-2 py-1 text-[11px]">
+                      Åbn
+                    </button>
+                    <a
+                      href={attachmentUrl(task.id, f.name)}
+                      download={f.name}
+                      className="btn-ghost px-2 py-1 text-[11px]"
+                    >
+                      Hent
+                    </a>
+                    <button
+                      onClick={() => void removeAttachment(f.name)}
+                      className="btn-ghost px-2 py-1 text-[11px] text-rose-600 hover:bg-rose-500/10 dark:text-rose-400"
+                    >
+                      Slet
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
           {/* Kommentarer */}
           <section>
             <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
               Kommentarer · {task.comments.length}
             </h3>
             <div className="space-y-4">
-              {task.comments.map((c) => {
-                const author = users.find((u) => u.id === c.authorId);
-                return (
-                  <div key={c.id} className="flex gap-3">
-                    <Avatar user={author} size="sm" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs">
-                        <span className="font-semibold text-zinc-800 dark:text-zinc-100">{author?.name ?? 'Ukendt'}</span>{' '}
-                        <span className="text-zinc-400">{formatDateShort(c.createdAt)}</span>
-                      </p>
-                      <p className="mt-0.5 whitespace-pre-wrap rounded-lg rounded-tl-none bg-zinc-100 px-3 py-2 text-sm leading-relaxed dark:bg-white/[0.05]">
-                        {c.text}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
+              {topLevelComments.map((c) => (
+                <CommentItem
+                  key={c.id}
+                  taskId={task.id}
+                  comment={c}
+                  replies={task.comments.filter((r) => r.replyToId === c.id)}
+                />
+              ))}
               {task.comments.length === 0 && (
                 <p className="text-sm text-zinc-400">Ingen kommentarer endnu. Start samtalen.</p>
               )}
             </div>
             <div className="mt-4 flex items-start gap-3">
               <Avatar user={me} size="sm" />
-              <div className="flex-1">
+              <div className="relative flex-1">
+                {showMentions && (
+                  <div className="glass-panel absolute bottom-full left-0 right-0 z-30 mb-1 max-h-40 overflow-y-auto rounded-xl p-1 shadow-panel">
+                    {mentionUsers.map((u, i) => (
+                      <button
+                        key={u.id}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          insertMention(u);
+                        }}
+                        className={cn(
+                          'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors',
+                          i === activeMentionIndex
+                            ? 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-300'
+                            : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-white/[0.06]',
+                        )}
+                      >
+                        <Avatar user={u} size="xs" />
+                        <span className="truncate">{u.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <textarea
                   value={comment}
-                  onChange={(e) => setComment(e.target.value)}
+                  onChange={(e) => {
+                    setComment(e.target.value);
+                    setMentionClosed(false);
+                    setMentionIndex(0);
+                  }}
                   onKeyDown={(e) => {
+                    if (showMentions) {
+                      if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        setMentionIndex((i) => (i + 1) % mentionUsers.length);
+                        return;
+                      }
+                      if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setMentionIndex((i) => (i - 1 + mentionUsers.length) % mentionUsers.length);
+                        return;
+                      }
+                      if (e.key === 'Enter' || e.key === 'Tab') {
+                        e.preventDefault();
+                        insertMention(mentionUsers[activeMentionIndex]);
+                        return;
+                      }
+                      if (e.key === 'Escape') {
+                        e.stopPropagation();
+                        setMentionClosed(true);
+                        return;
+                      }
+                    }
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
                       submitComment();
                     }
                   }}
                   rows={Math.max(1, Math.min(5, comment.split('\n').length))}
-                  placeholder="Skriv en kommentar … (Enter for at sende)"
+                  placeholder="Skriv en kommentar … (@ for at nævne nogen, Enter for at sende)"
                   className="input resize-none"
                 />
                 {comment.trim() && (
@@ -721,11 +989,30 @@ export default function TaskDrawer() {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center gap-2 border-t border-zinc-200/80 px-5 py-3 dark:border-white/[0.06]">
+        <div className="relative flex items-center gap-2 border-t border-zinc-200/80 px-5 py-3 dark:border-white/[0.06]">
           <span className="text-[11px] text-zinc-400">
             Oprettet {formatDateShort(task.createdAt)} · opdateret {formatDateShort(task.updatedAt)}
           </span>
           <span className="flex-1" />
+          <button
+            onClick={openMovePopup}
+            title="Flyt opgaven til et andet projekt"
+            className="btn-ghost px-2.5 py-1.5 text-xs"
+          >
+            <FolderInput className="h-3.5 w-3.5" />
+            Flyt til projekt
+          </button>
+          <button
+            onClick={() => {
+              duplicateTask(task.id);
+              selectTask(null);
+            }}
+            title="Opret en kopi af opgaven"
+            className="btn-ghost px-2.5 py-1.5 text-xs"
+          >
+            <Copy className="h-3.5 w-3.5" />
+            Duplikér
+          </button>
           <button
             onClick={() => {
               if (window.confirm('Slet denne opgave? Handlingen kan ikke fortrydes.')) {
@@ -737,6 +1024,32 @@ export default function TaskDrawer() {
             <Trash2 className="h-3.5 w-3.5" />
             Slet opgave
           </button>
+          {moveOpen && (
+            <div className="glass-panel absolute bottom-full right-4 z-50 mb-2 w-64 rounded-xl p-3 shadow-panel">
+              <p className="mb-1.5 text-xs font-semibold text-zinc-700 dark:text-zinc-200">Flyt til projekt</p>
+              <select
+                value={moveTarget}
+                onChange={(e) => setMoveTarget(e.target.value)}
+                className="input w-full py-1.5 text-xs"
+              >
+                {projects
+                  .filter((p) => p.id !== task.projectId)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+              </select>
+              <div className="mt-2 flex items-center gap-1.5">
+                <button onClick={submitMove} disabled={!moveTarget} className="btn-primary px-2.5 py-1 text-xs">
+                  Flyt
+                </button>
+                <button onClick={() => setMoveOpen(false)} className="btn-ghost px-2 py-1 text-xs">
+                  Annullér
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </aside>
     </div>
@@ -800,6 +1113,163 @@ function fmtHM(ms: number): string {
 function fmtHours(ms: number): string {
   const rounded = Math.round((ms / 3600000) * 10) / 10;
   return `${rounded.toLocaleString('da-DK', { maximumFractionDigits: 1 })}t`;
+}
+
+function fmtSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+const REACTION_EMOJIS = ['👍', '🎉', '❤️'];
+
+function CommentItem({
+  taskId,
+  comment,
+  replies,
+  isReply = false,
+}: {
+  taskId: string;
+  comment: Comment;
+  replies: Comment[];
+  isReply?: boolean;
+}) {
+  const users = useStore((s) => s.users);
+  const currentUserId = useStore((s) => s.currentUserId);
+  const toggleReaction = useStore((s) => s.toggleReaction);
+  const replyComment = useStore((s) => s.replyComment);
+  const editComment = useStore((s) => s.editComment);
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyText, setReplyText] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState('');
+
+  const author = users.find((u) => u.id === comment.authorId);
+  const isMine = comment.authorId === currentUserId;
+  const reactions = comment.reactions ?? {};
+
+  const submitReply = () => {
+    if (!replyText.trim()) return;
+    replyComment(taskId, comment.id, replyText);
+    setReplyText('');
+    setReplyOpen(false);
+  };
+
+  return (
+    <div className={cn(isReply && 'ml-8 border-l-2 border-zinc-200 pl-3 dark:border-white/[0.08]')}>
+      <div className="flex gap-3">
+        <Avatar user={author} size="sm" />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs">
+            <span className="font-semibold text-zinc-800 dark:text-zinc-100">{author?.name ?? 'Ukendt'}</span>{' '}
+            <span className="text-zinc-400">{formatDateShort(comment.createdAt)}</span>
+            {comment.editedAt && <span className="text-[10px] text-zinc-400"> (redigeret)</span>}
+          </p>
+          {editing ? (
+            <div className="mt-0.5">
+              <textarea
+                autoFocus
+                value={editText}
+                onChange={(e) => setEditText(e.target.value)}
+                rows={Math.max(2, Math.min(6, editText.split('\n').length))}
+                className="input resize-none"
+              />
+              <div className="mt-1.5 flex items-center gap-1.5">
+                <button
+                  onClick={() => {
+                    if (!editText.trim()) return;
+                    editComment(taskId, comment.id, editText);
+                    setEditing(false);
+                  }}
+                  className="btn-primary px-2.5 py-1 text-xs"
+                >
+                  Gem
+                </button>
+                <button onClick={() => setEditing(false)} className="btn-ghost px-2 py-1 text-xs">
+                  Annullér
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p className="mt-0.5 whitespace-pre-wrap rounded-lg rounded-tl-none bg-zinc-100 px-3 py-2 text-sm leading-relaxed dark:bg-white/[0.05]">
+              {comment.text}
+            </p>
+          )}
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            {REACTION_EMOJIS.map((emoji) => {
+              const list = reactions[emoji] ?? [];
+              const active = list.includes(currentUserId);
+              return (
+                <button
+                  key={emoji}
+                  onClick={() => toggleReaction(taskId, comment.id, emoji)}
+                  title={active ? 'Fjern reaktion' : 'Reagér'}
+                  className={cn(
+                    'flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors',
+                    active
+                      ? 'border-indigo-500/40 bg-indigo-500/15 text-indigo-700 dark:text-indigo-300'
+                      : 'border-zinc-200 text-zinc-500 hover:border-zinc-300 dark:border-white/10 dark:text-zinc-400 dark:hover:border-white/20',
+                  )}
+                >
+                  <span>{emoji}</span>
+                  {list.length > 0 && (
+                    <span className="text-[10px] font-semibold tabular-nums">{list.length}</span>
+                  )}
+                </button>
+              );
+            })}
+            {!isReply && (
+              <button
+                onClick={() => setReplyOpen((o) => !o)}
+                className="ml-1 text-xs font-medium text-zinc-400 transition-colors hover:text-indigo-500 dark:hover:text-indigo-300"
+              >
+                Svar
+              </button>
+            )}
+            {isMine && !editing && (
+              <button
+                onClick={() => {
+                  setEditText(comment.text);
+                  setEditing(true);
+                }}
+                className="text-xs font-medium text-zinc-400 transition-colors hover:text-indigo-500 dark:hover:text-indigo-300"
+              >
+                Redigér
+              </button>
+            )}
+          </div>
+          {replyOpen && !isReply && (
+            <div className="mt-2">
+              <textarea
+                autoFocus
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    submitReply();
+                  }
+                  if (e.key === 'Escape') {
+                    e.stopPropagation();
+                    setReplyOpen(false);
+                  }
+                }}
+                rows={2}
+                placeholder="Skriv et svar … (Enter for at sende, Esc for at lukke)"
+                className="input resize-none"
+              />
+            </div>
+          )}
+        </div>
+      </div>
+      {replies.length > 0 && (
+        <div className="mt-3 space-y-3">
+          {replies.map((r) => (
+            <CommentItem key={r.id} taskId={taskId} comment={r} replies={[]} isReply />
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function FieldLabel({ children }: { children: React.ReactNode }) {

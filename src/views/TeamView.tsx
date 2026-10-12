@@ -3,6 +3,7 @@ import { format } from 'date-fns';
 import { CalendarDays, Gauge, Palmtree, UserCheck, Users } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import type { Task, User } from '../lib/types';
+import { useLang, t } from '../lib/i18n';
 import { cn, isOverdue } from '../lib/utils';
 import { Avatar, ProgressBar, ViewHeader } from '../components/common';
 
@@ -32,6 +33,7 @@ function isOnVacation(u: User, todayStr: string): boolean {
 }
 
 export default function TeamView() {
+  useLang();
   const users = useStore((s) => s.users);
   const tasks = useStore((s) => s.tasks);
   const projects = useStore((s) => s.projects);
@@ -71,7 +73,7 @@ export default function TeamView() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-7xl flex-col gap-4 p-4 lg:p-6">
-        <ViewHeader title="Team & kapacitet" subtitle="Belastning og kapacitet på tværs af teamet" />
+        <ViewHeader title={t('team.title')} subtitle={t('team.subtitle')} />
 
         {/* Overskriftsrække: samlet belastning */}
         <div className="glass-panel animate-fade-in rounded-xl p-4">
@@ -81,27 +83,27 @@ export default function TeamView() {
                 <Gauge className="h-4 w-4" />
               </div>
               <div>
-                <h2 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">Samlet belastning</h2>
+                <h2 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">{t('team.totalLoad')}</h2>
                 <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  {activeProject ? activeProject.name : 'Alle projekter'} · åbne opgaver
+                  {activeProject ? activeProject.name : t('team.allProjects')} · {t('team.openTasks')}
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-5">
               <div>
                 <p className="text-lg font-semibold tabular-nums text-zinc-800 dark:text-zinc-100">{totalPoints}</p>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">points tilbage</p>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t('team.pointsLeft')}</p>
               </div>
               <span className="text-xl text-zinc-300 dark:text-zinc-600">/</span>
               <div>
                 <p className="text-lg font-semibold tabular-nums text-zinc-800 dark:text-zinc-100">{totalCapacity}</p>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">points pr. uge</p>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t('team.pointsPerWeek')}</p>
               </div>
             </div>
             <div className="min-w-44 flex-1">
               <ProgressBar value={totalPct} />
               <p className="pt-1 text-right text-[11px] font-medium tabular-nums text-zinc-500 dark:text-zinc-400">
-                {totalPct}% belastet
+                {t('team.pctLoaded').replace('{pct}', String(totalPct))}
               </p>
             </div>
           </div>
@@ -120,7 +122,7 @@ export default function TeamView() {
                 {load.onVacation && (
                   <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
                     <Palmtree className="h-3 w-3" />
-                    På ferie
+                    {t('team.onVacation')}
                   </span>
                 )}
               </div>
@@ -128,7 +130,7 @@ export default function TeamView() {
               <div className="grid grid-cols-2 gap-2 pt-3">
                 <label className="block">
                   <span className="pb-1 block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
-                    Kapacitet (points/uge)
+                    {t('team.capacityLabel')}
                   </span>
                   <input
                     type="number"
@@ -142,7 +144,7 @@ export default function TeamView() {
                   />
                 </label>
                 <label className="block">
-                  <span className="pb-1 block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Feriedato</span>
+                  <span className="pb-1 block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">{t('team.vacationDate')}</span>
                   <input
                     type="date"
                     value={load.user.vacationUntil ?? ''}
@@ -155,17 +157,17 @@ export default function TeamView() {
               <div className="grid grid-cols-4 gap-1.5 pt-3">
                 {(
                   [
-                    ['Åbne', load.open],
-                    ['Points tilbage', load.points],
-                    ['I gang', load.inProgress],
-                    ['Overskredet', load.overdue],
+                    { id: 'open', label: t('team.statOpen'), value: load.open },
+                    { id: 'points', label: t('team.statPointsLeft'), value: load.points },
+                    { id: 'inprogress', label: t('team.statInProgress'), value: load.inProgress },
+                    { id: 'overdue', label: t('team.statOverdue'), value: load.overdue },
                   ] as const
-                ).map(([label, value]) => (
-                  <div key={label} className="rounded-lg bg-zinc-100 px-2 py-1.5 text-center dark:bg-white/[0.04]">
+                ).map(({ id, label, value }) => (
+                  <div key={id} className="rounded-lg bg-zinc-100 px-2 py-1.5 text-center dark:bg-white/[0.04]">
                     <p
                       className={cn(
                         'text-sm font-semibold tabular-nums',
-                        label === 'Overskredet' && value > 0
+                        id === 'overdue' && value > 0
                           ? 'text-rose-600 dark:text-rose-400'
                           : 'text-zinc-800 dark:text-zinc-100',
                       )}
@@ -189,13 +191,16 @@ export default function TeamView() {
                 </div>
                 <p className="pt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
                   {load.onVacation ? (
-                    'På ferie'
+                    t('team.onVacation')
                   ) : (
                     <>
                       <span className="font-semibold tabular-nums text-zinc-700 dark:text-zinc-200">
                         {load.utilization}%
                       </span>{' '}
-                      belastet · {load.points} points / {load.capacity} points pr. uge
+                      {t('team.loadNote')
+                        .replace('{pct}', String(load.utilization))
+                        .replace('{points}', String(load.points))
+                        .replace('{capacity}', String(load.capacity))}
                     </>
                   )}
                 </p>
@@ -208,11 +213,11 @@ export default function TeamView() {
         <section className="glass-panel animate-fade-in rounded-xl p-4">
           <div className="flex items-center gap-2">
             <UserCheck className="h-4 w-4 text-indigo-500 dark:text-indigo-400" />
-            <h2 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">Hvem har plads til en ny opgave?</h2>
+            <h2 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">{t('team.whoHasCapacity')}</h2>
           </div>
           <p className="flex items-center gap-1.5 pt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
             <CalendarDays className="h-3.5 w-3.5" />
-            Sorteret efter laveste belastning – medlemmer på ferie er sprunget over.
+            {t('team.sortedByLoad')}
           </p>
           <div className="grid grid-cols-1 gap-3 pt-3 sm:grid-cols-3">
             {candidates.map((load, i) => (
@@ -239,14 +244,14 @@ export default function TeamView() {
                         : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
                   )}
                 >
-                  {load.utilization}% belastet
+                  {t('team.pctLoaded').replace('{pct}', String(load.utilization))}
                 </span>
               </div>
             ))}
             {candidates.length === 0 && (
               <p className="col-span-full flex items-center gap-2 py-4 text-sm text-zinc-500 dark:text-zinc-400">
                 <Users className="h-4 w-4" />
-                Ingen aktive teammedlemmer med kapacitet.
+                {t('team.noMembers')}
               </p>
             )}
           </div>

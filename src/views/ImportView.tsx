@@ -15,6 +15,7 @@ import {
 import { useStore } from '../store/useStore';
 import { PROJECT_TEMPLATES, type ProjectTemplate } from '../data/templates';
 import { parseImportFile, type ParsedImport } from '../lib/importers';
+import { useLang, t } from '../lib/i18n';
 import { cn, formatDate } from '../lib/utils';
 import { StatusBadge, ViewHeader } from '../components/common';
 
@@ -27,6 +28,7 @@ const TEMPLATE_ICONS: Record<string, LucideIcon> = {
 };
 
 function TemplateCard({ tpl }: { tpl: ProjectTemplate }) {
+  useLang();
   const addProjectFromTemplate = useStore((s) => s.addProjectFromTemplate);
   const setActiveProject = useStore((s) => s.setActiveProject);
   const navigate = useNavigate();
@@ -56,7 +58,7 @@ function TemplateCard({ tpl }: { tpl: ProjectTemplate }) {
       </div>
 
       <p className="pt-3 text-[11px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-        {tpl.tasks.length} opgaver · {totalPoints} points i alt
+        {t('import.tasksPoints').replace('{tasks}', String(tpl.tasks.length)).replace('{points}', String(totalPoints))}
       </p>
       <ul className="pt-1.5">
         {tpl.tasks.slice(0, 5).map((t) => (
@@ -66,7 +68,9 @@ function TemplateCard({ tpl }: { tpl: ProjectTemplate }) {
           </li>
         ))}
         {tpl.tasks.length > 5 && (
-          <li className="py-0.5 pl-2.5 text-xs text-zinc-400 dark:text-zinc-500">… og {tpl.tasks.length - 5} flere</li>
+          <li className="py-0.5 pl-2.5 text-xs text-zinc-400 dark:text-zinc-500">
+            {t('import.moreTasks').replace('{n}', String(tpl.tasks.length - 5))}
+          </li>
         )}
       </ul>
 
@@ -74,10 +78,10 @@ function TemplateCard({ tpl }: { tpl: ProjectTemplate }) {
         <div className="mt-3 flex flex-col gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
           <p className="flex items-start gap-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
             <CheckCircle2 className="mt-px h-3.5 w-3.5 shrink-0" />
-            Projektet {created.name} er oprettet med {created.count} opgaver
+            {t('import.createdOk').replace('{name}', created.name).replace('{count}', String(created.count))}
           </p>
           <button onClick={() => navigate('/tavle')} className="btn-primary self-start py-1 text-xs">
-            Gå til tavlen
+            {t('import.goToBoard')}
             <ArrowRight className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -91,7 +95,7 @@ function TemplateCard({ tpl }: { tpl: ProjectTemplate }) {
             className="input py-1.5 text-sm"
           />
           <button onClick={create} className="btn-primary self-stretch justify-center">
-            Opret projekt
+            {t('import.createProject')}
           </button>
         </div>
       )}
@@ -102,6 +106,7 @@ function TemplateCard({ tpl }: { tpl: ProjectTemplate }) {
 // ---------- Hovedview ----------
 
 export default function ImportView() {
+  useLang();
   const projects = useStore((s) => s.projects);
   const activeProjectId = useStore((s) => s.activeProjectId);
   const importTasks = useStore((s) => s.importTasks);
@@ -126,7 +131,7 @@ export default function ImportView() {
       if (typeof result === 'string') setError(result);
       else setParsed({ ...result, fileName: file.name });
     };
-    reader.onerror = () => setError('Filen kunne ikke læses – prøv igen.');
+    reader.onerror = () => setError(t('import.readError'));
     reader.readAsText(file);
   };
 
@@ -152,13 +157,13 @@ export default function ImportView() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-7xl flex-col gap-6 p-4 lg:p-6">
-        <ViewHeader title="Import & skabeloner" subtitle="Kom hurtigt i gang — opret fra skabelon eller importer fra Trello, Monday og Jira" />
+        <ViewHeader title={t('import.title')} subtitle={t('import.subtitle')} />
 
         {/* Sektion A */}
         <section className="animate-fade-in">
           <div className="flex items-center gap-2 pb-3">
             <LayoutTemplate className="h-4 w-4 text-indigo-500 dark:text-indigo-400" />
-            <h2 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">Opret projekt fra skabelon</h2>
+            <h2 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">{t('import.templatesTitle')}</h2>
           </div>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {PROJECT_TEMPLATES.map((tpl) => (
@@ -171,7 +176,7 @@ export default function ImportView() {
         <section className="animate-fade-in">
           <div className="flex items-center gap-2 pb-3">
             <FileUp className="h-4 w-4 text-indigo-500 dark:text-indigo-400" />
-            <h2 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">Importér opgaver fra andre værktøjer</h2>
+            <h2 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">{t('import.importTitle')}</h2>
           </div>
 
           <div className="flex flex-col gap-4">
@@ -193,10 +198,10 @@ export default function ImportView() {
               <div className="grid h-12 w-12 place-items-center rounded-xl bg-indigo-500/10 text-indigo-500 dark:text-indigo-400">
                 <FileUp className="h-6 w-6" />
               </div>
-              <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">Træk en eksportfil hertil</p>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">Understøtter Trello JSON, Monday CSV og Jira CSV</p>
+              <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">{t('import.dropTitle')}</p>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">{t('import.dropSub')}</p>
               <label className="btn-outline mt-1 cursor-pointer">
-                Vælg fil
+                {t('import.chooseFile')}
                 <input ref={fileInputRef} type="file" accept=".json,.csv" className="hidden" onChange={onInputChange} />
               </label>
             </div>
@@ -213,9 +218,12 @@ export default function ImportView() {
               <div className="glass-panel animate-slide-up rounded-xl p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <h3 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">Forhåndsvisning</h3>
+                    <h3 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">{t('import.preview')}</h3>
                     <p className="truncate text-[11px] text-zinc-500 dark:text-zinc-400">
-                      {parsed.fileName} · {parsed.source}-format · {parsed.items.length} opgaver fundet
+                      {t('import.previewSub')
+                        .replace('{file}', parsed.fileName)
+                        .replace('{source}', parsed.source)
+                        .replace('{n}', String(parsed.items.length))}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -223,7 +231,7 @@ export default function ImportView() {
                       value={targetProjectId ?? ''}
                       onChange={(e) => setSelectedProjectId(e.target.value)}
                       className="input w-auto py-1.5 text-sm"
-                      title="Mål-projekt"
+                      title={t('import.targetProject')}
                     >
                       {projects.map((p) => (
                         <option key={p.id} value={p.id}>
@@ -232,7 +240,7 @@ export default function ImportView() {
                       ))}
                     </select>
                     <button onClick={runImport} disabled={!targetProjectId} className="btn-primary">
-                      Importér {parsed.items.length} opgaver
+                      {t('import.importN').replace('{n}', String(parsed.items.length))}
                     </button>
                   </div>
                 </div>
@@ -241,9 +249,9 @@ export default function ImportView() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left text-[11px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                        <th className="pb-2 pr-4 font-medium">Titel</th>
-                        <th className="pb-2 pr-4 font-medium">Frist</th>
-                        <th className="pb-2 font-medium">Status</th>
+                        <th className="pb-2 pr-4 font-medium">{t('import.colTitle')}</th>
+                        <th className="pb-2 pr-4 font-medium">{t('import.colDue')}</th>
+                        <th className="pb-2 font-medium">{t('import.colStatus')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -262,7 +270,7 @@ export default function ImportView() {
                   </table>
                   {parsed.items.length > 10 && (
                     <p className="pt-2 text-xs text-zinc-400 dark:text-zinc-500">
-                      … og {parsed.items.length - 10} flere rækker importeres
+                      {t('import.moreRows').replace('{n}', String(parsed.items.length - 10))}
                     </p>
                   )}
                 </div>
@@ -270,7 +278,9 @@ export default function ImportView() {
                 {importResult && (
                   <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-xs font-medium text-emerald-700 animate-fade-in dark:text-emerald-300">
                     <CheckCircle2 className="mt-px h-4 w-4 shrink-0" />
-                    {importResult.created} opgaver importeret ({importResult.skipped} sprunget over som dubletter)
+                    {t('import.resultOk')
+                      .replace('{created}', String(importResult.created))
+                      .replace('{skipped}', String(importResult.skipped))}
                   </div>
                 )}
               </div>
@@ -278,7 +288,7 @@ export default function ImportView() {
 
             <p className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
               <Info className="h-3.5 w-3.5 shrink-0" />
-              Microsoft Planner importeres fra fanen Outlook &amp; Microsoft 365.
+              {t('import.plannerHint')}
             </p>
           </div>
         </section>

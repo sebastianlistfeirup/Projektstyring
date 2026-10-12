@@ -14,6 +14,7 @@ import type {
   SavedView,
   Sprint,
   SprintStatus,
+  StandupEntry,
   Task,
   TaskStatus,
   Theme,
@@ -55,6 +56,7 @@ interface OrbitState {
   fieldDefs: CustomFieldDef[];
   savedViews: SavedView[];
   automation: AutomationSettings;
+  standups: StandupEntry[];
   activeProjectId: string | null;
   selectedTaskId: string | null;
 
@@ -73,6 +75,9 @@ interface OrbitState {
   importTasks: (items: ImportItem[], projectId: string) => number;
 
   addComment: (taskId: string, text: string) => void;
+  replyComment: (taskId: string, parentId: string, text: string) => void;
+  editComment: (taskId: string, commentId: string, text: string) => void;
+  toggleReaction: (taskId: string, commentId: string, emoji: string) => void;
   addSubtask: (taskId: string, title: string) => void;
   toggleSubtask: (taskId: string, subtaskId: string) => void;
 
@@ -82,6 +87,13 @@ interface OrbitState {
   addSprint: (projectId: string, name: string, startDate: string, endDate: string, goal?: string) => void;
   setSprintStatus: (sprintId: string, status: SprintStatus) => void;
   updateUser: (id: string, patch: Partial<User>) => void;
+  updateProject: (id: string, patch: Partial<Project>) => void;
+  duplicateTask: (id: string) => Task | null;
+  moveTaskToProject: (id: string, projectId: string) => void;
+  bulkUpdateTasks: (ids: string[], patch: Partial<Task>) => void;
+  bulkDeleteTasks: (ids: string[]) => void;
+  setTaskExtIds: (taskId: string, ext: NonNullable<Task['extIds']>) => void;
+  addStandup: (text: string) => void;
   shareProject: (projectId: string) => void;
   unshareProject: (projectId: string) => void;
 
@@ -123,6 +135,26 @@ function pruneTrash(trash: TrashItem[]): TrashItem[] {
   return trash.filter((t) => new Date(t.deletedAt).getTime() > cutoff).slice(0, 100);
 }
 
+function collectMentions(state: { users: User[]; currentUserId: string }, text: string, task: Task): AppNotification[] {
+  const mentions: AppNotification[] = [];
+  for (const user of state.users) {
+    if (user.id === state.currentUserId) continue;
+    const firstName = user.name.split(' ')[0];
+    const re = new RegExp(`@${firstName}(?!\\w)`, 'i');
+    if (re.test(text)) {
+      mentions.push({
+        id: `n-${nanoid(8)}`,
+        userId: user.id,
+        text: `${state.users.find((u) => u.id === state.currentUserId)?.name ?? 'Nogen'} nævnte dig i “${task.title}”`,
+        taskId: task.id,
+        read: false,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  }
+  return mentions;
+}
+
 export const useStore = create<OrbitState>()(
   persist(
     (set, get) => ({
@@ -140,6 +172,7 @@ export const useStore = create<OrbitState>()(
       fieldDefs: [],
       savedViews: [],
       automation: { doneTeams: true, doneNotifyAssignee: true, urgentAssigneeId: null },
+      standups: [],
       activeProjectId: 'p-app',
       selectedTaskId: null,
 
@@ -352,26 +385,66 @@ export const useStore = create<OrbitState>()(
         const task = state.tasks.find((t) => t.id === taskId);
         if (!task || !text.trim()) return;
         const comment = { id: `c-${nanoid(6)}`, authorId: state.currentUserId, text: text.trim(), createdAt: new Date().toISOString() };
-        const mentions: AppNotification[] = [];
-        for (const user of state.users) {
-          if (user.id === state.currentUserId) continue;
-          const firstName = user.name.split(' ')[0];
-          const re = new RegExp(`@${firstName}(?!\\w)`, 'i');
-          if (re.test(text)) {
-            mentions.push({
-              id: `n-${nanoid(8)}`,
-              userId: user.id,
-              text: `${state.users.find((u) => u.id === state.currentUserId)?.name ?? 'Nogen'} nævnte dig i “${task.title}”`,
-              taskId,
-              read: false,
-              createdAt: new Date().toISOString(),
-            });
-          }
-        }
+        const mentions = collectMentions(state, text, task);
         set((s) => ({
           tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, comments: [...t.comments, comment], updatedAt: comment.createdAt } : t)),
           notifications: [...mentions, ...s.notifications].slice(0, 200),
           activity: [makeEntry(state.currentUserId, 'kommenterede på', task.title, task.id, task.projectId), ...s.activity],
+        }));
+      },
+
+      replyComment: (taskId, parentId, text) => {
+        const state = get();
+        const task = state.tasks.find((t) => t.id === taskId);
+        if (!task || !text.trim()) return;
+        const comment = {
+          id: `c-${nanoid(6)}`,
+          authorId: state.currentUserId,
+          text: text.trim(),
+          createdAt: new Date().toISOString(),
+          replyToId: parentId,
+        };
+        const mentions = collectMentions(state, text, task);
+        set((s) => ({
+          tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, comments: [...t.comments, comment], updatedAt: comment.createdAt } : t)),
+          notifications: [...mentions, ...s.notifications].slice(0, 200),
+        }));
+      },
+
+      editComment: (taskId, commentId, text) => {
+        if (!text.trim()) return;
+        set((s) => ({
+          tasks: s.tasks.map((t) =>
+            t.id === taskId
+              ? {
+                  ...t,
+                  comments: t.comments.map((c) => (c.id === commentId ? { ...c, text: text.trim(), editedAt: new Date().toISOString() } : c)),
+                  updatedAt: new Date().toISOString(),
+                }
+              : t,
+          ),
+        }));
+      },
+
+      toggleReaction: (taskId, commentId, emoji) => {
+        const me = get().currentUserId;
+        set((s) => ({
+          tasks: s.tasks.map((t) =>
+            t.id === taskId
+              ? {
+                  ...t,
+                  comments: t.comments.map((c) => {
+                    if (c.id !== commentId) return c;
+                    const reactions = { ...(c.reactions ?? {}) };
+                    const users = reactions[emoji] ?? [];
+                    reactions[emoji] = users.includes(me) ? users.filter((u) => u !== me) : [...users, me];
+                    if (reactions[emoji].length === 0) delete reactions[emoji];
+                    return { ...c, reactions };
+                  }),
+                  updatedAt: new Date().toISOString(),
+                }
+              : t,
+          ),
         }));
       },
 
@@ -563,6 +636,79 @@ export const useStore = create<OrbitState>()(
         set((s) => ({ automation: { ...s.automation, ...patch } }));
       },
 
+      updateProject: (id, patch) => {
+        set((s) => ({ projects: s.projects.map((p) => (p.id === id ? { ...p, ...patch } : p)) }));
+      },
+
+      duplicateTask: (id) => {
+        const state = get();
+        const task = state.tasks.find((t) => t.id === id);
+        if (!task) return null;
+        const copy = get().addTask({
+          title: `${task.title} (kopi)`,
+          projectId: task.projectId,
+          status: 'todo',
+          sprintId: task.sprintId,
+          assigneeId: task.assigneeId,
+          priority: task.priority,
+          description: task.description,
+          dueDate: task.dueDate,
+          startDate: task.startDate,
+          estimate: task.estimate,
+          labelIds: task.labelIds,
+          blockedBy: task.blockedBy ?? [],
+        });
+        set((s) => ({
+          tasks: s.tasks.map((t) =>
+            t.id === copy.id
+              ? { ...t, subtasks: task.subtasks.map((st) => ({ ...st, id: `st-${nanoid(6)}` })), comments: [] }
+              : t,
+          ),
+          activity: [makeEntry(s.currentUserId, 'duplikerede', task.title, copy.id, copy.projectId), ...s.activity],
+        }));
+        return copy;
+      },
+
+      moveTaskToProject: (id, projectId) => {
+        const state = get();
+        const task = state.tasks.find((t) => t.id === id);
+        if (!task || task.projectId === projectId) return;
+        const order = Math.max(0, ...state.tasks.filter((t) => t.projectId === projectId && t.status === 'todo').map((t) => t.order)) + 1;
+        set((s) => ({
+          tasks: s.tasks.map((t) =>
+            t.id === id ? { ...t, projectId, sprintId: null, order, updatedAt: new Date().toISOString() } : t,
+          ),
+          activity: [makeEntry(s.currentUserId, 'flyttede opgave til andet projekt', task.title, id, projectId), ...s.activity],
+        }));
+      },
+
+      bulkUpdateTasks: (ids, patch) => {
+        const now = new Date().toISOString();
+        set((s) => ({
+          tasks: s.tasks.map((t) => (ids.includes(t.id) ? { ...t, ...patch, updatedAt: now } : t)),
+          activity: ids.length > 0 ? [makeEntry(s.currentUserId, 'ændrede flere opgaver', `${ids.length} opgaver`, null, null), ...s.activity] : s.activity,
+        }));
+      },
+
+      bulkDeleteTasks: (ids) => {
+        for (const id of ids) get().deleteTask(id);
+      },
+
+      setTaskExtIds: (taskId, ext) => {
+        set((s) => ({
+          tasks: s.tasks.map((t) =>
+            t.id === taskId ? { ...t, extIds: { ...(t.extIds ?? {}), ...ext } } : t,
+          ),
+        }));
+      },
+
+      addStandup: (text) => {
+        if (!text.trim()) return;
+        set((s) => ({
+          standups: [{ id: `su-${nanoid(6)}`, userId: s.currentUserId, text: text.trim(), createdAt: new Date().toISOString() }, ...s.standups].slice(0, 50),
+        }));
+      },
+
       logActivity: (action, detail, taskId = null, projectId = null) => {
         set((s) => ({ activity: [makeEntry(s.currentUserId, action, detail, taskId, projectId), ...s.activity] }));
       },
@@ -581,6 +727,7 @@ export const useStore = create<OrbitState>()(
           fieldDefs: [],
           savedViews: [],
           automation: { doneTeams: true, doneNotifyAssignee: true, urgentAssigneeId: null },
+          standups: [],
           activeProjectId: 'p-app',
           selectedTaskId: null,
         }),

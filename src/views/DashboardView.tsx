@@ -1,5 +1,5 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
-import { AlarmClock, CalendarDays, CheckCircle2, LayoutDashboard, ListTodo, Zap, type LucideIcon } from 'lucide-react';
+import { AlarmClock, CalendarDays, CheckCircle2, HeartPulse, LayoutDashboard, ListTodo, Sparkles, Zap, type LucideIcon } from 'lucide-react';
 import {
   Area,
   Bar,
@@ -7,6 +7,7 @@ import {
   CartesianGrid,
   Cell,
   ComposedChart,
+  Legend,
   Line,
   Pie,
   PieChart,
@@ -20,9 +21,13 @@ import { addDays, differenceInCalendarDays, format, isBefore, parseISO } from 'd
 import { da } from 'date-fns/locale';
 import { useStore } from '../store/useStore';
 import { PRIORITY_META, STATUS_META } from '../lib/constants';
+import { computeHealth, healthTone } from '../lib/health';
+import { estimateVsActual, formatMinutes, sprintVelocity } from '../lib/stats';
+import { aiComplete } from '../lib/companion';
+import { useLang, t } from '../lib/i18n';
 import type { Priority, Sprint, Task, TaskStatus } from '../lib/types';
 import { cn, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
-import { Avatar, EmptyState, ViewHeader } from '../components/common';
+import { Avatar, EmptyState, ProgressBar, ViewHeader } from '../components/common';
 
 const CHART = {
   indigo: '#818cf8',
@@ -127,7 +132,7 @@ function BurndownChart({ sprint, tasks }: { sprint: Sprint; tasks: Task[] }) {
   if (data.total === 0) {
     return (
       <p className="py-10 text-center text-xs text-zinc-500 dark:text-zinc-400">
-        Ingen estimerede opgaver i dette sprint endnu.
+        {t('dashboard.burndownEmpty')}
       </p>
     );
   }
@@ -170,16 +175,17 @@ function BurndownChart({ sprint, tasks }: { sprint: Sprint; tasks: Task[] }) {
 }
 
 function DueChip({ task }: { task: Task }) {
+  useLang();
   const [today] = useState(() => new Date());
   const days = differenceInCalendarDays(parseISO(task.dueDate!), today);
   const overdue = isOverdue(task);
   const text = overdue
-    ? `${Math.abs(days)} d. overskredet`
+    ? t('dashboard.dueOverdue').replace('{n}', String(Math.abs(days)))
     : days === 0
-      ? 'I dag'
+      ? t('dashboard.dueToday')
       : days === 1
-        ? 'I morgen'
-        : `Om ${days} dage`;
+        ? t('dashboard.dueTomorrow')
+        : t('dashboard.dueInDays').replace('{n}', String(days));
   return (
     <span
       title={formatDateShort(task.dueDate)}
@@ -198,17 +204,63 @@ function DueChip({ task }: { task: Task }) {
 }
 
 export default function DashboardView() {
+  useLang();
   const tasks = useStore((s) => s.tasks);
   const sprints = useStore((s) => s.sprints);
   const projects = useStore((s) => s.projects);
   const users = useStore((s) => s.users);
+  const timeEntries = useStore((s) => s.timeEntries);
   const activeProjectId = useStore((s) => s.activeProjectId);
   const selectTask = useStore((s) => s.selectTask);
+  const setActiveProject = useStore((s) => s.setActiveProject);
+
+  const [aiBusyId, setAiBusyId] = useState<string | null>(null);
+  const [aiResult, setAiResult] = useState<{ projectId: string; name: string; text: string } | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   const filtered = useMemo(
     () => (activeProjectId ? tasks.filter((t) => t.projectId === activeProjectId) : tasks),
     [tasks, activeProjectId],
   );
+
+  // Projekt-puls: altid på tværs af alle ikke-arkiverede projekter
+  const health = useMemo(() => computeHealth(tasks, projects, users, sprints), [tasks, projects, users, sprints]);
+
+  // Beregningen er billig; keys skal følge sproget, så den memo'eres ikke
+  const velocity = sprintVelocity(tasks, sprints, activeProjectId);
+  const plannedKey = t('dashboard.velocityPlanned');
+  const completedKey = t('dashboard.velocityCompleted');
+  const velocityData = velocity.map((v) => ({
+    name: v.name,
+    [plannedKey]: v.planned,
+    [completedKey]: v.completed,
+  }));
+
+  const effortRows = useMemo(() => estimateVsActual(tasks, timeEntries).slice(0, 8), [tasks, timeEntries]);
+
+  const analyze = async (projectId: string) => {
+    const h = health.find((x) => x.projectId === projectId);
+    if (!h || aiBusyId) return;
+    setAiBusyId(projectId);
+    setAiError(null);
+    const r = await aiComplete([
+      {
+        role: 'system',
+        content:
+          'Du er en dansk projektleder. Giv en kort risikovurdering (max 3 sætninger) med det vigtigste næste skridt.',
+      },
+      {
+        role: 'user',
+        content: `Projekt: ${h.name}\nScore: ${h.score}/100\nÅbne: ${h.openCount}\nOverskredne: ${h.overdueCount}\nFærdig-ratio: ${h.doneRatio}%\nFaktorer: ${h.factors.map((f) => f.label).join(', ') || 'ingen'}`,
+      },
+    ]);
+    setAiBusyId(null);
+    if (r.ok && r.content) {
+      setAiResult({ projectId, name: h.name, text: r.content });
+    } else {
+      setAiError(r.reason ?? null);
+    }
+  };
 
   const activeSprints = useMemo(
     () => sprints.filter((sp) => sp.status === 'active' && (!activeProjectId || sp.projectId === activeProjectId)),
@@ -239,14 +291,14 @@ export default function DashboardView() {
     [filtered],
   );
 
-  const workload = useMemo(() => {
+  const workload = (() => {
     const entries = users
       .map((u) => ({ name: u.name, value: filtered.filter((t) => t.assigneeId === u.id && t.status !== 'done' && t.status !== 'canceled').length }))
       .filter((d) => d.value > 0);
     const unassigned = filtered.filter((t) => !t.assigneeId && t.status !== 'done' && t.status !== 'canceled').length;
-    if (unassigned > 0) entries.push({ name: 'Ikke tildelt', value: unassigned });
+    if (unassigned > 0) entries.push({ name: t('common.notAssigned'), value: unassigned });
     return entries.sort((a, b) => a.value - b.value);
-  }, [filtered, users]);
+  })();
 
   const upcoming = useMemo(
     () =>
@@ -273,45 +325,131 @@ export default function DashboardView() {
 
   const stats: { label: string; value: number; icon: LucideIcon; iconClass: string; sub: string }[] = [
     {
-      label: 'Åbne opgaver',
+      label: t('dashboard.statOpen'),
       value: openTasks.length,
       icon: ListTodo,
       iconClass: 'bg-indigo-500/10 text-indigo-500 dark:bg-indigo-400/10 dark:text-indigo-300',
-      sub: `${Math.round((openTasks.length / Math.max(1, filtered.length)) * 100)}% af alle opgaver`,
+      sub: t('dashboard.statOpenSub').replace('{pct}', String(Math.round((openTasks.length / Math.max(1, filtered.length)) * 100))),
     },
     {
-      label: 'Afsluttet denne måned',
+      label: t('dashboard.statDoneMonth'),
       value: doneThisMonth.length,
       icon: CheckCircle2,
       iconClass: 'bg-emerald-500/10 text-emerald-500 dark:bg-emerald-400/10 dark:text-emerald-300',
-      sub: latestDone ? `Senest ${timeAgo(latestDone.updatedAt)}` : `Ingen i ${monthName}`,
+      sub: latestDone ? t('dashboard.statDoneLatest').replace('{ago}', timeAgo(latestDone.updatedAt)) : t('dashboard.statDoneNone').replace('{month}', monthName),
     },
     {
-      label: 'Overskredne frister',
+      label: t('dashboard.statOverdue'),
       value: overdueTasks.length,
       icon: AlarmClock,
       iconClass: 'bg-rose-500/10 text-rose-500 dark:bg-rose-400/10 dark:text-rose-300',
-      sub: overdueTasks.length > 0 ? 'Kræver opmærksomhed nu' : 'Alle frister er overholdt',
+      sub: overdueTasks.length > 0 ? t('dashboard.statOverdueAttention') : t('dashboard.statOverdueOk'),
     },
     {
-      label: 'Aktive sprints',
+      label: t('dashboard.statActiveSprints'),
       value: activeSprints.length,
       icon: Zap,
       iconClass: 'bg-amber-500/10 text-amber-500 dark:bg-amber-400/10 dark:text-amber-300',
-      sub: activeSprints.length > 0 ? activeSprints.map((sp) => sp.name).join(' · ') : 'Ingen aktive sprints',
+      sub: activeSprints.length > 0 ? activeSprints.map((sp) => sp.name).join(' · ') : t('dashboard.statNoActiveSprints'),
     },
   ];
+
+  const toneChip: Record<'rose' | 'amber' | 'emerald', string> = {
+    rose: 'bg-rose-500/10 text-rose-600 dark:text-rose-400',
+    amber: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+    emerald: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+  };
+  const toneDot: Record<'rose' | 'amber' | 'emerald', string> = {
+    rose: 'bg-rose-500',
+    amber: 'bg-amber-500',
+    emerald: 'bg-emerald-500',
+  };
+
+  const pulseSection = (
+    <Panel
+      title={t('dashboard.pulseTitle')}
+      subtitle={t('dashboard.pulseSub')}
+      action={
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-indigo-500/10 text-indigo-500 dark:text-indigo-400">
+          <HeartPulse className="h-4 w-4" />
+        </span>
+      }
+    >
+      {health.length === 0 ? (
+        <p className="py-6 text-center text-xs text-zinc-500 dark:text-zinc-400">{t('dashboard.pulseEmpty')}</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {health.map((h) => {
+            const tone = healthTone(h.score);
+            return (
+              <li key={h.projectId} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg px-2 py-2 transition-colors hover:bg-zinc-200/50 dark:hover:bg-white/[0.04]">
+                <button
+                  onClick={() => setActiveProject(h.projectId)}
+                  title={h.name}
+                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                >
+                  <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', toneDot[tone])} />
+                  <span className="max-w-[12rem] truncate text-sm font-medium text-zinc-800 dark:text-zinc-100">
+                    {h.name}
+                  </span>
+                  <span className={cn('rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums', toneChip[tone])}>
+                    {t('dashboard.pulseScore').replace('{score}', String(h.score))}
+                  </span>
+                  <span className="hidden min-w-24 flex-1 sm:block">
+                    <ProgressBar value={h.score} />
+                  </span>
+                </button>
+                <span className="flex flex-wrap gap-1">
+                  {h.factors.map((f) => (
+                    <span
+                      key={f.label}
+                      className="rounded bg-rose-500/10 px-1.5 py-px text-[11px] text-rose-600 dark:text-rose-400"
+                    >
+                      {f.label}
+                    </span>
+                  ))}
+                </span>
+                <button
+                  onClick={() => void analyze(h.projectId)}
+                  disabled={aiBusyId !== null}
+                  className="btn-ghost px-2 py-1 text-xs"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  {aiBusyId === h.projectId ? t('dashboard.aiAnalyzing') : t('dashboard.aiAnalyze')}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {aiResult && (
+        <div className="glass-panel mt-3 rounded-xl p-3">
+          <p className="flex items-center gap-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-300">
+            <Sparkles className="h-3.5 w-3.5" />
+            {t('dashboard.aiResultTitle').replace('{name}', aiResult.name)}
+          </p>
+          <p className="pt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-zinc-600 dark:text-zinc-300">
+            {aiResult.text}
+          </p>
+        </div>
+      )}
+      {aiError && <p className="pt-2 text-[11px] text-rose-600 dark:text-rose-400">{aiError}</p>}
+    </Panel>
+  );
 
   if (filtered.length === 0) {
     return (
       <div className="h-full overflow-y-auto">
         <div className="p-4 lg:p-6">
-          <ViewHeader title="Dashboard" subtitle="Overblik over fremdrift, frister og belastning" />
-          <EmptyState
-            icon={<LayoutDashboard className="h-6 w-6" />}
-            title="Intet at vise endnu"
-            description="Der er ingen opgaver i det valgte projekt. Opret en opgave for at se statistik, diagrammer og kommende frister her."
-          />
+          <ViewHeader title={t('dashboard.title')} subtitle={t('dashboard.subtitle')} />
+          <div className="mx-auto flex max-w-7xl flex-col gap-4">
+            {pulseSection}
+            <EmptyState
+              icon={<LayoutDashboard className="h-6 w-6" />}
+              title={t('dashboard.emptyTitle')}
+              description={t('dashboard.emptyDesc')}
+            />
+          </div>
         </div>
       </div>
     );
@@ -320,7 +458,8 @@ export default function DashboardView() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-7xl flex-col gap-4 p-4 lg:p-6">
-        <ViewHeader title="Dashboard" subtitle="Overblik over fremdrift, frister og belastning" />
+        <ViewHeader title={t('dashboard.title')} subtitle={t('dashboard.subtitle')} />
+        {pulseSection}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {stats.map((stat, i) => (
             <div
@@ -343,7 +482,7 @@ export default function DashboardView() {
         </div>
 
         <div className="grid gap-4 lg:grid-cols-2">
-          <Panel title="Opgaver pr. status">
+          <Panel title={t('dashboard.byStatus')}>
             <div className="relative">
               <div className="h-56">
                 <ResponsiveContainer width="100%" height="100%">
@@ -369,14 +508,14 @@ export default function DashboardView() {
               <div className="pointer-events-none absolute inset-0 grid place-items-center">
                 <div className="text-center">
                   <p className="text-2xl font-bold tabular-nums text-zinc-900 dark:text-zinc-50">{openTasks.length}</p>
-                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">åbne</p>
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t('dashboard.openLabel')}</p>
                 </div>
               </div>
             </div>
             <ChartLegend items={statusData} />
           </Panel>
 
-          <Panel title="Opgaver pr. prioritet">
+          <Panel title={t('dashboard.byPriority')}>
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={priorityData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
@@ -399,7 +538,7 @@ export default function DashboardView() {
             </div>
           </Panel>
 
-          <Panel title="Arbejdsbelastning" subtitle="Åbne opgaver pr. teammedlem">
+          <Panel title={t('dashboard.workload')} subtitle={t('dashboard.workloadSub')}>
             <div style={{ height: Math.max(160, workload.length * 32) }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={workload} layout="vertical" margin={{ top: 0, right: 16, bottom: 0, left: 0 }}>
@@ -409,7 +548,7 @@ export default function DashboardView() {
                   <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'rgba(129,140,248,0.08)' }} />
                   <Bar dataKey="value" radius={[0, 6, 6, 0]} barSize={14}>
                     {workload.map((d) => (
-                      <Cell key={d.name} fill={d.name === 'Ikke tildelt' ? CHART.zinc : CHART.indigo} />
+                      <Cell key={d.name} fill={d.name === t('common.notAssigned') ? CHART.zinc : CHART.indigo} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -420,17 +559,17 @@ export default function DashboardView() {
           {activeSprints.map((sprint) => (
             <Panel
               key={sprint.id}
-              title={`Burndown · ${sprint.name}`}
+              title={t('dashboard.burndownTitle').replace('{name}', sprint.name)}
               subtitle={`${formatDateShort(sprint.startDate)} – ${formatDateShort(sprint.endDate)}`}
               action={
                 <div className="flex shrink-0 items-center gap-3 text-[11px] text-zinc-500 dark:text-zinc-400">
                   <span className="flex items-center gap-1.5">
                     <span className="h-0.5 w-4 rounded bg-[#a1a1aa]" />
-                    Ideal
+                    {t('dashboard.legendIdeal')}
                   </span>
                   <span className="flex items-center gap-1.5">
                     <span className="h-0.5 w-4 rounded bg-[#818cf8]" />
-                    Resterende
+                    {t('dashboard.legendRemaining')}
                   </span>
                 </div>
               }
@@ -440,12 +579,84 @@ export default function DashboardView() {
           ))}
         </div>
 
-        <Panel title="Kommende frister" subtitle="De nærmeste 6 deadlines på tværs af status">
+        {/* Velocity + estimat vs. faktisk tid */}
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Panel title={t('dashboard.velocityTitle')} subtitle={t('dashboard.velocitySub')}>
+            {velocity.length === 0 ? (
+              <p className="py-10 text-center text-xs text-zinc-500 dark:text-zinc-400">{t('dashboard.velocityEmpty')}</p>
+            ) : (
+              <>
+                <div className="h-56">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={velocityData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                      <CartesianGrid stroke="#71717a" strokeOpacity={0.15} vertical={false} />
+                      <XAxis
+                        dataKey="name"
+                        tick={AXIS_TICK}
+                        tickLine={false}
+                        axisLine={{ stroke: '#71717a', strokeOpacity: 0.3 }}
+                      />
+                      <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} width={30} allowDecimals={false} />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'rgba(129,140,248,0.08)' }} />
+                      <Legend wrapperStyle={{ fontSize: 12 }} />
+                      <Bar dataKey={plannedKey} fill={CHART.zinc} radius={[4, 4, 0, 0]} barSize={18} />
+                      <Bar dataKey={completedKey} fill={CHART.indigo} radius={[4, 4, 0, 0]} barSize={18} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </>
+            )}
+          </Panel>
+
+          <Panel title={t('dashboard.effortTitle')} subtitle={t('dashboard.effortSub')}>
+            {effortRows.length === 0 ? (
+              <p className="py-10 text-center text-xs text-zinc-500 dark:text-zinc-400">{t('dashboard.effortEmpty')}</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-[11px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+                      <th className="pb-2 pr-4 font-medium">{t('dashboard.effortColTitle')}</th>
+                      <th className="pb-2 pr-4 text-right font-medium">{t('dashboard.effortColEstimate')}</th>
+                      <th className="pb-2 text-right font-medium">{t('dashboard.effortColLogged')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {effortRows.map((row) => (
+                      <tr key={row.taskId} className="border-t border-zinc-100 dark:border-white/[0.06]">
+                        <td className="max-w-0 w-1/2 truncate py-2 pr-4">
+                          <span className="flex items-center gap-2">
+                            <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', STATUS_META[row.status].dot)} />
+                            <button
+                              onClick={() => selectTask(row.taskId)}
+                              title={row.title}
+                              className="truncate text-left text-zinc-800 transition-colors hover:text-indigo-600 dark:text-zinc-200 dark:hover:text-indigo-300"
+                            >
+                              {row.title}
+                            </button>
+                          </span>
+                        </td>
+                        <td className="py-2 pr-4 text-right tabular-nums text-zinc-600 dark:text-zinc-300">
+                          {row.estimate ?? '—'}
+                        </td>
+                        <td className="py-2 text-right tabular-nums text-zinc-600 dark:text-zinc-300">
+                          {formatMinutes(row.minutes)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Panel>
+        </div>
+
+        <Panel title={t('dashboard.upcoming')} subtitle={t('dashboard.upcomingSub')}>
           {upcoming.length === 0 ? (
             <EmptyState
               icon={<CalendarDays className="h-6 w-6" />}
-              title="Ingen kommende frister"
-              description="Ingen åbne opgaver med en frist lige nu."
+              title={t('dashboard.upcomingEmpty')}
+              description={t('dashboard.upcomingEmptyDesc')}
             />
           ) : (
             <ul className="divide-y divide-zinc-200/70 dark:divide-white/[0.05]">

@@ -21,6 +21,8 @@ mkdirSync(APP_DIR, { recursive: true });
 mkdirSync(EXPORT_DIR, { recursive: true });
 const BACKUP_DIR = join(EXPORT_DIR, 'backup');
 mkdirSync(BACKUP_DIR, { recursive: true });
+const ATTACH_DIR = join(EXPORT_DIR, 'attachments');
+mkdirSync(ATTACH_DIR, { recursive: true });
 
 function loadConfig() {
   try {
@@ -353,7 +355,7 @@ async function graphSendMail(subject, textBody) {
 
 // ---------------- HTTP + WS ----------------
 const app = express();
-app.use(express.json({ limit: '12mb' }));
+app.use(express.json({ limit: '48mb' }));
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -430,10 +432,30 @@ app.post('/api/config', (req, res) => {
 });
 
 // ---- Synkronisering ----
+function fireWebhooks(event, payload) {
+  const urls = loadConfig().webhooks ?? [];
+  for (const url of urls) {
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event, ...payload, source: 'orbit', time: new Date().toISOString() }),
+    }).catch(() => {});
+  }
+}
+
 app.post('/api/sync/push', (req, res) => {
   const { clientId, user, snapshot } = req.body ?? {};
   if (!snapshot || !Array.isArray(snapshot.tasks)) {
     return res.status(400).json({ ok: false, reason: 'Mangler snapshot' });
+  }
+  const prev = lastSnapshot?.snapshot;
+  if (prev) {
+    const prevStatus = new Map((prev.tasks ?? []).map((t) => [t.id, t.status]));
+    for (const t of snapshot.tasks) {
+      if (t.status === 'done' && prevStatus.get(t.id) && prevStatus.get(t.id) !== 'done') {
+        fireWebhooks('task.completed', { task: { id: t.id, title: t.title, number: t.number, projectId: t.projectId } });
+      }
+    }
   }
   lastSnapshot = {
     snapshot,
@@ -664,6 +686,49 @@ app.get('/api/graph/planner', async (_req, res) => {
   }
 });
 
+app.post('/api/graph/todos/complete', async (req, res) => {
+  try {
+    const token = await graphAcquireSilent();
+    if (!token) return res.json({ ok: false, reason: 'Ikke tilsluttet Microsoft 365' });
+    const { listId, taskId } = req.body ?? {};
+    if (!listId || !taskId) return res.status(400).json({ ok: false, reason: 'Mangler listId eller taskId' });
+    const r = await fetch(`https://graph.microsoft.com/v1.0/me/todo/lists/${listId}/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'completed' }),
+    });
+    res.json({ ok: r.ok, status: r.status });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
+});
+
+app.post('/api/graph/events/create', async (req, res) => {
+  try {
+    const token = await graphAcquireSilent();
+    if (!token) return res.json({ ok: false, reason: 'Ikke tilsluttet Microsoft 365' });
+    const { title, date, attendeeEmail } = req.body ?? {};
+    if (!title || !date) return res.status(400).json({ ok: false, reason: 'Mangler titel eller dato' });
+    const body = {
+      subject: String(title),
+      isAllDay: true,
+      start: { dateTime: `${date}T00:00:00`, timeZone: 'Europe/Copenhagen' },
+      end: { dateTime: `${date}T00:00:00`, timeZone: 'Europe/Copenhagen' },
+      isReminderOn: true,
+      reminderMinutesBeforeStart: 720,
+    };
+    if (attendeeEmail) body.attendees = [{ emailAddress: { address: String(attendeeEmail) }, type: 'required' }];
+    const r = await fetch('https://graph.microsoft.com/v1.0/me/events', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    res.json({ ok: r.ok, status: r.status });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
+});
+
 app.post('/api/graph/send-report', async (req, res) => {
   const { subject, markdown } = req.body ?? {};
   if (!subject || !markdown) return res.status(400).json({ ok: false, reason: 'Mangler emne eller indhold' });
@@ -775,6 +840,200 @@ app.get('/public/status/:token', (req, res) => {
 <p class="foot">Opdateres automatisk fra Orbit · ${esc(new Date().toISOString().slice(0, 10))}</p>
 </main></body></html>`;
   res.send(html);
+});
+
+// ---------------- Vedhæftninger ----------------
+function sanitizeFileName(name) {
+  return String(name).replace(/[^\wæøåÆØÅ .()-]/g, '_').slice(0, 120);
+}
+
+app.post('/api/attachments/:taskId', (req, res) => {
+  const { name, dataBase64 } = req.body ?? {};
+  if (!name || !dataBase64) return res.status(400).json({ ok: false, reason: 'Mangler navn eller indhold' });
+  try {
+    const buf = Buffer.from(String(dataBase64), 'base64');
+    if (buf.length > 48 * 1024 * 1024) return res.status(400).json({ ok: false, reason: 'Filen er for stor (maks 48 MB)' });
+    const safe = sanitizeFileName(name);
+    writeFileSync(join(ATTACH_DIR, `${req.params.taskId}__${safe}`), buf);
+    res.json({ ok: true, name: safe, size: buf.length });
+  } catch (err) {
+    res.status(500).json({ ok: false, reason: String(err) });
+  }
+});
+
+app.get('/api/attachments/:taskId', (_req, res) => {
+  try {
+    const prefix = `${_req.params.taskId}__`;
+    const files = readdirSync(ATTACH_DIR)
+      .filter((f) => f.startsWith(prefix))
+      .map((f) => {
+        const st = statSync(join(ATTACH_DIR, f));
+        return { name: f.slice(prefix.length), size: st.size, mtime: st.mtime.toISOString() };
+      })
+      .sort((a, b) => b.mtime.localeCompare(a.mtime));
+    res.json({ ok: true, files });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
+});
+
+app.get('/api/attachments/:taskId/file/:name', (req, res) => {
+  const file = join(ATTACH_DIR, `${req.params.taskId}__${sanitizeFileName(req.params.name)}`);
+  if (!existsSync(file)) return res.status(404).json({ ok: false, reason: 'Filen findes ikke' });
+  res.download(file);
+});
+
+app.post('/api/attachments/:taskId/open', (req, res) => {
+  const file = join(ATTACH_DIR, `${req.params.taskId}__${sanitizeFileName(req.body?.name ?? '')}`);
+  if (!existsSync(file)) return res.status(404).json({ ok: false, reason: 'Filen findes ikke' });
+  execFile('explorer', [file], () => {});
+  res.json({ ok: true });
+});
+
+app.delete('/api/attachments/:taskId/:name', (req, res) => {
+  const file = join(ATTACH_DIR, `${req.params.taskId}__${sanitizeFileName(req.params.name)}`);
+  try { rmSync(file, { force: true }); } catch { /* ignorer */ }
+  res.json({ ok: true });
+});
+
+// ---------------- Webhooks (udad) ----------------
+app.get('/api/webhooks', (_req, res) => {
+  res.json({ ok: true, urls: loadConfig().webhooks ?? [] });
+});
+
+app.post('/api/webhooks', (req, res) => {
+  const url = String(req.body?.url ?? '').trim();
+  if (!/^https?:\/\//.test(url)) return res.status(400).json({ ok: false, reason: 'Webhook-URL skal starte med http(s)://' });
+  const cfg = loadConfig();
+  cfg.webhooks = [...new Set([...(cfg.webhooks ?? []), url])];
+  saveConfig(cfg);
+  res.json({ ok: true, urls: cfg.webhooks });
+});
+
+app.delete('/api/webhooks', (req, res) => {
+  const url = String(req.body?.url ?? '').trim();
+  const cfg = loadConfig();
+  cfg.webhooks = (cfg.webhooks ?? []).filter((u) => u !== url);
+  saveConfig(cfg);
+  res.json({ ok: true, urls: cfg.webhooks });
+});
+
+// ---------------- Åbent API (v1) ----------------
+function apiToken() {
+  return loadConfig().apiToken ?? null;
+}
+
+app.post('/api/v1/token', (_req, res) => {
+  const cfg = loadConfig();
+  if (!cfg.apiToken) {
+    cfg.apiToken = Buffer.from(String(Date.now()) + String(Math.random())).toString('base64url').slice(0, 24);
+    saveConfig(cfg);
+  }
+  res.json({ ok: true, token: cfg.apiToken });
+});
+
+function apiAuth(req) {
+  const t = apiToken();
+  return Boolean(t) && req.get('x-orbit-api-token') === t;
+}
+
+function apiSnapshot(res) {
+  if (!lastSnapshot) return res.status(503).json({ ok: false, reason: 'Ingen data endnu – åbn appen først' });
+  return lastSnapshot.snapshot;
+}
+
+app.get('/api/v1/tasks', (req, res) => {
+  if (!apiAuth(req)) return res.status(401).json({ ok: false, reason: 'Ugyldigt API-token (header: X-Orbit-Api-Token)' });
+  const snap = apiSnapshot(res);
+  if (!snap.tasks) return;
+  res.json({ ok: true, tasks: snap.tasks, updatedAt: lastSnapshot.updatedAt });
+});
+
+app.get('/api/v1/projects', (req, res) => {
+  if (!apiAuth(req)) return res.status(401).json({ ok: false, reason: 'Ugyldigt API-token' });
+  const snap = apiSnapshot(res);
+  if (!snap.projects) return;
+  res.json({ ok: true, projects: snap.projects });
+});
+
+app.get('/api/v1/sprints', (req, res) => {
+  if (!apiAuth(req)) return res.status(401).json({ ok: false, reason: 'Ugyldigt API-token' });
+  const snap = apiSnapshot(res);
+  if (!snap.sprints) return;
+  res.json({ ok: true, sprints: snap.sprints });
+});
+
+// ---------------- Asynkron standup ----------------
+app.post('/api/standup', async (req, res) => {
+  const { name, text } = req.body ?? {};
+  if (!text) return res.status(400).json({ ok: false, reason: 'Mangler tekst' });
+  const teams = await sendTeamsMessage(`Standup – ${String(name ?? 'Ukendt')}`, String(text));
+  res.json({ ok: true, teams });
+});
+
+// ---------------- Azure DevOps ----------------
+function adopsCfg() {
+  return loadConfig().adops ?? {};
+}
+
+app.post('/api/adops/config', (req, res) => {
+  const { org, project, pat } = req.body ?? {};
+  const cfg = loadConfig();
+  cfg.adops = { org: org ?? '', project: project ?? '', pat: pat ?? '' };
+  saveConfig(cfg);
+  res.json({ ok: true });
+});
+
+app.get('/api/adops/workitems', async (req, res) => {
+  const { org, project, pat } = adopsCfg();
+  if (!org || !project || !pat) return res.json({ ok: false, reason: 'Azure DevOps er ikke konfigureret (org, projekt og PAT under Integrationer)' });
+  try {
+    const auth = `Basic ${Buffer.from(`:${pat}`).toString('base64')}`;
+    const wiql = await fetch(`https://dev.azure.com/${org}/${project}/_apis/wit/wiql?api-version=7.1-preview.2`, {
+      method: 'POST',
+      headers: { Authorization: auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: `SELECT [System.Id], [System.Title], [System.State] FROM WorkItems WHERE [System.TeamProject] = '${project}' AND [System.State] <> 'Closed' AND [System.State] <> 'Done' ORDER BY [System.ChangedDate] DESC` }),
+    });
+    if (!wiql.ok) return res.json({ ok: false, reason: `DevOps svarede ${wiql.status} – tjek org/projekt/PAT` });
+    const wiqlData = await wiql.json();
+    const ids = (wiqlData.workItems ?? []).slice(0, 50).map((w) => w.id);
+    if (ids.length === 0) return res.json({ ok: true, items: [] });
+    const batch = await fetch(`https://dev.azure.com/${org}/_apis/wit/workitemsbatch?api-version=7.1`, {
+      method: 'POST',
+      headers: { Authorization: auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, fields: ['System.Title', 'System.State', 'System.WorkItemType'] }),
+    });
+    if (!batch.ok) return res.json({ ok: false, reason: `DevOps batch svarede ${batch.status}` });
+    const batchData = await batch.json();
+    res.json({
+      ok: true,
+      items: (batchData.value ?? []).map((w) => ({
+        id: w.id,
+        title: w.fields?.['System.Title'] ?? `#${w.id}`,
+        state: w.fields?.['System.State'] ?? '',
+        type: w.fields?.['System.WorkItemType'] ?? '',
+      })),
+    });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
+});
+
+app.post('/api/adops/complete', async (req, res) => {
+  const { id } = req.body ?? {};
+  const { org, pat } = adopsCfg();
+  if (!org || !pat || !id) return res.status(400).json({ ok: false, reason: 'Mangler id eller konfiguration' });
+  try {
+    const auth = `Basic ${Buffer.from(`:${pat}`).toString('base64')}`;
+    const r = await fetch(`https://dev.azure.com/${org}/_apis/wit/workitems/${id}?api-version=7.0`, {
+      method: 'PATCH',
+      headers: { Authorization: auth, 'Content-Type': 'application/json-patch+json' },
+      body: JSON.stringify([{ op: 'replace', path: '/fields/System.State', value: 'Done' }]),
+    });
+    res.json({ ok: r.ok || r.status === 200, status: r.status });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
 });
 
 server.listen(PORT, () => {

@@ -1,13 +1,14 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import AppShell from './components/AppShell';
 import CommandPalette from './components/CommandPalette';
+import { ShortcutsOverlay, Tour } from './components/Onboarding';
 import Splash from './components/Splash';
 import TaskDrawer from './components/TaskDrawer';
 import { useStore } from './store/useStore';
 import type { Task } from './lib/types';
 import { taskRef } from './lib/utils';
-import { companionNotify, companionTeams } from './lib/companion';
+import { completeAdopsWorkItem, completeTodoTask, companionNotify, companionTeams } from './lib/companion';
 import { startSync } from './lib/sync';
 import ActivityView from './views/ActivityView';
 import BacklogView from './views/BacklogView';
@@ -28,15 +29,29 @@ export default function App() {
   const projects = useStore((s) => s.projects);
   const previousTasks = useRef<Map<string, Task>>(new Map());
   const notifiedDone = useRef<Set<string>>(new Set());
+  const [showShortcuts, setShowShortcuts] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
 
+  // "?" åbner genvejsoversigt (når man ikke skriver i et felt)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '?') return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      e.preventDefault();
+      setShowShortcuts((v) => !v);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Tværgående synkronisering via companion-serveren
   useEffect(() => startSync(), []);
 
-  // Automatiseringsregler: afslutning -> Teams/notifikation, kritisk -> tildeling
+  // Automatiseringsregler: afslutning -> Teams/notifikation/eksterne systemer, kritisk -> tildeling
   useEffect(() => {
     const prev = previousTasks.current;
     const state = useStore.getState();
@@ -53,6 +68,13 @@ export default function App() {
         if (state.automation.doneTeams) void companionTeams('Opgave afsluttet i Orbit', text);
         if (state.automation.doneNotifyAssignee && task.assigneeId && task.assigneeId !== state.currentUserId) {
           state.addNotification(task.assigneeId, `Din opgave “${task.title}” blev afsluttet`, task.id);
+        }
+        // To-vejs: skriv status tilbage til eksterne systemer
+        if (task.extIds?.todoTaskId && task.extIds.todoListId) {
+          void completeTodoTask(task.extIds.todoListId, task.extIds.todoTaskId);
+        }
+        if (task.extIds?.adopsId) {
+          void completeAdopsWorkItem(task.extIds.adopsId);
         }
       }
       if (
@@ -91,6 +113,8 @@ export default function App() {
       <TaskDrawer />
       <CommandPalette />
       <Splash />
+      <Tour />
+      <ShortcutsOverlay open={showShortcuts} onClose={() => setShowShortcuts(false)} />
     </HashRouter>
   );
 }

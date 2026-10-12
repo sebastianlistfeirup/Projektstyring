@@ -31,6 +31,9 @@ export interface Comment {
   authorId: string;
   text: string;
   createdAt: string; // ISO
+  replyToId?: string | null; // svar på anden kommentar
+  reactions?: Record<string, string[]>; // emoji -> userIds
+  editedAt?: string;
 }
 
 export interface Task {
@@ -56,6 +59,14 @@ export interface Task {
   recurrence?: 'daily' | 'weekly' | 'monthly' | null; // opret næste instans når opgaven afsluttes
   blockedBy?: string[]; // id'er på opgaver der blokerer denne
   customFields?: Record<string, string | number>; // fieldDefId -> værdi
+  extIds?: { todoListId?: string; todoTaskId?: string; adopsId?: number }; // eksterne systemer
+}
+
+export interface StandupEntry {
+  id: string;
+  userId: string;
+  text: string;
+  createdAt: string; // ISO
 }
 
 export interface TimeEntry {
@@ -123,6 +134,7 @@ export interface Project {
   color: string;
   description: string;
   publicToken?: string | null; // kunde-statusside ( companion /public/status/<token> )
+  archived?: boolean; // arkiverede projekter gemmes væk, men kan gendannes
 }
 
 export interface ActivityEntry {

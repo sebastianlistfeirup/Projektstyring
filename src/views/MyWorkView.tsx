@@ -3,6 +3,7 @@ import { format, differenceInDays, parseISO } from 'date-fns';
 import { da } from 'date-fns/locale';
 import { CalendarDays, CalendarClock, Check, CircleAlert, ListTodo } from 'lucide-react';
 import { useStore } from '../store/useStore';
+import { useLang, t } from '../lib/i18n';
 import { cn, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
 import { EmptyState, PriorityBadge, ProgressBar, StatusBadge, ViewHeader } from '../components/common';
 import { taskProgress } from '../components/table/taskProgress';
@@ -12,7 +13,13 @@ function dueInfo(task: Task): { overdue: boolean; label: string } | null {
   if (!task.dueDate) return null;
   const overdue = isOverdue(task);
   const days = differenceInDays(parseISO(task.dueDate), new Date());
-  const label = overdue ? 'Overskredet' : days <= 0 ? 'i dag' : days === 1 ? 'i morgen' : `om ${days} dage`;
+  const label = overdue
+    ? t('mywork.overdue')
+    : days <= 0
+      ? t('mywork.dueToday')
+      : days === 1
+        ? t('mywork.dueTomorrow')
+        : t('mywork.dueInDays').replace('{n}', String(days));
   return { overdue, label };
 }
 
@@ -71,6 +78,7 @@ function TaskRow({ task }: { task: Task }) {
 }
 
 export default function MyWorkView() {
+  useLang();
   const tasks = useStore((s) => s.tasks);
   const users = useStore((s) => s.users);
   const currentUserId = useStore((s) => s.currentUserId);
@@ -103,27 +111,27 @@ export default function MyWorkView() {
   const capitalizedDate = dateLabel.charAt(0).toUpperCase() + dateLabel.slice(1);
 
   const sections = [
-    { id: 'overdue', title: 'Overskredet', tasks: overdue, accent: true },
-    { id: 'thisweek', title: 'Denne uge', tasks: thisWeek, accent: false },
-    { id: 'upcoming', title: 'Kommende', tasks: upcoming, accent: false },
-    { id: 'unscheduled', title: 'Uden frist', tasks: unscheduled, accent: false },
+    { id: 'overdue', title: t('mywork.overdue'), tasks: overdue, accent: true },
+    { id: 'thisweek', title: t('mywork.thisWeek'), tasks: thisWeek, accent: false },
+    { id: 'upcoming', title: t('mywork.upcoming'), tasks: upcoming, accent: false },
+    { id: 'unscheduled', title: t('mywork.unscheduled'), tasks: unscheduled, accent: false },
   ].filter((s) => s.tasks.length > 0);
 
   const stats = [
     {
-      label: 'Åbne opgaver',
+      label: t('mywork.statOpen'),
       value: open.length,
       Icon: ListTodo,
       iconCls: 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400',
     },
     {
-      label: 'Overskredet',
+      label: t('mywork.statOverdue'),
       value: overdue.length,
       Icon: CircleAlert,
       iconCls: 'bg-rose-500/10 text-rose-600 dark:text-rose-400',
     },
     {
-      label: 'Afslutter inden 7 dage',
+      label: t('mywork.statThisWeek'),
       value: thisWeek.length,
       Icon: CalendarClock,
       iconCls: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
@@ -134,8 +142,8 @@ export default function MyWorkView() {
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl p-4 lg:p-6">
         <ViewHeader
-          title="Min arbejdsliste"
-          subtitle={firstName ? `God dag, ${firstName} · ${capitalizedDate}` : capitalizedDate}
+          title={t('mywork.title')}
+          subtitle={firstName ? t('mywork.subtitleHello').replace('{name}', firstName).replace('{date}', capitalizedDate) : capitalizedDate}
         />
 
         <div className="space-y-6">
@@ -157,8 +165,8 @@ export default function MyWorkView() {
         {open.length === 0 ? (
           <EmptyState
             icon={<ListTodo className="h-6 w-6" />}
-            title="Ingen åbne opgaver"
-            description="Du har ingen aktive opgaver på dig lige nu. Nyd roen — eller opret en ny opgave."
+            title={t('mywork.emptyTitle')}
+            description={t('mywork.emptyDesc')}
           />
         ) : (
           sections.map((section) => (
@@ -186,21 +194,21 @@ export default function MyWorkView() {
         {recentlyDone.length > 0 && (
           <section>
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-              Senest afsluttet
+              {t('mywork.recentlyDone')}
             </h3>
             <div className="glass-panel divide-y divide-zinc-200/70 overflow-hidden rounded-xl dark:divide-white/[0.05]">
-              {recentlyDone.map((t) => (
+              {recentlyDone.map((task) => (
                 <button
-                  key={t.id}
-                  onClick={() => selectTask(t.id)}
+                  key={task.id}
+                  onClick={() => selectTask(task.id)}
                   className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-zinc-50 dark:hover:bg-white/[0.03]"
                 >
                   <Check className="h-4 w-4 shrink-0 text-emerald-500" />
                   <span className="min-w-0 flex-1 truncate text-sm text-zinc-700 dark:text-zinc-200">
-                    {t.title}
+                    {task.title}
                   </span>
                   <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
-                    Afsluttet {timeAgo(t.updatedAt)}
+                    {t('mywork.completedAgo').replace('{ago}', timeAgo(task.updatedAt))}
                   </span>
                 </button>
               ))}

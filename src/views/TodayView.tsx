@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { CalendarClock, Flame, Play, Sparkles, Square } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { aiComplete } from '../lib/companion';
+import { useLang, t } from '../lib/i18n';
 import { cn, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
 import { Avatar, EmptyState, PriorityBadge, StatusBadge, ViewHeader } from '../components/common';
 
@@ -30,6 +31,7 @@ function TimerChip({ taskId }: { taskId: string }) {
   const stopTimer = useStore((s) => s.stopTimer);
   const active = timeEntries.find((e) => e.taskId === taskId && e.endedAt === null);
   const [, force] = useState(0);
+  useLang();
 
   useEffect(() => {
     if (!active) return;
@@ -45,7 +47,7 @@ function TimerChip({ taskId }: { taskId: string }) {
           e.stopPropagation();
           stopTimer();
         }}
-        title="Stop tid"
+        title={t('today.stopTime')}
         className="flex shrink-0 items-center gap-1.5 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-600 transition-colors hover:bg-emerald-500/20 dark:text-emerald-400"
       >
         <Square className="h-3 w-3" />
@@ -59,16 +61,17 @@ function TimerChip({ taskId }: { taskId: string }) {
         e.stopPropagation();
         startTimer(taskId);
       }}
-      title="Start tid"
+      title={t('today.startTime')}
       className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium text-zinc-500 transition-colors hover:bg-indigo-500/10 hover:text-indigo-500 dark:text-zinc-400 dark:hover:text-indigo-300"
     >
       <Play className="h-3 w-3" />
-      Tid
+      {t('today.time')}
     </button>
   );
 }
 
 export default function TodayView() {
+  useLang();
   const tasks = useStore((s) => s.tasks);
   const projects = useStore((s) => s.projects);
   const users = useStore((s) => s.users);
@@ -167,7 +170,7 @@ export default function TodayView() {
           >
             <CalendarClock className="h-3 w-3" />
             {formatDateShort(task.dueDate)}
-            {overdue && ' · overskredet'}
+            {overdue && ` · ${t('today.overdue')}`}
           </span>
         )}
         <TimerChip taskId={task.id} />
@@ -179,7 +182,10 @@ export default function TodayView() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl space-y-6 p-4 lg:p-6">
-        <ViewHeader title="I dag" subtitle={`God dag, ${me?.name.split(' ')[0] ?? ''} – her er det vigtigste lige nu`} />
+        <ViewHeader
+          title={t('today.title')}
+          subtitle={me?.name ? t('today.subtitleHello').replace('{name}', me.name.split(' ')[0]) : t('today.subtitlePlain')}
+        />
 
         {/* AI-forslag */}
         <section className="glass-panel animate-fade-in rounded-xl p-5">
@@ -188,16 +194,16 @@ export default function TodayView() {
               <Sparkles className="h-5 w-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Hvad skal jeg arbejde på nu?</h2>
+              <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{t('today.aiTitle')}</h2>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
                 {activeTimer
-                  ? `Du registrerer tid lige nu (siden ${timeAgo(activeTimer.startedAt)})`
-                  : 'AI-assistenten vælger ud fra prioritet, frist og status'}
+                  ? t('today.aiSubTimer').replace('{ago}', timeAgo(activeTimer.startedAt))
+                  : t('today.aiSubIdle')}
               </p>
             </div>
             <button onClick={() => void suggest()} disabled={aiBusy || queue.length === 0} className="btn-primary">
               <Sparkles className="h-4 w-4" />
-              {aiBusy ? 'Analyserer …' : 'Foreslå næste opgave'}
+              {aiBusy ? t('today.analyzing') : t('today.suggest')}
             </button>
           </div>
           {aiPick && (
@@ -208,7 +214,7 @@ export default function TodayView() {
                 {aiPick.taskId && (
                   <>
                     <button onClick={() => selectTask(aiPick.taskId)} className="btn-primary py-1 text-xs">
-                      Åbn opgaven
+                      {t('today.openTask')}
                     </button>
                     <TimerChip taskId={aiPick.taskId} />
                   </>
@@ -222,15 +228,15 @@ export default function TodayView() {
         {queue.length === 0 && blocked.length === 0 ? (
           <EmptyState
             icon={<Flame className="h-6 w-6" />}
-            title="Ingen opgaver på dig lige nu"
-            description="Nyd roen – eller opret en ny opgave med Ctrl+K."
+            title={t('today.emptyTitle')}
+            description={t('today.emptyDesc')}
           />
         ) : (
           <>
             {inProgress.length > 0 && (
               <section className="animate-fade-in">
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-                  Fortsæt hvor du er
+                  {t('today.inProgress')}
                   <span className="ml-2 rounded bg-indigo-500/10 px-1.5 py-px text-[10px] tabular-nums">{inProgress.length}</span>
                 </h3>
                 <div className="space-y-2">{inProgress.map(renderRow)}</div>
@@ -239,7 +245,7 @@ export default function TodayView() {
             {urgent.length > 0 && (
               <section className="animate-fade-in">
                 <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-rose-600 dark:text-rose-400">
-                  Skynd dig
+                  {t('today.urgent')}
                   <span className="rounded bg-rose-500/10 px-1.5 py-px text-[10px] tabular-nums">{urgent.length}</span>
                 </h3>
                 <div className="space-y-2">{urgent.map(renderRow)}</div>
@@ -248,7 +254,7 @@ export default function TodayView() {
             {next.length > 0 && (
               <section className="animate-fade-in">
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-                  Herefter
+                  {t('today.next')}
                   <span className="ml-2 rounded bg-zinc-500/10 px-1.5 py-px text-[10px] tabular-nums">{next.length}</span>
                 </h3>
                 <div className="space-y-2">{next.map(renderRow)}</div>
@@ -257,7 +263,7 @@ export default function TodayView() {
             {blocked.length > 0 && (
               <section className="animate-fade-in">
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">
-                  Blokeret af andre opgaver
+                  {t('today.blocked')}
                   <span className="ml-2 rounded bg-amber-500/10 px-1.5 py-px text-[10px] tabular-nums">{blocked.length}</span>
                 </h3>
                 <div className="space-y-2">{blocked.map(renderRow)}</div>

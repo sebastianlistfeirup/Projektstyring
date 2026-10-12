@@ -4,6 +4,7 @@ import { da } from 'date-fns/locale';
 import { CalendarRange } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import type { TaskStatus } from '../lib/types';
+import { useLang, t } from '../lib/i18n';
 import { cn, formatDateShort, taskRef } from '../lib/utils';
 import { Avatar, EmptyState, ViewHeader } from '../components/common';
 
@@ -31,6 +32,7 @@ const BAR_TEXT: Record<TaskStatus, string> = {
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export default function TimelineView() {
+  useLang();
   const tasks = useStore((s) => s.tasks);
   const projects = useStore((s) => s.projects);
   const users = useStore((s) => s.users);
@@ -122,11 +124,11 @@ export default function TimelineView() {
     return (
       <div className="h-full overflow-auto">
         <div className="p-4 lg:p-6">
-          <ViewHeader title="Tidslinje" subtitle="Se opgaver og sprints spredt ud over tid" />
+          <ViewHeader title={t('timeline.title')} subtitle={t('timeline.subtitle')} />
           <EmptyState
             icon={<CalendarRange className="h-6 w-6" />}
-            title="Ingen opgaver med datoer"
-            description="Tidslinjen viser opgaver med start- eller slutdato. Tilføj datoer på opgaver for at se dem her."
+            title={t('timeline.emptyTitle')}
+            description={t('timeline.emptyDesc')}
           />
         </div>
       </div>
@@ -187,12 +189,12 @@ export default function TimelineView() {
   return (
     <div className="h-full overflow-auto">
       <div className="p-4 lg:p-6">
-        <ViewHeader title="Tidslinje" subtitle="Se opgaver og sprints spredt ud over tid" />
+        <ViewHeader title={t('timeline.title')} subtitle={t('timeline.subtitle')} />
         <div className="w-max min-w-full">
         <div className="sticky top-0 z-30 flex">
           <div className="sticky left-0 top-0 z-40 flex h-full w-64 shrink-0 items-end bg-zinc-100 pb-2 pl-2 dark:bg-[#17181c]">
             <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">
-              Opgave · {rows.length}
+              {t('timeline.taskCount').replace('{n}', String(rows.length))}
             </span>
           </div>
           <div>
@@ -258,7 +260,7 @@ export default function TimelineView() {
               style={{ left: LABEL_W + todayIndex * DAY_W }}
             >
               <span className="absolute left-1 top-0 rounded-b-md bg-indigo-400 px-1.5 py-0.5 text-[9px] font-bold text-white">
-                I dag
+                {t('timeline.today')}
               </span>
             </div>
           )}
@@ -268,7 +270,7 @@ export default function TimelineView() {
               <div className="sticky left-0 z-20 flex w-64 shrink-0 items-center bg-zinc-100 pl-2 dark:bg-[#17181c]">
                 {i === 0 && (
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                    Aktive sprints
+                    {t('timeline.activeSprints')}
                   </span>
                 )}
               </div>

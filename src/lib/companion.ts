@@ -348,3 +348,164 @@ export async function restoreBackup(
     return { ok: false, reason: 'Companion-serveren svarer ikke' };
   }
 }
+
+// ---------------- Vedhæftninger ----------------
+export interface AttachmentMeta {
+  name: string;
+  size: number;
+  mtime: string;
+}
+
+export async function uploadAttachment(
+  taskId: string,
+  name: string,
+  dataBase64: string,
+): Promise<{ ok: boolean; name?: string; reason?: string }> {
+  try {
+    return await post(`/api/attachments/${taskId}`, { name, dataBase64 });
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export async function listAttachments(taskId: string): Promise<{ ok: boolean; files?: AttachmentMeta[] }> {
+  try {
+    const res = await fetch(`${BASE}/api/attachments/${taskId}`, { headers: authHeaders(), signal: AbortSignal.timeout(4000) });
+    return (await res.json()) as { ok: boolean; files?: AttachmentMeta[] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export function attachmentUrl(taskId: string, name: string): string {
+  return `${BASE}/api/attachments/${taskId}/file/${encodeURIComponent(name)}`;
+}
+
+export async function openAttachment(taskId: string, name: string): Promise<{ ok: boolean }> {
+  try {
+    return await post(`/api/attachments/${taskId}/open`, { name });
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function deleteAttachment(taskId: string, name: string): Promise<{ ok: boolean }> {
+  try {
+    const res = await fetch(`${BASE}/api/attachments/${taskId}/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    return (await res.json()) as { ok: boolean };
+  } catch {
+    return { ok: false };
+  }
+}
+
+// ---------------- Microsoft-skrivetilbage ----------------
+export async function completeTodoTask(listId: string, taskId: string): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    return await post('/api/graph/todos/complete', { listId, taskId });
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export async function createCalendarEvent(
+  title: string,
+  date: string,
+  attendeeEmail?: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    return await post('/api/graph/events/create', { title, date, attendeeEmail });
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+// ---------------- Azure DevOps ----------------
+export interface AdopsWorkItem {
+  id: number;
+  title: string;
+  state: string;
+  type: string;
+}
+
+export async function saveAdopsConfig(cfg: {
+  org?: string;
+  project?: string;
+  pat?: string;
+}): Promise<{ ok: boolean }> {
+  try {
+    return await post('/api/adops/config', cfg);
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function fetchAdopsWorkItems(): Promise<{ ok: boolean; items?: AdopsWorkItem[]; reason?: string }> {
+  try {
+    const res = await fetch(`${BASE}/api/adops/workitems`, { headers: authHeaders(), signal: AbortSignal.timeout(20000) });
+    return (await res.json()) as { ok: boolean; items?: AdopsWorkItem[]; reason?: string };
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export async function completeAdopsWorkItem(id: number): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    return await post('/api/adops/complete', { id });
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+// ---------------- Webhooks + åbent API ----------------
+export async function getWebhooks(): Promise<{ ok: boolean; urls?: string[] }> {
+  try {
+    const res = await fetch(`${BASE}/api/webhooks`, { headers: authHeaders(), signal: AbortSignal.timeout(3000) });
+    return (await res.json()) as { ok: boolean; urls?: string[] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function addWebhook(url: string): Promise<{ ok: boolean; urls?: string[]; reason?: string }> {
+  try {
+    return await post('/api/webhooks', { url });
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export async function removeWebhook(url: string): Promise<{ ok: boolean; urls?: string[] }> {
+  try {
+    const res = await fetch(`${BASE}/api/webhooks`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ url }),
+    });
+    return (await res.json()) as { ok: boolean; urls?: string[] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function createApiToken(): Promise<{ ok: boolean; token?: string }> {
+  try {
+    return await post('/api/v1/token');
+  } catch {
+    return { ok: false };
+  }
+}
+
+// ---------------- Standup ----------------
+export async function postStandup(
+  name: string,
+  text: string,
+): Promise<{ ok: boolean; reason?: string; teams?: { ok: boolean; reason?: string } }> {
+  try {
+    return await post('/api/standup', { name, text });
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}

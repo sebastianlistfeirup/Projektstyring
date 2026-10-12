@@ -14,19 +14,20 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useStore } from '../store/useStore';
+import { useLang, t } from '../lib/i18n';
 import { cn, formatDate, timeAgo } from '../lib/utils';
 import { Avatar, EmptyState, ViewHeader } from '../components/common';
 import type { ActivityEntry } from '../lib/types';
 
 type Filter = 'all' | 'comments' | 'moves' | 'created' | 'sprints';
 
-const FILTERS: { id: Filter; label: string }[] = [
-  { id: 'all', label: 'Alle' },
-  { id: 'comments', label: 'Kommentarer' },
-  { id: 'moves', label: 'Flytninger' },
-  { id: 'created', label: 'Opprettelser' },
-  { id: 'sprints', label: 'Sprints' },
-];
+const FILTER_KEYS: Record<Filter, string> = {
+  all: 'activity.filterAll',
+  comments: 'activity.filterComments',
+  moves: 'activity.filterMoves',
+  created: 'activity.filterCreated',
+  sprints: 'activity.filterSprints',
+};
 
 function matchesFilter(entry: ActivityEntry, filter: Filter): boolean {
   const action = entry.action;
@@ -82,6 +83,7 @@ interface DayGroup {
 }
 
 export default function ActivityView() {
+  useLang();
   const activity = useStore((s) => s.activity);
   const tasks = useStore((s) => s.tasks);
   const users = useStore((s) => s.users);
@@ -102,7 +104,7 @@ export default function ActivityView() {
     const result: DayGroup[] = [];
     for (const entry of list) {
       const date = parseISO(entry.timestamp);
-      const label = isToday(date) ? 'I dag' : isYesterday(date) ? 'I går' : formatDate(entry.timestamp);
+      const label = isToday(date) ? t('activity.today') : isYesterday(date) ? t('activity.yesterday') : formatDate(entry.timestamp);
       const last = result[result.length - 1];
       if (last && last.label === label) {
         last.entries.push(entry);
@@ -124,29 +126,29 @@ export default function ActivityView() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-3xl p-4 lg:p-6">
-        <ViewHeader title="Aktivitet" subtitle="Følg med i teamets seneste hændelser" />
+        <ViewHeader title={t('activity.title')} subtitle={t('activity.subtitle')} />
 
         <div className="space-y-4">
         {/* Filtre */}
         <div className="flex flex-wrap items-center gap-2">
-          {FILTERS.map((f) => (
+          {(Object.keys(FILTER_KEYS) as Filter[]).map((id) => (
             <button
-              key={f.id}
-              onClick={() => setFilter(f.id)}
+              key={id}
+              onClick={() => setFilter(id)}
               className={cn(
                 'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
-                filter === f.id
+                filter === id
                   ? 'border-indigo-500/40 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300'
                   : 'border-zinc-200 text-zinc-600 hover:border-zinc-300 dark:border-white/10 dark:text-zinc-300 dark:hover:border-white/20',
               )}
             >
-              {f.label}
+              {t(FILTER_KEYS[id])}
             </button>
           ))}
           {activeProject && (
             <span className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-[11px] text-zinc-500 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-400">
               <ListChecks className="h-3 w-3" />
-              Viser kun aktivitet for {activeProject.name}
+              {t('activity.projectOnly').replace('{name}', activeProject.name)}
             </span>
           )}
         </div>
@@ -154,8 +156,8 @@ export default function ActivityView() {
         {groups.length === 0 ? (
           <EmptyState
             icon={<Activity className="h-6 w-6" />}
-            title="Ingen aktivitet at vise"
-            description="Der er ingen hændelser, der matcher de valgte filtre."
+            title={t('activity.emptyTitle')}
+            description={t('activity.emptyDesc')}
           />
         ) : (
           groups.map((group) => (
@@ -192,7 +194,7 @@ export default function ActivityView() {
                       </span>
                       <p className="min-w-0 flex-1 text-sm leading-6">
                         <span className="font-semibold text-zinc-900 dark:text-zinc-100">
-                          {user?.name ?? 'Ukendt bruger'}
+                          {user?.name ?? t('activity.unknownUser')}
                         </span>{' '}
                         <span className="text-zinc-600 dark:text-zinc-300">{entry.action}</span>
                         {entry.detail && (

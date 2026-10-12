@@ -12,6 +12,7 @@ import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core';
 import { Check, ChevronDown, ChevronRight, GripVertical, ListChecks, Play, Plus } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { SPRINT_META, STATUS_META } from '../lib/constants';
+import { useLang, t } from '../lib/i18n';
 import { cn, formatDateShort, taskRef } from '../lib/utils';
 import { Avatar, EmptyState, PriorityBadge, ViewHeader } from '../components/common';
 import type { Sprint, Task } from '../lib/types';
@@ -52,6 +53,7 @@ function RowBody({ task }: { task: Task }) {
 }
 
 function DraggableRow({ task }: { task: Task }) {
+  useLang();
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: task.id });
   return (
     <div
@@ -64,7 +66,7 @@ function DraggableRow({ task }: { task: Task }) {
       <button
         {...listeners}
         {...attributes}
-        title="Træk for at flytte til anden sprint"
+        title={t('backlog.dragTitle')}
         className="grid h-6 w-4 shrink-0 cursor-grab touch-none place-items-center rounded text-zinc-400 transition-colors hover:text-zinc-600 active:cursor-grabbing dark:text-zinc-600 dark:hover:text-zinc-300"
       >
         <GripVertical className="h-4 w-4" />
@@ -75,6 +77,7 @@ function DraggableRow({ task }: { task: Task }) {
 }
 
 function AddTaskRow({ sprintId }: { sprintId: string | null }) {
+  useLang();
   const addTask = useStore((s) => s.addTask);
   const activeProjectId = useStore((s) => s.activeProjectId);
   const [adding, setAdding] = useState(false);
@@ -94,7 +97,7 @@ function AddTaskRow({ sprintId }: { sprintId: string | null }) {
         className="flex w-full items-center gap-2 px-4 py-2 text-sm text-zinc-500 transition-colors hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
       >
         <Plus className="h-4 w-4" />
-        Tilføj opgave
+        {t('backlog.addTask')}
       </button>
     );
   }
@@ -114,7 +117,7 @@ function AddTaskRow({ sprintId }: { sprintId: string | null }) {
         onBlur={() => {
           if (!title.trim()) setAdding(false);
         }}
-        placeholder="Opgavetitel … (Enter for at oprette)"
+        placeholder={t('backlog.taskPlaceholder')}
         className="input py-1.5 text-sm"
       />
     </div>
@@ -122,6 +125,7 @@ function AddTaskRow({ sprintId }: { sprintId: string | null }) {
 }
 
 function SprintSection({ sprint, droppable }: { sprint: Sprint | null; droppable: boolean }) {
+  useLang();
   const tasks = useStore((s) => s.tasks);
   const activeProjectId = useStore((s) => s.activeProjectId);
   const setSprintStatus = useStore((s) => s.setSprintStatus);
@@ -164,44 +168,44 @@ function SprintSection({ sprint, droppable }: { sprint: Sprint | null; droppable
             <span className="flex-1" />
           )}
           <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-zinc-600 dark:bg-white/[0.07] dark:text-zinc-300">
-            {points} pts
+            {points} {t('common.points')}
           </span>
           {sprint.status === 'planned' && (
             <button
               className="btn-outline py-1 text-xs"
               onClick={() => {
-                if (window.confirm(`Start ${sprint.name}? Sprintet markeres som aktivt.`)) {
+                if (window.confirm(t('backlog.confirmStart').replace('{name}', sprint.name))) {
                   setSprintStatus(sprint.id, 'active');
                 }
               }}
             >
               <Play className="h-3.5 w-3.5" />
-              Start sprint
+              {t('backlog.startSprint')}
             </button>
           )}
           {sprint.status === 'active' && (
             <button
               className="btn-outline py-1 text-xs"
               onClick={() => {
-                if (window.confirm(`Afslut ${sprint.name}? Opgaverne i sprintet beholdes.`)) {
+                if (window.confirm(t('backlog.confirmComplete').replace('{name}', sprint.name))) {
                   setSprintStatus(sprint.id, 'completed');
                 }
               }}
             >
               <Check className="h-3.5 w-3.5" />
-              Afslut sprint
+              {t('backlog.completeSprint')}
             </button>
           )}
         </header>
       ) : (
         <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-zinc-200/80 px-4 py-3 dark:border-white/[0.06]">
-          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Backlog</h3>
+          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{t('backlog.backlog')}</h3>
           <span className="text-xs text-zinc-500 dark:text-zinc-400">
-            {sectionTasks.length} {sectionTasks.length === 1 ? 'opgave' : 'opgaver'}
+            {sectionTasks.length} {sectionTasks.length === 1 ? t('common.taskOne') : t('common.taskMany')}
           </span>
           <span className="flex-1" />
           <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-zinc-600 dark:bg-white/[0.07] dark:text-zinc-300">
-            {points} pts
+            {points} {t('common.points')}
           </span>
         </header>
       )}
@@ -209,7 +213,7 @@ function SprintSection({ sprint, droppable }: { sprint: Sprint | null; droppable
       <div>
         {sectionTasks.length === 0 && (
           <p className="px-4 py-3 text-sm text-zinc-400 dark:text-zinc-600">
-            {sprint ? 'Ingen opgaver i denne sprint endnu.' : 'Backloggen er tom — træk opgaver hertil eller opret en ny.'}
+            {sprint ? t('backlog.sprintEmpty') : t('backlog.backlogEmpty')}
           </p>
         )}
         {sectionTasks.map((t) => (
@@ -223,6 +227,7 @@ function SprintSection({ sprint, droppable }: { sprint: Sprint | null; droppable
 }
 
 function NewSprintForm({ onClose }: { onClose: () => void }) {
+  useLang();
   const addSprint = useStore((s) => s.addSprint);
   const activeProjectId = useStore((s) => s.activeProjectId);
   const [name, setName] = useState('');
@@ -241,19 +246,19 @@ function NewSprintForm({ onClose }: { onClose: () => void }) {
         autoFocus
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="Sprint-navn, fx Sprint 17 …"
+        placeholder={t('backlog.sprintNamePlaceholder')}
         className="input text-sm"
       />
       <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
         <label className="block">
           <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-            Startdato
+            {t('backlog.startDate')}
           </span>
           <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="input text-sm" />
         </label>
         <label className="block">
           <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-            Slutdato
+            {t('backlog.endDate')}
           </span>
           <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="input text-sm" />
         </label>
@@ -261,10 +266,10 @@ function NewSprintForm({ onClose }: { onClose: () => void }) {
       <div className="mt-3 flex items-center gap-2">
         <button onClick={submit} disabled={!name.trim() || !startDate || !endDate} className="btn-primary">
           <Plus className="h-4 w-4" />
-          Opret sprint
+          {t('backlog.createSprint')}
         </button>
         <button onClick={onClose} className="btn-ghost">
-          Annuller
+          {t('backlog.cancel')}
         </button>
       </div>
     </div>
@@ -272,6 +277,7 @@ function NewSprintForm({ onClose }: { onClose: () => void }) {
 }
 
 export default function BacklogView() {
+  useLang();
   const activeProjectId = useStore((s) => s.activeProjectId);
   const projects = useStore((s) => s.projects);
   const sprints = useStore((s) => s.sprints);
@@ -331,11 +337,11 @@ export default function BacklogView() {
     return (
       <div className="h-full overflow-y-auto">
         <div className="mx-auto max-w-5xl p-4 lg:p-6">
-          <ViewHeader title="Backlog & Sprints" subtitle="Planlæg sprints og prioritér backloggen" />
+          <ViewHeader title={t('backlog.title')} subtitle={t('backlog.subtitle')} />
           <EmptyState
             icon={<ListChecks className="h-6 w-6" />}
-            title="Intet projekt valgt"
-            description="Vælg et projekt i venstre sidepanel for at se backlog og sprints."
+            title={t('backlog.noProjectTitle')}
+            description={t('backlog.noProjectDesc')}
           />
         </div>
       </div>
@@ -348,12 +354,12 @@ export default function BacklogView() {
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-5xl p-4 lg:p-6">
         <ViewHeader
-          title="Backlog & Sprints"
-          subtitle={project ? `${project.name} · Træk opgaver mellem sprints, eller opret nye direkte i en sektion.` : 'Træk opgaver mellem sprints, eller opret nye direkte i en sektion.'}
+          title={t('backlog.title')}
+          subtitle={project ? t('backlog.subtitleProject').replace('{project}', project.name) : t('backlog.subtitleGeneric')}
           actions={
             <button onClick={() => setAddingSprint((v) => !v)} className="btn-outline">
               <Plus className="h-4 w-4" />
-              Ny sprint
+              {t('backlog.newSprint')}
             </button>
           }
         />
@@ -378,12 +384,12 @@ export default function BacklogView() {
                   className="flex w-full items-center gap-2 px-4 py-3 text-sm font-semibold text-zinc-700 transition-colors hover:text-zinc-900 dark:text-zinc-200 dark:hover:text-white"
                 >
                   {showCompleted ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                  Afsluttede sprints
+                  {t('backlog.completedSprints')}
                   <span className="text-xs font-normal tabular-nums text-zinc-500 dark:text-zinc-400">
                     {completed.length}
                   </span>
                   <span className="ml-auto rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-zinc-500 dark:bg-white/[0.07] dark:text-zinc-400">
-                    {completedPoints} pts
+                    {completedPoints} {t('common.points')}
                   </span>
                 </button>
                 {showCompleted && (
@@ -413,6 +419,7 @@ export default function BacklogView() {
 }
 
 function CompletedSprint({ sprint, tasks }: { sprint: Sprint; tasks: Task[] }) {
+  useLang();
   const sorted = [...tasks].sort((a, b) => a.order - b.order);
   return (
     <section className="glass-panel overflow-hidden rounded-xl opacity-80">
@@ -428,11 +435,11 @@ function CompletedSprint({ sprint, tasks }: { sprint: Sprint; tasks: Task[] }) {
           <span className="min-w-0 flex-1 truncate text-xs text-zinc-500 dark:text-zinc-400">{sprint.goal}</span>
         )}
         <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-zinc-500 dark:bg-white/[0.07] dark:text-zinc-400">
-          {pointsOf(tasks)} pts
+          {pointsOf(tasks)} {t('common.points')}
         </span>
       </header>
       <div>
-        {sorted.length === 0 && <p className="px-4 py-2.5 text-sm text-zinc-400 dark:text-zinc-600">Ingen opgaver.</p>}
+        {sorted.length === 0 && <p className="px-4 py-2.5 text-sm text-zinc-400 dark:text-zinc-600">{t('backlog.noTasks')}</p>}
         {sorted.map((t) => (
           <DraggableRow key={t.id} task={t} />
         ))}

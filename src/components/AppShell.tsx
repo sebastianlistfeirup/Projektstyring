@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Moon, Plus, Search, Sun, X } from 'lucide-react';
+import { Archive, ChevronRight, Moon, Plus, RotateCcw, Search, Sun, Trash2, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { VIEWS } from '../lib/nav';
 import { useI18n, useLang, t } from '../lib/i18n';
@@ -20,6 +20,8 @@ export default function AppShell() {
   const activeProjectId = useStore((s) => s.activeProjectId);
   const setActiveProject = useStore((s) => s.setActiveProject);
   const addProject = useStore((s) => s.addProject);
+  const updateProject = useStore((s) => s.updateProject);
+  const deleteProject = useStore((s) => s.deleteProject);
   const theme = useStore((s) => s.theme);
   const toggleTheme = useStore((s) => s.toggleTheme);
   const toggleLang = useI18n((s) => s.toggleLang);
@@ -30,10 +32,13 @@ export default function AppShell() {
   const location = useLocation();
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
+  const [archiveOpen, setArchiveOpen] = useState(false);
 
   const me = users.find((u) => u.id === currentUserId);
   const currentView = VIEWS.find((v) => location.pathname.startsWith(v.to));
   const activeProject = projects.find((p) => p.id === activeProjectId);
+  const activeProjects = projects.filter((p) => !p.archived);
+  const archivedProjects = projects.filter((p) => p.archived);
 
   const activeCount = (projectId: string) =>
     tasks.filter((t) => t.projectId === projectId && t.status !== 'done' && t.status !== 'canceled').length;
@@ -148,21 +153,33 @@ export default function AppShell() {
             </span>
           </button>
 
-          {projects.map((p) => (
-            <button
+          {activeProjects.map((p) => (
+            <div
               key={p.id}
-              onClick={() => setActiveProject(p.id)}
               className={cn(
-                'group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm transition-colors',
+                'group flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm transition-colors',
                 activeProjectId === p.id
                   ? 'bg-zinc-200/70 font-medium text-zinc-900 dark:bg-white/[0.08] dark:text-white'
                   : 'text-zinc-600 hover:bg-zinc-200/50 dark:text-zinc-300 dark:hover:bg-white/[0.05]',
               )}
+              onClick={() => setActiveProject(p.id)}
             >
               <span className={cn('h-2.5 w-2.5 shrink-0 rounded-sm', `bg-${p.color}-500`)} />
               <span className="flex-1 truncate text-left">{p.name}</span>
-              <span className="text-[11px] tabular-nums text-zinc-400 dark:text-zinc-500">{activeCount(p.id)}</span>
-            </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  updateProject(p.id, { archived: true });
+                }}
+                title={t('shell.archiveProject')}
+                className="hidden shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-amber-500 group-hover:grid dark:text-zinc-500 dark:hover:text-amber-400"
+              >
+                <Archive className="h-3.5 w-3.5" />
+              </button>
+              <span className="text-[11px] tabular-nums text-zinc-400 group-hover:hidden dark:text-zinc-500">
+                {activeCount(p.id)}
+              </span>
+            </div>
           ))}
 
           {adding && (
@@ -182,6 +199,63 @@ export default function AppShell() {
             </div>
           )}
         </div>
+
+        {/* Arkiv */}
+        {archivedProjects.length > 0 && (
+          <div className="border-t border-zinc-200/80 px-2 py-2 dark:border-white/[0.06]">
+            <button
+              onClick={() => setArchiveOpen((v) => !v)}
+              className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 transition-colors hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
+            >
+              <ChevronRight className={cn('h-3.5 w-3.5 transition-transform', archiveOpen && 'rotate-90')} />
+              {t('shell.archive')}
+              <span className="text-[10px] font-normal tabular-nums text-zinc-400 dark:text-zinc-500">
+                {archivedProjects.length}
+              </span>
+            </button>
+            {archiveOpen && (
+              <div className="animate-fade-in space-y-0.5 pt-1">
+                {archivedProjects.map((p) => (
+                  <div
+                    key={p.id}
+                    className={cn(
+                      'group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm transition-colors',
+                      activeProjectId === p.id
+                        ? 'bg-zinc-200/70 text-zinc-900 dark:bg-white/[0.08] dark:text-white'
+                        : 'text-zinc-500 hover:bg-zinc-200/50 dark:text-zinc-400 dark:hover:bg-white/[0.05]',
+                    )}
+                    onClick={() => setActiveProject(p.id)}
+                  >
+                    <span className={cn('h-2.5 w-2.5 shrink-0 rounded-sm opacity-60', `bg-${p.color}-500`)} />
+                    <span className="flex-1 truncate text-left">{p.name}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        updateProject(p.id, { archived: false });
+                      }}
+                      title={t('shell.reactivate')}
+                      className="hidden shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-emerald-500 group-hover:grid dark:text-zinc-500 dark:hover:text-emerald-400"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (window.confirm(t('shell.confirmDeleteProject').replace('{name}', p.name))) {
+                          deleteProject(p.id);
+                        }
+                      }}
+                      title={t('shell.deleteForever')}
+                      className="hidden shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-rose-500 group-hover:grid dark:text-zinc-500 dark:hover:text-rose-400"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="border-t border-zinc-200/80 p-3 text-[11px] text-zinc-400 dark:border-white/[0.06] dark:text-zinc-500">
           {t('shell.footer')}

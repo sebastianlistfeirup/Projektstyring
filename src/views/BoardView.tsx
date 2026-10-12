@@ -15,6 +15,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { CalendarClock, CheckSquare, Lock, MessageSquare, Plus, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { STATUS_META, PRIORITY_META } from '../lib/constants';
+import { useLang, t } from '../lib/i18n';
 import { cn, formatDateShort, isOverdue, taskRef } from '../lib/utils';
 import type { Priority, Task, TaskStatus } from '../lib/types';
 import { Avatar, LabelChip, PriorityBadge, ProgressBar, ViewHeader } from '../components/common';
@@ -24,6 +25,7 @@ const PRIORITY_CYCLE: Priority[] = ['none', 'low', 'medium', 'high', 'urgent'];
 const BOARD_COLUMNS: TaskStatus[] = ['todo', 'inprogress', 'inreview', 'done'];
 
 export default function BoardView() {
+  useLang();
   const tasks = useStore((s) => s.tasks);
   const projects = useStore((s) => s.projects);
   const activeProjectId = useStore((s) => s.activeProjectId);
@@ -91,7 +93,7 @@ export default function BoardView() {
   return (
     <div className="flex h-full flex-col">
       <div className="px-4 pt-4 lg:px-6 lg:pt-6">
-        <ViewHeader title="Tavle" subtitle="Træk opgaver frem mod målet" />
+        <ViewHeader title={t('board.title')} subtitle={t('board.subtitle')} />
       </div>
       <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragEnd={onDragEnd}>
         <div className="flex flex-1 gap-4 overflow-x-auto px-4 pb-4 lg:px-6 lg:pb-6">
@@ -145,6 +147,7 @@ function BoardColumn({
   const meta = STATUS_META[status];
   const { setNodeRef, isOver } = useDroppable({ id: `col:${status}` });
   const projectCount = tasks.length;
+  useLang();
 
   return (
     <section className="flex w-[300px] shrink-0 flex-col rounded-2xl border border-zinc-200/80 bg-zinc-50/80 dark:border-white/[0.05] dark:bg-white/[0.02]">
@@ -156,7 +159,7 @@ function BoardColumn({
         </span>
         <button
           onClick={onStartCreate}
-          title="Tilføj opgave"
+          title={t('board.addTask')}
           className="ml-auto grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-200/80 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100"
         >
           <Plus className="h-4 w-4" />
@@ -186,12 +189,12 @@ function BoardColumn({
                 if (e.key === 'Enter') onSubmit();
                 if (e.key === 'Escape') onCancelCreate();
               }}
-              placeholder="Opgavetitel …"
+              placeholder={t('board.taskTitlePlaceholder')}
               className="w-full bg-transparent text-sm outline-none placeholder:text-zinc-400"
             />
             <div className="mt-2 flex items-center gap-1.5">
               <button onClick={onSubmit} className="btn-primary px-2.5 py-1 text-xs">
-                Opret
+                {t('board.create')}
               </button>
               <button onClick={onCancelCreate} className="btn-ghost px-2 py-1 text-xs">
                 <X className="h-3.5 w-3.5" />
@@ -205,7 +208,7 @@ function BoardColumn({
             onClick={onStartCreate}
             className="grid flex-1 place-items-center rounded-xl border border-dashed border-zinc-300 py-6 text-xs text-zinc-400 transition-colors hover:border-zinc-400 hover:text-zinc-500 dark:border-white/10 dark:text-zinc-500 dark:hover:border-white/20"
           >
-            Træk en opgave hertil, eller opret en
+            {t('board.emptyColumn')}
           </button>
         )}
       </div>
@@ -214,6 +217,7 @@ function BoardColumn({
 }
 
 function TaskCard({ task, dragging = false, fresh = false }: { task: Task; dragging?: boolean; fresh?: boolean }) {
+  useLang();
   const selectTask = useStore((s) => s.selectTask);
   const updateTask = useStore((s) => s.updateTask);
   const projects = useStore((s) => s.projects);
@@ -285,7 +289,7 @@ function TaskCard({ task, dragging = false, fresh = false }: { task: Task; dragg
         </span>
 
         {task.subtasks.length > 0 && (
-          <span className="flex items-center gap-1" title={`${subtaskDone}/${task.subtasks.length} delopgaver`}>
+          <span className="flex items-center gap-1" title={t('board.subtasksTitle').replace('{done}', String(subtaskDone)).replace('{total}', String(task.subtasks.length))}>
             <CheckSquare className="h-3.5 w-3.5" />
             <span className="tabular-nums">
               {subtaskDone}/{task.subtasks.length}
@@ -293,7 +297,7 @@ function TaskCard({ task, dragging = false, fresh = false }: { task: Task; dragg
           </span>
         )}
         {task.comments.length > 0 && (
-          <span className="flex items-center gap-1" title={`${task.comments.length} kommentarer`}>
+          <span className="flex items-center gap-1" title={t('board.commentsTitle').replace('{count}', String(task.comments.length))}>
             <MessageSquare className="h-3.5 w-3.5" />
             {task.comments.length}
           </span>
@@ -303,7 +307,7 @@ function TaskCard({ task, dragging = false, fresh = false }: { task: Task; dragg
 
         {activeEntry && (
           <span
-            title="Tid registreres"
+            title={t('board.timeTracking')}
             className="flex shrink-0 items-center gap-1 rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-emerald-600 dark:text-emerald-400"
           >
             <span className="relative flex h-1.5 w-1.5">
@@ -314,7 +318,7 @@ function TaskCard({ task, dragging = false, fresh = false }: { task: Task; dragg
           </span>
         )}
         {hasBlockers && (
-          <span title="Har afhængigheder" className="shrink-0">
+          <span title={t('board.hasDependencies')} className="shrink-0">
             <Lock
               className={cn(
                 'h-3.5 w-3.5',
@@ -326,7 +330,7 @@ function TaskCard({ task, dragging = false, fresh = false }: { task: Task; dragg
 
         <button
           onClick={cyclePriority}
-          title={`Prioritet: ${PRIORITY_META[task.priority].label} – klik for at ændre`}
+          title={t('board.priorityTitle').replace('{label}', PRIORITY_META[task.priority].label)}
           className="shrink-0 rounded p-0.5 transition-transform hover:scale-125"
         >
           <PriorityBadge priority={task.priority} showLabel={false} />
@@ -334,7 +338,7 @@ function TaskCard({ task, dragging = false, fresh = false }: { task: Task; dragg
 
         {task.dueDate && (
           <span
-            title={`Frist: ${formatDateShort(task.dueDate)}`}
+            title={t('board.dueTitle').replace('{date}', formatDateShort(task.dueDate))}
             className={cn(
               'flex items-center gap-1 rounded-md px-1.5 py-0.5 font-medium',
               overdue

@@ -10,6 +10,7 @@ import {
   LogOut,
   Mail,
   MailPlus,
+  Plus,
   Video,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
@@ -51,6 +52,7 @@ export default function GraphView() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [mails, setMails] = useState<GraphMessage[] | null>(null);
   const [importedMails, setImportedMails] = useState<Set<string>>(new Set());
+  const [importedEvents, setImportedEvents] = useState<Set<string>>(new Set());
   const [plannerTasks, setPlannerTasks] = useState<GraphPlannerTask[] | null>(null);
   const [selectedPlanner, setSelectedPlanner] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
@@ -186,6 +188,19 @@ export default function GraphView() {
     });
     setImportedMails((prev) => new Set(prev).add(mail.id));
     say('Opgave oprettet fra mail.');
+  };
+
+  const createTaskFromEvent = (ev: GraphEvent) => {
+    const projectId = activeProjectId ?? projects[0]?.id;
+    if (!projectId || importedEvents.has(ev.id)) return;
+    addTask({
+      title: `Opfølgning: ${ev.subject}`,
+      projectId,
+      dueDate: ev.start ? ev.start.slice(0, 10) : null,
+      description: `Oprettet fra mødet "${ev.subject}"${ev.location ? ` · ${ev.location}` : ''}`,
+    });
+    setImportedEvents((prev) => new Set(prev).add(ev.id));
+    say('Opgave oprettet fra møde.');
   };
 
   const loadPlanner = async () => {
@@ -531,7 +546,13 @@ export default function GraphView() {
             ) : (
               <ul className="space-y-2">
                 {events.map((ev) => (
-                  <li key={ev.id} className="flex items-center gap-3 rounded-lg border border-zinc-200/70 px-3 py-2 dark:border-white/[0.06]">
+                  <li
+                    key={ev.id}
+                    className={cn(
+                      'flex items-center gap-3 rounded-lg border border-zinc-200/70 px-3 py-2 dark:border-white/[0.06]',
+                      importedEvents.has(ev.id) && 'opacity-50',
+                    )}
+                  >
                     <div className="grid h-9 w-14 shrink-0 place-items-center rounded-md bg-indigo-500/10 text-[11px] font-bold uppercase text-indigo-600 dark:text-indigo-300">
                       {ev.start ? formatDate(ev.start.slice(0, 10), 'EEE d.') : ''}
                     </div>
@@ -552,6 +573,17 @@ export default function GraphView() {
                         <Video className="h-3.5 w-3.5" />
                         Deltag
                       </a>
+                    )}
+                    {importedEvents.has(ev.id) ? (
+                      <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                        <Check className="h-3.5 w-3.5" />
+                        Oprettet
+                      </span>
+                    ) : (
+                      <button onClick={() => createTaskFromEvent(ev)} className="btn-outline shrink-0 px-2 py-1 text-xs">
+                        <Plus className="h-3.5 w-3.5" />
+                        Opret opgave
+                      </button>
                     )}
                   </li>
                 ))}
