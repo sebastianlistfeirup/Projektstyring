@@ -6,7 +6,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { execFile } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -19,6 +19,8 @@ const GRAPH_SCOPES = ['User.Read', 'Tasks.Read', 'Calendars.Read', 'Mail.Read', 
 
 mkdirSync(APP_DIR, { recursive: true });
 mkdirSync(EXPORT_DIR, { recursive: true });
+const BACKUP_DIR = join(EXPORT_DIR, 'backup');
+mkdirSync(BACKUP_DIR, { recursive: true });
 
 function loadConfig() {
   try {
@@ -122,6 +124,14 @@ function reportConfig() {
   return { enabled: false, day: 1, time: '08:00', ...(loadConfig().reports ?? {}) }; // day: 1 = mandag
 }
 
+function backupConfig() {
+  return { enabled: true, time: '09:00', ...(loadConfig().backup ?? {}) };
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
 function computeDigest(snapshot) {
   const tasks = snapshot.tasks ?? [];
   const today = todayStr();
@@ -218,6 +228,7 @@ async function runWeeklyReport() {
 // Schedulere: tjek hvert 30. sekund
 let lastReminderDate = null;
 let lastReportWeek = null;
+let lastBackupDate = null;
 setInterval(() => {
   const now = new Date();
   const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -230,6 +241,15 @@ setInterval(() => {
   if (wc.enabled && now.getDay() === wc.day && hhmm === wc.time && lastReportWeek !== weekKey()) {
     lastReportWeek = weekKey();
     void runWeeklyReport();
+  }
+  const bc = backupConfig();
+  if (bc.enabled && hhmm === bc.time && lastBackupDate !== todayStr() && lastSnapshot) {
+    lastBackupDate = todayStr();
+    try {
+      const p = join(BACKUP_DIR, `orbit-backup-${stamp()}.json`);
+      writeFileSync(p, JSON.stringify(lastSnapshot.snapshot, null, 2), 'utf8');
+      console.log(`Backup gemt: ${p}`);
+    } catch { /* ignorer */ }
   }
 }, 30000);
 
@@ -648,6 +668,113 @@ app.post('/api/graph/send-report', async (req, res) => {
   const { subject, markdown } = req.body ?? {};
   if (!subject || !markdown) return res.status(400).json({ ok: false, reason: 'Mangler emne eller indhold' });
   res.json(await graphSendMail(String(subject), String(markdown)));
+});
+
+// ---- Backup ----
+app.post('/api/backup/now', (_req, res) => {
+  if (!lastSnapshot) return res.json({ ok: false, reason: 'Ingen data endnu – åbn appen mindst én gang først.' });
+  try {
+    const filePath = join(BACKUP_DIR, `orbit-backup-${stamp()}.json`);
+    writeFileSync(filePath, JSON.stringify(lastSnapshot.snapshot, null, 2), 'utf8');
+    res.json({ ok: true, path: filePath, count: lastSnapshot.snapshot.tasks?.length ?? 0 });
+  } catch (err) {
+    res.status(500).json({ ok: false, reason: String(err) });
+  }
+});
+
+app.get('/api/backup/list', (_req, res) => {
+  try {
+    const files = readdirSync(BACKUP_DIR)
+      .filter((f) => f.endsWith('.json'))
+      .map((name) => {
+        const st = statSync(join(BACKUP_DIR, name));
+        return { name, size: st.size, mtime: st.mtime.toISOString() };
+      })
+      .sort((a, b) => b.mtime.localeCompare(a.mtime))
+      .slice(0, 30);
+    res.json({ ok: true, files });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
+});
+
+app.post('/api/backup/restore', (req, res) => {
+  const { name } = req.body ?? {};
+  if (!name || !/^[\w.-]+\.json$/.test(String(name))) {
+    return res.status(400).json({ ok: false, reason: 'Ugyldigt backup-navn' });
+  }
+  try {
+    const data = JSON.parse(readFileSync(join(BACKUP_DIR, String(name)), 'utf8'));
+    res.json({ ok: true, snapshot: data });
+  } catch (err) {
+    res.status(404).json({ ok: false, reason: String(err) });
+  }
+});
+
+// ---- Kunde-statusside (offentlig, token-beskyttet) ----
+const STATUS_LABELS = { backlog: 'Backlog', todo: 'Planlagt', inprogress: 'I gang', inreview: 'Til gennemgang', done: 'Færdig', canceled: 'Annulleret' };
+
+app.get('/public/status/:token', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  if (!lastSnapshot) {
+    return res.status(503).send('<!doctype html><html lang="da"><body style="font-family:sans-serif;padding:2rem">Ingen synkroniseret data endnu – projektet vises, så snart ejeren åbner Orbit.</body></html>');
+  }
+  const snap = lastSnapshot.snapshot;
+  const project = (snap.projects ?? []).find((p) => p.publicToken === req.params.token);
+  if (!project) {
+    return res.status(404).send('<!doctype html><html lang="da"><body style="font-family:sans-serif;padding:2rem">Ukendt eller inaktivt delingslink.</body></html>');
+  }
+  const tasks = (snap.tasks ?? []).filter((t) => t.projectId === project.id);
+  const open = tasks.filter((t) => t.status !== 'done' && t.status !== 'canceled');
+  const done = tasks.filter((t) => t.status === 'done');
+  const pct = tasks.length ? Math.round((done.length / tasks.length) * 100) : 0;
+  const today = todayStr();
+  const overdue = open.filter((t) => t.dueDate && t.dueDate < today).slice(0, 5);
+  const upcoming = open.filter((t) => t.dueDate && t.dueDate >= today).sort((a, b) => a.dueDate.localeCompare(b.dueDate)).slice(0, 5);
+  const recentDone = [...done].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5);
+  const row = (t) => `<li><strong>${esc(project.key)}-${t.number}</strong> ${esc(t.title)} <span class="due">${t.dueDate ? `· frist ${esc(t.dueDate)}` : ''}</span></li>`;
+  const counts = Object.entries(STATUS_LABELS)
+    .map(([key, label]) => {
+      const n = tasks.filter((t) => t.status === key).length;
+      return n > 0 ? `<span class="chip">${label}: ${n}</span>` : '';
+    })
+    .filter(Boolean)
+    .join(' ');
+  const html = `<!doctype html>
+<html lang="da"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Status – ${esc(project.name)}</title>
+<style>
+  body{font-family:'Segoe UI',system-ui,sans-serif;background:#17181c;color:#e4e4e7;margin:0;padding:2.5rem 1.5rem;display:flex;justify-content:center}
+  main{max-width:640px;width:100%}
+  h1{font-size:1.6rem;margin:0 0 .25rem}
+  p.sub{color:#a1a1aa;margin:0 0 1.5rem}
+  .card{background:#1e1f24;border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:1.25rem 1.5rem;margin-bottom:1rem}
+  .bar{height:10px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden;margin:.5rem 0 .25rem}
+  .bar>div{height:100%;background:linear-gradient(90deg,#6366f1,#818cf8);border-radius:99px}
+  .pct{font-size:1.8rem;font-weight:700}
+  h2{font-size:.95rem;text-transform:uppercase;letter-spacing:.05em;color:#a1a1aa;margin:0 0 .75rem}
+  ul{list-style:none;margin:0;padding:0}
+  li{padding:.45rem 0;border-top:1px solid rgba(255,255,255,.06);font-size:.95rem}
+  .due{color:#a1a1aa;font-size:.85rem}
+  .chip{display:inline-block;background:rgba(99,102,241,.12);color:#a5b4fc;border-radius:99px;padding:.2rem .7rem;margin:.15rem .15rem 0 0;font-size:.8rem}
+  .foot{color:#71717a;font-size:.75rem;margin-top:1.5rem;text-align:center}
+  .empty{color:#71717a;font-style:italic}
+</style></head><body><main>
+<h1>${esc(project.name)}</h1>
+<p class="sub">${esc(project.description ?? '')}</p>
+<div class="card">
+  <h2>Fremdrift</h2>
+  <div class="pct">${pct}%</div>
+  <div class="bar"><div style="width:${pct}%"></div></div>
+  <div>${tasks.length} opgaver · ${open.length} åbne · ${done.length} færdige</div>
+  <div style="margin-top:.75rem">${counts}</div>
+</div>
+<div class="card"><h2>Overskredne frister</h2><ul>${overdue.length ? overdue.map(row).join('') : '<li class="empty">Ingen – alle frister overholdt.</li>'}</ul></div>
+<div class="card"><h2>Kommende frister</h2><ul>${upcoming.length ? upcoming.map(row).join('') : '<li class="empty">Ingen planlagte frister.</li>'}</ul></div>
+<div class="card"><h2>Senest færdiggjort</h2><ul>${recentDone.length ? recentDone.map(row).join('') : '<li class="empty">Endnu ingen afsluttede opgaver.</li>'}</ul></div>
+<p class="foot">Opdateres automatisk fra Orbit · ${esc(new Date().toISOString().slice(0, 10))}</p>
+</main></body></html>`;
+  res.send(html);
 });
 
 server.listen(PORT, () => {

@@ -54,6 +54,56 @@ export interface Task {
   comments: Comment[];
   order: number; // rækkefølge i kolonne/liste
   recurrence?: 'daily' | 'weekly' | 'monthly' | null; // opret næste instans når opgaven afsluttes
+  blockedBy?: string[]; // id'er på opgaver der blokerer denne
+  customFields?: Record<string, string | number>; // fieldDefId -> værdi
+}
+
+export interface TimeEntry {
+  id: string;
+  taskId: string;
+  userId: string;
+  startedAt: string; // ISO
+  endedAt: string | null; // ISO, null = timer kører
+}
+
+export interface AppNotification {
+  id: string;
+  userId: string; // modtager
+  text: string;
+  taskId: string | null;
+  read: boolean;
+  createdAt: string; // ISO
+}
+
+export interface TrashItem {
+  task: Task;
+  deletedAt: string; // ISO
+}
+
+export interface CustomFieldDef {
+  id: string;
+  projectId: string;
+  name: string;
+  type: 'text' | 'number' | 'select';
+  options?: string[]; // kun ved select
+}
+
+export interface SavedView {
+  id: string;
+  name: string;
+  filters: {
+    query: string;
+    status: string; // 'all' eller TaskStatus
+    priority: string; // 'all' eller Priority
+    groupBy: string; // 'none' | 'status' | 'project' | 'assignee'
+  };
+  createdAt: string;
+}
+
+export interface AutomationSettings {
+  doneTeams: boolean; // besked til Teams når opgave afsluttes
+  doneNotifyAssignee: boolean; // notifikation til ansvarlig ved afslutning
+  urgentAssigneeId: string | null; // tildel denne person når prioritet bliver kritisk
 }
 
 export interface Sprint {
@@ -72,6 +122,7 @@ export interface Project {
   key: string; // fx "APP"
   color: string;
   description: string;
+  publicToken?: string | null; // kunde-statusside ( companion /public/status/<token> )
 }
 
 export interface ActivityEntry {

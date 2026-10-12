@@ -31,8 +31,23 @@ Et moderne, dansksproget projektstyringsværktøj til Windows – inspireret af 
 - **Windows-notifikationer** – toast ved afsluttede opgaver og morgen-overblik
 - **Teams-webhooks** – besked til kanal ved afsluttede opgaver + automatisk uge-rapport
 - **Microsoft 365 / Outlook** – officielt device-code-login: hent To Do-opgaver, se møder, lav opgaver direkte fra mails
-- **AI-assistent** – foreslå underopgaver og opsummér kommentarer (OpenAI-kompatibel, nøglen gemmes kun lokalt)
+- **AI-assistent** – foreslå underopgaver, opsummér kommentarer og foreslå din næste opgave (OpenAI-kompatibel, nøglen gemmes kun lokalt)
 - **Morgen-påmindelser** + **automatisk uge-rapport** på valgte tidspunkter
+- **Synkronisering & team** – del arbejdsområdet på netværket, eller kør `server/sync-server.mjs` på din egen server med token-auth og sync over internettet
+- **Kunde-statusside** – read-only delingslink pr. projekt med live status (`/public/status/<token>`)
+- **Backup** – daglig automatisk sikkerhedskopi med ét klik gendannelse
+- **Automatisering** – Teams-besked ved afsluttede opgaver, notifikation til ansvarlig, auto-tildeling ved kritisk prioritet
+- **Papirkurv** – slettede opgaver kan gendannes i 30 dage
+
+### Samarbejde & struktur
+
+- **I dag-visning** – intelligent kø: "Fortsæt", "Skynd dig" og AI-forslag til næste opgave
+- **Tidsregistrering** – start/stop-timer på opgaver med dagssum
+- **Afhængigheder** – "blokeret af"-relationer, auto-forskydning og kritisk sti på tidslinjen
+- **Tilpasselige felter** – egne felter pr. projekt (tekst/tal/valgliste) som kolonner i tabellen
+- **Gemte visninger** – filtre du kan genbruge og dele
+- **Notifikationscenter** – @mentions og hændelser med udlæst/ulæst
+- **Dansk/engelsk** – sprog-skift i hele app-skallen
 
 | Team & kapacitet | Integrationer | Outlook & Microsoft 365 |
 |---|---|---|
@@ -76,7 +91,8 @@ React 19 · TypeScript · Vite · Tailwind CSS · Zustand · dnd-kit · Recharts
 
 ## Roadmap
 
-- [ ] Cloud-sync over internettet (i dag: samme netværk)
 - [ ] To-vejs-sync med Microsoft To Do
-- [ ] PDF-eksport
-- [ ] Kommentarer med @mention og notifikationer
+- [ ] PDF-eksport og rapportdesigner
+- [ ] Kommentar-redigering og svar-tråde
+- [ ] Oversættelse af alle views til engelsk (skallen er klar)
+- [ ] Mobilapp (PWA er installerbar i dag)

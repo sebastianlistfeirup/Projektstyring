@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { CalendarClock, Check, Plus, Sparkles, Trash2, X } from 'lucide-react';
+import { CalendarClock, Check, Play, Plus, Sparkles, Square, Trash2, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { PRIORITY_META, STATUS_META } from '../lib/constants';
 import { cn, formatDateShort, isOverdue, taskRef } from '../lib/utils';
 import { aiComplete } from '../lib/companion';
-import type { Priority, TaskStatus } from '../lib/types';
+import type { CustomFieldDef, Priority, Task, TaskStatus } from '../lib/types';
 import { Avatar, LabelChip, ProgressBar, StatusBadge } from '../components/common';
 
 export default function TaskDrawer() {
@@ -19,6 +19,14 @@ export default function TaskDrawer() {
   const addComment = useStore((s) => s.addComment);
   const addSubtask = useStore((s) => s.addSubtask);
   const toggleSubtask = useStore((s) => s.toggleSubtask);
+  const timeEntries = useStore((s) => s.timeEntries);
+  const startTimer = useStore((s) => s.startTimer);
+  const stopTimer = useStore((s) => s.stopTimer);
+  const currentUserId = useStore((s) => s.currentUserId);
+  const allTasks = useStore((s) => s.tasks);
+  const fieldDefs = useStore((s) => s.fieldDefs);
+  const addFieldDef = useStore((s) => s.addFieldDef);
+  const removeFieldDef = useStore((s) => s.removeFieldDef);
   const me = useStore((s) => s.users.find((u) => u.id === s.currentUserId));
 
   const [comment, setComment] = useState('');
@@ -36,6 +44,19 @@ export default function TaskDrawer() {
     return () => window.removeEventListener('keydown', onKey);
   }, [task, selectTask]);
 
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const [depOpen, setDepOpen] = useState(false);
+  const [depSearch, setDepSearch] = useState('');
+  const [newFieldOpen, setNewFieldOpen] = useState(false);
+  const [newFieldName, setNewFieldName] = useState('');
+  const [newFieldType, setNewFieldType] = useState<'text' | 'number' | 'select'>('text');
+  const [newFieldOptions, setNewFieldOptions] = useState('');
+
   if (!task) return null;
 
   const project = projects.find((p) => p.id === task.projectId);
@@ -45,7 +66,53 @@ export default function TaskDrawer() {
   const subtaskDone = task.subtasks.filter((st) => st.done).length;
   const subtaskPct = task.subtasks.length ? Math.round((subtaskDone / task.subtasks.length) * 100) : task.status === 'done' ? 100 : 0;
 
+  // Tidsregistrering
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const taskEntries = timeEntries.filter((e) => e.taskId === task.id);
+  const activeEntry = taskEntries.find((e) => e.endedAt === null) ?? null;
+  const timerMine = activeEntry !== null && activeEntry.userId === currentUserId;
+  const timerOtherUser = activeEntry && !timerMine ? users.find((u) => u.id === activeEntry.userId) : null;
+  const entryMs = (e: (typeof taskEntries)[number]) => new Date(e.endedAt ?? now).getTime() - new Date(e.startedAt).getTime();
+  const todayMs = taskEntries.filter((e) => e.startedAt.slice(0, 10) === todayStr).reduce((s, e) => s + entryMs(e), 0);
+  const totalMs = taskEntries.reduce((s, e) => s + entryMs(e), 0);
+
+  // Afhængigheder
+  const blockedBy = task.blockedBy ?? [];
+  const blockerTasks = blockedBy.map((id) => allTasks.find((t) => t.id === id)).filter((t): t is Task => Boolean(t));
+  const openBlockers = blockerTasks.filter((b) => b.status !== 'done').length;
+  const depCandidates = allTasks.filter(
+    (t) => t.projectId === task.projectId && t.id !== task.id && !blockedBy.includes(t.id),
+  );
+  const depSearchTrimmed = depSearch.trim().toLowerCase();
+  const depFiltered = depSearchTrimmed
+    ? depCandidates.filter((t) => t.title.toLowerCase().includes(depSearchTrimmed))
+    : depCandidates;
+
+  // Tilpassede felter
+  const projectFieldDefs = fieldDefs.filter((f) => f.projectId === task.projectId);
+
   const close = () => selectTask(null);
+
+  const addBlocker = (id: string) => {
+    updateTask(task.id, { blockedBy: [...blockedBy, id] }, 'opdaterede afhængigheder');
+  };
+
+  const removeBlocker = (id: string) => {
+    updateTask(task.id, { blockedBy: blockedBy.filter((b) => b !== id) }, 'opdaterede afhængigheder');
+  };
+
+  const submitNewField = () => {
+    if (!newFieldName.trim()) return;
+    const options =
+      newFieldType === 'select'
+        ? newFieldOptions.split(',').map((o) => o.trim()).filter(Boolean)
+        : undefined;
+    addFieldDef(task.projectId, newFieldName, newFieldType, options);
+    setNewFieldName('');
+    setNewFieldOptions('');
+    setNewFieldType('text');
+    setNewFieldOpen(false);
+  };
 
   const submitComment = () => {
     if (!comment.trim()) return;
@@ -268,6 +335,76 @@ export default function TaskDrawer() {
               <option value="monthly">Månedlig</option>
             </select>
 
+            <FieldLabel>Blokeret af</FieldLabel>
+            <div className="relative">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {blockerTasks.map((b) => (
+                  <span
+                    key={b.id}
+                    className="flex items-center gap-1 rounded-md bg-zinc-100 py-1 pl-2 pr-1 text-[11px] font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300"
+                  >
+                    <span className="max-w-[10rem] truncate" title={`${taskRef(b, projects)} · ${b.title}`}>
+                      {taskRef(b, projects)} · {b.title}
+                    </span>
+                    <button
+                      onClick={() => removeBlocker(b.id)}
+                      title="Fjern blokering"
+                      className="grid h-4 w-4 place-items-center rounded text-zinc-400 transition-colors hover:text-zinc-700 dark:hover:text-zinc-200"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+                <button onClick={() => setDepOpen((o) => !o)} className="btn-outline px-2 py-1 text-[11px]">
+                  <Plus className="h-3 w-3" />
+                  Tilføj…
+                </button>
+              </div>
+              {depOpen && (
+                <div className="glass-panel absolute left-0 top-full z-30 mt-1 w-72 rounded-xl p-2 shadow-panel">
+                  <input
+                    autoFocus
+                    value={depSearch}
+                    onChange={(e) => setDepSearch(e.target.value)}
+                    placeholder="Søg efter opgave …"
+                    className="input mb-1.5 w-full py-1.5 text-xs"
+                  />
+                  <div className="max-h-44 overflow-y-auto">
+                    {depFiltered.map((t) => (
+                      <button
+                        key={t.id}
+                        onClick={() => {
+                          addBlocker(t.id);
+                          setDepSearch('');
+                          setDepOpen(false);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-zinc-100 dark:hover:bg-white/[0.06]"
+                      >
+                        <span className="shrink-0 font-mono text-[10px] font-semibold text-zinc-400 dark:text-zinc-500">
+                          {taskRef(t, projects)}
+                        </span>
+                        <span className="truncate">{t.title}</span>
+                      </button>
+                    ))}
+                    {depFiltered.length === 0 && (
+                      <p className="px-2 py-1.5 text-xs text-zinc-400">Ingen opgaver at tilføje.</p>
+                    )}
+                  </div>
+                </div>
+              )}
+              {blockerTasks.length > 0 &&
+                (openBlockers > 0 ? (
+                  <p className="mt-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                    {openBlockers} af {blockerTasks.length} blokere er ikke færdige
+                  </p>
+                ) : (
+                  <p className="mt-1.5 flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    <Check className="h-3.5 w-3.5" />
+                    Alle blokere færdige
+                  </p>
+                ))}
+            </div>
+
             <FieldLabel>Points</FieldLabel>
             <input
               type="number"
@@ -295,6 +432,81 @@ export default function TaskDrawer() {
                 </button>
               ))}
             </div>
+
+            {projectFieldDefs.map((field) => (
+              <div key={field.id} className="contents">
+                <FieldLabel>
+                  <span className="flex items-center gap-1">
+                    {field.name}
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`Slet feltet "${field.name}"? Værdier fjernes fra opgaverne.`)) {
+                          removeFieldDef(field.id);
+                        }
+                      }}
+                      title="Slet felt"
+                      className="text-zinc-400 transition-colors hover:text-rose-500"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                </FieldLabel>
+                <CustomFieldInput field={field} task={task} />
+              </div>
+            ))}
+            <div className="contents">
+              <span />
+              <div>
+                {newFieldOpen ? (
+                  <div className="glass-panel space-y-2 rounded-xl p-3">
+                    <input
+                      autoFocus
+                      value={newFieldName}
+                      onChange={(e) => setNewFieldName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') submitNewField();
+                        if (e.key === 'Escape') setNewFieldOpen(false);
+                      }}
+                      placeholder="Feltnavn …"
+                      className="input w-full py-1.5 text-xs"
+                    />
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={newFieldType}
+                        onChange={(e) => setNewFieldType(e.target.value as 'text' | 'number' | 'select')}
+                        className="input w-auto cursor-pointer py-1.5 text-xs"
+                        title="Felttype"
+                      >
+                        <option value="text">Tekst</option>
+                        <option value="number">Tal</option>
+                        <option value="select">Valgliste</option>
+                      </select>
+                      {newFieldType === 'select' && (
+                        <input
+                          value={newFieldOptions}
+                          onChange={(e) => setNewFieldOptions(e.target.value)}
+                          placeholder="Muligheder, adskilt af komma …"
+                          className="input w-full py-1.5 text-xs"
+                        />
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button onClick={submitNewField} className="btn-primary px-2.5 py-1 text-xs">
+                        Tilføj
+                      </button>
+                      <button onClick={() => setNewFieldOpen(false)} className="btn-ghost px-2 py-1 text-xs">
+                        Annullér
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={() => setNewFieldOpen(true)} className="btn-outline text-xs">
+                    <Plus className="h-3.5 w-3.5" />
+                    Nyt felt
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* Beskrivelse */}
@@ -309,6 +521,46 @@ export default function TaskDrawer() {
               placeholder="Tilføj en beskrivelse …"
               className="input resize-none leading-relaxed"
             />
+          </section>
+
+          {/* Tidsregistrering */}
+          <section>
+            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+              Tidsregistrering
+            </h3>
+            <div className="glass-panel rounded-xl p-3.5">
+              <div className="flex items-center gap-3">
+                {!activeEntry && (
+                  <button onClick={() => startTimer(task.id)} className="btn-outline text-xs">
+                    <Play className="h-3.5 w-3.5" />
+                    Start tid
+                  </button>
+                )}
+                {activeEntry && timerMine && (
+                  <>
+                    <button onClick={stopTimer} className="btn-primary text-xs">
+                      <Square className="h-3.5 w-3.5" />
+                      Stop tid
+                    </button>
+                    <span className="text-sm font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+                      {fmtHM(now - new Date(activeEntry.startedAt).getTime())}
+                    </span>
+                  </>
+                )}
+                {activeEntry && !timerMine && timerOtherUser && (
+                  <span className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+                    <span className="relative flex h-2 w-2">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                    </span>
+                    {timerOtherUser.name} registrerer tid nu
+                  </span>
+                )}
+              </div>
+              <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                I dag: {fmtHM(todayMs)} · Samlet: {fmtHours(totalMs)}
+              </p>
+            </div>
           </section>
 
           {/* AI-assistent */}
@@ -489,6 +741,65 @@ export default function TaskDrawer() {
       </aside>
     </div>
   );
+}
+
+function CustomFieldInput({ field, task }: { field: CustomFieldDef; task: Task }) {
+  const setTaskFieldValue = useStore((s) => s.setTaskFieldValue);
+  const raw = task.customFields?.[field.id];
+  const [draft, setDraft] = useState(raw == null ? '' : String(raw));
+
+  useEffect(() => {
+    setDraft(raw == null ? '' : String(raw));
+  }, [raw]);
+
+  if (field.type === 'select') {
+    return (
+      <select
+        value={raw == null ? '' : String(raw)}
+        onChange={(e) => setTaskFieldValue(task.id, field.id, e.target.value || null)}
+        className="input w-fit py-1.5"
+      >
+        <option value="">—</option>
+        {(field.options ?? []).map((o) => (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
+  const save = () => {
+    if (draft.trim() === '') {
+      setTaskFieldValue(task.id, field.id, null);
+      return;
+    }
+    const value = field.type === 'number' ? Number(draft) : draft;
+    setTaskFieldValue(task.id, field.id, typeof value === 'number' && Number.isNaN(value) ? null : value);
+  };
+
+  return (
+    <input
+      type={field.type === 'number' ? 'number' : 'text'}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={save}
+      placeholder="—"
+      className="input w-40 py-1.5"
+    />
+  );
+}
+
+function fmtHM(ms: number): string {
+  const totalMin = Math.max(0, Math.floor(ms / 60000));
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return `${h}t ${m}m`;
+}
+
+function fmtHours(ms: number): string {
+  const rounded = Math.round((ms / 3600000) * 10) / 10;
+  return `${rounded.toLocaleString('da-DK', { maximumFractionDigits: 1 })}t`;
 }
 
 function FieldLabel({ children }: { children: React.ReactNode }) {

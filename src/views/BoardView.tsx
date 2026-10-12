@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -12,7 +12,7 @@ import {
 } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { CalendarClock, CheckSquare, MessageSquare, Plus, X } from 'lucide-react';
+import { CalendarClock, CheckSquare, Lock, MessageSquare, Plus, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { STATUS_META, PRIORITY_META } from '../lib/constants';
 import { cn, formatDateShort, isOverdue, taskRef } from '../lib/utils';
@@ -219,6 +219,14 @@ function TaskCard({ task, dragging = false, fresh = false }: { task: Task; dragg
   const projects = useStore((s) => s.projects);
   const users = useStore((s) => s.users);
   const labels = useStore((s) => s.labels);
+  const allTasks = useStore((s) => s.tasks);
+  const timeEntries = useStore((s) => s.timeEntries);
+
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
 
@@ -232,6 +240,11 @@ function TaskCard({ task, dragging = false, fresh = false }: { task: Task; dragg
   const subtaskDone = task.subtasks.filter((st) => st.done).length;
   const subtaskPct = task.subtasks.length ? Math.round((subtaskDone / task.subtasks.length) * 100) : task.status === 'done' ? 100 : 0;
   const taskLabels = labels.filter((l) => task.labelIds.includes(l.id));
+
+  const activeEntry = timeEntries.find((e) => e.taskId === task.id && e.endedAt === null) ?? null;
+  const blockedIds = task.blockedBy ?? [];
+  const hasBlockers = blockedIds.length > 0;
+  const hasOpenBlocker = hasBlockers && blockedIds.some((id) => allTasks.find((t) => t.id === id)?.status !== 'done');
 
   const cyclePriority = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -288,6 +301,29 @@ function TaskCard({ task, dragging = false, fresh = false }: { task: Task; dragg
 
         <span className="flex-1" />
 
+        {activeEntry && (
+          <span
+            title="Tid registreres"
+            className="flex shrink-0 items-center gap-1 rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-emerald-600 dark:text-emerald-400"
+          >
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            </span>
+            {fmtHM(now - new Date(activeEntry.startedAt).getTime())}
+          </span>
+        )}
+        {hasBlockers && (
+          <span title="Har afhængigheder" className="shrink-0">
+            <Lock
+              className={cn(
+                'h-3.5 w-3.5',
+                hasOpenBlocker ? 'text-amber-500 dark:text-amber-400' : 'text-zinc-400 dark:text-zinc-500',
+              )}
+            />
+          </span>
+        )}
+
         <button
           onClick={cyclePriority}
           title={`Prioritet: ${PRIORITY_META[task.priority].label} – klik for at ændre`}
@@ -316,4 +352,11 @@ function TaskCard({ task, dragging = false, fresh = false }: { task: Task; dragg
       {task.subtasks.length > 0 && <ProgressBar value={subtaskPct} className="mt-2.5" />}
     </article>
   );
+}
+
+function fmtHM(ms: number): string {
+  const totalMin = Math.max(0, Math.floor(ms / 60000));
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return `${h}t ${m}m`;
 }

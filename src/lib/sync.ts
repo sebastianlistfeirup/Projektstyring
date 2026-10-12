@@ -3,7 +3,7 @@
 import { nanoid } from 'nanoid';
 import { useStore } from '../store/useStore';
 import type { SyncSnapshotPayload } from './companion';
-import { syncPull, syncPush } from './companion';
+import { syncPull, syncPush, getSyncToken } from './companion';
 import type { ActivityEntry, Label, Project, Sprint, Task, User } from './types';
 
 const CLIENT_KEY = 'orbit-client-id';
@@ -93,6 +93,12 @@ export async function pullAndMerge(): Promise<boolean> {
   return true;
 }
 
+// Bruges ved gendannelse fra backup: fletter et vilkårligt snapshot ind lokalt
+export function applySnapshot(snapshot: SyncSnapshotPayload): void {
+  mergeSnapshot(snapshot);
+  lastSyncedAt = snapshot.updatedAt ?? '';
+}
+
 export async function pushNow(): Promise<boolean> {
   const s = useStore.getState();
   const me = s.users.find((u) => u.id === s.currentUserId);
@@ -123,7 +129,7 @@ function connectWs() {
   ws.onopen = () => {
     const s = useStore.getState();
     const me = s.users.find((u) => u.id === s.currentUserId);
-    ws?.send(JSON.stringify({ type: 'hello', clientId: getClientId(), user: { id: s.currentUserId, name: me?.name ?? 'Ukendt' } }));
+    ws?.send(JSON.stringify({ type: 'hello', clientId: getClientId(), token: getSyncToken(), user: { id: s.currentUserId, name: me?.name ?? 'Ukendt' } }));
   };
   ws.onmessage = (event) => {
     try {

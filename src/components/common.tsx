@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Flag, Users } from 'lucide-react';
 import type { Priority, TaskStatus, User } from '../lib/types';
 import { AVATAR_COLORS, LABEL_COLOR_STYLES, PRIORITY_META, STATUS_META } from '../lib/constants';
+import { useLang, t } from '../lib/i18n';
 import { cn } from '../lib/utils';
 
 const AVATAR_SIZES = {
@@ -20,6 +21,8 @@ export function Avatar({
   size?: keyof typeof AVATAR_SIZES;
   className?: string;
 }) {
+  // Abonnér på sprog, så tooltip re-render'er ved skift
+  useLang();
   if (!user) {
     return (
       <div
@@ -28,7 +31,7 @@ export function Avatar({
           AVATAR_SIZES[size],
           className,
         )}
-        title="Ikke tildelt"
+        title={t('common.notAssigned')}
       >
         <Users className="h-[60%] w-[60%]" />
       </div>

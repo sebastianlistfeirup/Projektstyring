@@ -43,13 +43,6 @@ export default function TimelineView() {
     [tasks, activeProjectId],
   );
 
-  const activeSprints = useMemo(
-    () => sprints.filter((sp) => sp.status === 'active' && (!activeProjectId || sp.projectId === activeProjectId)),
-    [sprints, activeProjectId],
-  );
-
-  const [today] = useState(() => new Date());
-
   const rows = useMemo(() => {
     const dated = filtered
       .filter((t) => t.startDate || t.dueDate)
@@ -63,6 +56,55 @@ export default function TimelineView() {
     );
     return dated;
   }, [filtered, projects]);
+
+  // Kritisk sti: længste kæde af blockedBy-relationer blandt synlige opgaver (DAG + cyklus-sikring)
+  const criticalIds = useMemo(() => {
+    const visible = rows.map((r) => r.task);
+    const visibleIds = new Set(visible.map((t) => t.id));
+    const dependents = new Map<string, string[]>();
+    for (const t of visible) {
+      for (const b of t.blockedBy ?? []) {
+        if (!visibleIds.has(b)) continue;
+        dependents.set(b, [...(dependents.get(b) ?? []), t.id]);
+      }
+    }
+    const memo = new Map<string, number>();
+    const visiting = new Set<string>();
+    const depth = (id: string): number => {
+      if (memo.has(id)) return memo.get(id)!;
+      if (visiting.has(id)) return 0;
+      visiting.add(id);
+      let best = 0;
+      for (const dep of dependents.get(id) ?? []) best = Math.max(best, 1 + depth(dep));
+      visiting.delete(id);
+      memo.set(id, best);
+      return best;
+    };
+    let maxDepth = 0;
+    for (const id of visibleIds) maxDepth = Math.max(maxDepth, depth(id));
+    if (maxDepth < 1) return new Set<string>();
+    const critical = new Set<string>();
+    const collect = (id: string, remaining: number): void => {
+      if (remaining < 0 || critical.has(id)) return;
+      critical.add(id);
+      if (remaining === 0) return;
+      for (const dep of dependents.get(id) ?? []) {
+        if (depth(dep) === remaining - 1) {
+          collect(dep, remaining - 1);
+          break;
+        }
+      }
+    };
+    for (const id of visibleIds) if (depth(id) === maxDepth) collect(id, maxDepth);
+    return critical;
+  }, [rows]);
+
+  const activeSprints = useMemo(
+    () => sprints.filter((sp) => sp.status === 'active' && (!activeProjectId || sp.projectId === activeProjectId)),
+    [sprints, activeProjectId],
+  );
+
+  const [today] = useState(() => new Date());
 
   const timeline = useMemo(() => {
     if (rows.length === 0) return { days: [] as Date[], windowStart: startOfDay(today), todayIndex: -1 };
@@ -113,6 +155,34 @@ export default function TimelineView() {
     .filter((b) => b.width > 0);
 
   const offsetOf = (d: Date) => differenceInCalendarDays(d, windowStart) * DAY_W;
+
+  // Rækkernes placering samlet først, så afhængighedspile og kritisk sti kender y-positionerne
+  const bandsHeight = bands.length * 32;
+  const rowData = rows.map(({ task, start, end }, rowIndex) => {
+    const clampedStart = start < windowStart ? windowStart : start;
+    const clampedEnd = end > windowEnd ? windowEnd : end;
+    const left = offsetOf(clampedStart);
+    const width = Math.max(10, (differenceInCalendarDays(clampedEnd, clampedStart) + 1) * DAY_W - 3);
+    const done = task.status === 'done';
+    return { task, left, width, done, rowIndex, clampedStart, clampedEnd };
+  });
+
+  const rowByTaskId = new Map(rowData.map((r) => [r.task.id, r]));
+  const dependencyEdges = rowData.flatMap((a) =>
+    (a.task.blockedBy ?? [])
+      .filter((bId) => rowByTaskId.has(bId))
+      .map((bId) => {
+        const b = rowByTaskId.get(bId)!;
+        return {
+          key: `${bId}->${a.task.id}`,
+          x1: b.left + b.width,
+          y1: bandsHeight + b.rowIndex * 44 + 22,
+          x2: a.left,
+          y2: bandsHeight + a.rowIndex * 44 + 22,
+          hot: !b.done,
+        };
+      }),
+  );
 
   return (
     <div className="h-full overflow-auto">
@@ -216,12 +286,36 @@ export default function TimelineView() {
             </div>
           ))}
 
-          {rows.map(({ task, start, end }) => {
-            const clampedStart = start < windowStart ? windowStart : start;
-            const clampedEnd = end > windowEnd ? windowEnd : end;
-            const left = offsetOf(clampedStart);
-            const width = Math.max(10, (differenceInCalendarDays(clampedEnd, clampedStart) + 1) * DAY_W - 3);
-            const done = task.status === 'done';
+          <svg
+            className="pointer-events-none absolute top-0 z-[15]"
+            style={{ left: LABEL_W }}
+            width={totalWidth}
+            height={bandsHeight + rowData.length * 44}
+            aria-hidden="true"
+          >
+            {dependencyEdges.map((e) => {
+              const dir = e.x2 >= e.x1 ? 1 : -1;
+              const dx = Math.max(16, Math.abs(e.x2 - e.x1) / 2) * dir;
+              const stroke = e.hot ? 'rgba(251,191,36,0.8)' : 'rgba(113,113,122,0.5)';
+              return (
+                <g key={e.key}>
+                  <path
+                    d={`M ${e.x1} ${e.y1} C ${e.x1 + dx} ${e.y1}, ${e.x2 - dx} ${e.y2}, ${e.x2} ${e.y2}`}
+                    fill="none"
+                    stroke={stroke}
+                    strokeWidth={e.hot ? 2 : 1.5}
+                  />
+                  <polygon
+                    points={`${e.x2},${e.y2} ${e.x2 - 5 * dir},${e.y2 - 3.5} ${e.x2 - 5 * dir},${e.y2 + 3.5}`}
+                    fill={stroke}
+                  />
+                </g>
+              );
+            })}
+          </svg>
+
+          {rowData.map(({ task, left, width, done, clampedStart, clampedEnd }) => {
+            const critical = criticalIds.has(task.id);
             return (
               <div key={task.id} className="relative flex h-11 border-b border-zinc-200/70 dark:border-white/[0.05]">
                 <div className="sticky left-0 z-20 flex w-64 shrink-0 items-center gap-2 bg-zinc-100 px-2 dark:bg-[#17181c]">
@@ -233,7 +327,14 @@ export default function TimelineView() {
                     <span className="w-14 shrink-0 truncate text-[11px] font-semibold tabular-nums text-zinc-400 dark:text-zinc-500">
                       {taskRef(task, projects)}
                     </span>
-                    <span className="truncate text-[13px] text-zinc-700 transition-colors group-hover:text-indigo-600 dark:text-zinc-200 dark:group-hover:text-indigo-300">
+                    <span
+                      className={cn(
+                        'truncate text-[13px] transition-colors',
+                        critical
+                          ? 'text-rose-700 group-hover:text-rose-700 dark:text-rose-300 dark:group-hover:text-rose-300'
+                          : 'text-zinc-700 group-hover:text-indigo-600 dark:text-zinc-200 dark:group-hover:text-indigo-300',
+                      )}
+                    >
                       {task.title}
                     </span>
                   </button>
@@ -246,6 +347,7 @@ export default function TimelineView() {
                       'absolute top-1/2 flex h-3 -translate-y-1/2 items-center overflow-hidden rounded-full',
                       BAR_TEXT[task.status],
                       done && 'opacity-60',
+                      critical && 'ring-2 ring-rose-400/50',
                     )}
                     style={{ left, width, backgroundColor: STATUS_HEX[task.status] }}
                   >

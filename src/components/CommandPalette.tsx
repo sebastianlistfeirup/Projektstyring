@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CornerDownLeft, FilePlus2, Moon, RefreshCcw, Search } from 'lucide-react';
+import { CornerDownLeft, FilePlus2, Languages, Moon, RefreshCcw, Search } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { VIEWS } from '../lib/nav';
+import { useI18n, useLang, t } from '../lib/i18n';
 import { cn, taskRef } from '../lib/utils';
 import { StatusBadge } from './common';
 
@@ -29,6 +30,10 @@ export default function CommandPalette() {
   const addTask = useStore((s) => s.addTask);
   const toggleTheme = useStore((s) => s.toggleTheme);
   const resetWorkspace = useStore((s) => s.resetWorkspace);
+  const toggleLang = useI18n((s) => s.toggleLang);
+
+  // Abonnér på sprog, så rækker og labels re-render'er ved skift
+  const lang = useLang();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -64,7 +69,7 @@ export default function CommandPalette() {
       list.push({
         id: 'create',
         group: 'handling',
-        label: `Opret opgave "${query.trim()}"${targetProject ? ` i ${targetProject.name}` : ''}`,
+        label: `${t('palette.createTask')} "${query.trim()}"${targetProject ? ` ${t('palette.in')} ${targetProject.name}` : ''}`,
         hint: 'Enter',
         run: () => {
           const projectId = activeProjectId ?? projects[0]?.id;
@@ -90,11 +95,17 @@ export default function CommandPalette() {
       list.push(...matches);
     }
 
-    VIEWS.filter((v) => !q || v.label.toLowerCase().includes(q) || v.keywords.some((k) => k.includes(q))).forEach((v) =>
+    VIEWS.filter(
+      (v) =>
+        !q ||
+        v.label.toLowerCase().includes(q) ||
+        t(v.labelKey).toLowerCase().includes(q) ||
+        v.keywords.some((k) => k.includes(q)),
+    ).forEach((v) =>
       list.push({
         id: `nav-${v.to}`,
         group: 'navigation',
-        label: `Gå til ${v.label}`,
+        label: `${t('palette.goto')} ${t(v.labelKey)}`,
         run: () => navigate(v.to),
       }),
     );
@@ -103,19 +114,25 @@ export default function CommandPalette() {
       {
         id: 'theme',
         group: 'handling',
-        label: 'Skift lyst / mørkt tema',
+        label: t('palette.theme'),
         run: toggleTheme,
+      },
+      {
+        id: 'lang',
+        group: 'handling',
+        label: t('palette.language'),
+        run: toggleLang,
       },
       {
         id: 'reset',
         group: 'handling',
-        label: 'Nulstil demo-data',
-        hint: 'gendanner eksempeldata',
+        label: t('palette.reset'),
+        hint: t('palette.resetHint'),
         run: () => resetWorkspace(),
       },
     );
     return list;
-  }, [query, tasks, projects, activeProjectId, addTask, selectTask, setActiveProject, navigate, toggleTheme, resetWorkspace]);
+  }, [query, tasks, projects, activeProjectId, addTask, selectTask, setActiveProject, navigate, toggleTheme, resetWorkspace, toggleLang, lang]);
 
   useEffect(() => setIndex(0), [rows.length]);
 
@@ -157,7 +174,7 @@ export default function CommandPalette() {
                 runRow(rows[index]);
               }
             }}
-            placeholder="Søg efter opgaver, eller opret en ny …"
+            placeholder={t('palette.placeholder')}
             className="w-full bg-transparent py-3.5 text-sm outline-none placeholder:text-zinc-400"
           />
           <kbd className="rounded border border-zinc-200 bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 dark:border-white/10 dark:bg-white/5 dark:text-zinc-400">
@@ -167,7 +184,9 @@ export default function CommandPalette() {
 
         <div className="max-h-[46vh] overflow-y-auto p-2">
           {rows.length === 0 && (
-            <p className="px-3 py-6 text-center text-sm text-zinc-500">Ingen resultater for "{query}"</p>
+            <p className="px-3 py-6 text-center text-sm text-zinc-500">
+              {t('palette.noResults')} "{query}"
+            </p>
           )}
           {groups.map((g) => {
             const groupRows = rows.filter((r) => r.group === g);
@@ -175,7 +194,7 @@ export default function CommandPalette() {
             return (
               <div key={g}>
                 <p className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                  {g === 'handling' ? 'Handlinger' : g === 'navigation' ? 'Navigation' : 'Opgaver'}
+                  {g === 'handling' ? t('palette.actions') : g === 'navigation' ? t('palette.navigation') : t('palette.tasks')}
                 </p>
                 {groupRows.map((row) => {
                   const idx = rows.indexOf(row);
@@ -195,6 +214,8 @@ export default function CommandPalette() {
                           <FilePlus2 className="h-4 w-4 shrink-0 text-indigo-500" />
                         ) : row.id === 'theme' ? (
                           <Moon className="h-4 w-4 shrink-0 text-zinc-400" />
+                        ) : row.id === 'lang' ? (
+                          <Languages className="h-4 w-4 shrink-0 text-zinc-400" />
                         ) : (
                           <RefreshCcw className="h-4 w-4 shrink-0 text-zinc-400" />
                         ))}

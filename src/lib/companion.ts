@@ -1,5 +1,20 @@
 // Klient-API til Orbit Companion (lokal server på 127.0.0.1:4310)
+// Token bruges også mod selvhostede sync-servere (server/sync-server.mjs).
 const BASE = 'http://127.0.0.1:4310';
+
+export function getSyncToken(): string {
+  return localStorage.getItem('orbit-sync-token') ?? '';
+}
+
+export function setSyncToken(token: string) {
+  if (token.trim()) localStorage.setItem('orbit-sync-token', token.trim());
+  else localStorage.removeItem('orbit-sync-token');
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getSyncToken();
+  return token ? { 'X-Orbit-Token': token } : {};
+}
 
 export interface CompanionStatus {
   ok: boolean;
@@ -20,7 +35,7 @@ export interface CompanionStatus {
 async function post<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return res.json() as Promise<T>;
@@ -212,7 +227,7 @@ export async function syncPush(
 
 export async function syncPull(): Promise<{ ok: boolean; snapshot?: SyncSnapshotPayload; updatedAt?: string } | null> {
   try {
-    const res = await fetch(`${BASE}/api/sync/state`, { signal: AbortSignal.timeout(4000) });
+    const res = await fetch(`${BASE}/api/sync/state`, { headers: authHeaders(), signal: AbortSignal.timeout(4000) });
     return (await res.json()) as { ok: boolean; snapshot?: SyncSnapshotPayload; updatedAt?: string };
   } catch {
     return null;
@@ -295,6 +310,40 @@ export async function graphPlannerTasks(): Promise<{ ok: boolean; items?: GraphP
   try {
     const res = await fetch(`${BASE}/api/graph/planner`, { signal: AbortSignal.timeout(15000) });
     return (await res.json()) as { ok: boolean; items?: GraphPlannerTask[]; reason?: string };
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+// ---------------- Backup ----------------
+export interface BackupFile {
+  name: string;
+  size: number;
+  mtime: string;
+}
+
+export async function createBackup(): Promise<{ ok: boolean; path?: string; count?: number; reason?: string }> {
+  try {
+    return await post('/api/backup/now');
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export async function listBackups(): Promise<{ ok: boolean; files?: BackupFile[]; reason?: string }> {
+  try {
+    const res = await fetch(`${BASE}/api/backup/list`, { headers: authHeaders(), signal: AbortSignal.timeout(4000) });
+    return (await res.json()) as { ok: boolean; files?: BackupFile[]; reason?: string };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function restoreBackup(
+  name: string,
+): Promise<{ ok: boolean; snapshot?: SyncSnapshotPayload; reason?: string }> {
+  try {
+    return await post('/api/backup/restore', { name });
   } catch {
     return { ok: false, reason: 'Companion-serveren svarer ikke' };
   }

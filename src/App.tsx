@@ -20,6 +20,7 @@ import MyWorkView from './views/MyWorkView';
 import TableView from './views/TableView';
 import TeamView from './views/TeamView';
 import TimelineView from './views/TimelineView';
+import TodayView from './views/TodayView';
 
 export default function App() {
   const theme = useStore((s) => s.theme);
@@ -35,16 +36,33 @@ export default function App() {
   // Tværgående synkronisering via companion-serveren
   useEffect(() => startSync(), []);
 
-  // Notifikationer + Teams-webhook når en opgave markeres færdig
+  // Automatiseringsregler: afslutning -> Teams/notifikation, kritisk -> tildeling
   useEffect(() => {
     const prev = previousTasks.current;
+    const state = useStore.getState();
     for (const task of tasks) {
       const before = prev.get(task.id);
-      if (before && before.status !== 'done' && task.status === 'done' && !notifiedDone.current.has(task.id)) {
+      if (!before) {
+        prev.set(task.id, task);
+        continue;
+      }
+      if (before.status !== 'done' && task.status === 'done' && !notifiedDone.current.has(task.id)) {
         notifiedDone.current.add(task.id);
         const text = `${taskRef(task, projects)} · ${task.title}`;
         void companionNotify('Opgave afsluttet', text);
-        void companionTeams('Opgave afsluttet i Orbit', text);
+        if (state.automation.doneTeams) void companionTeams('Opgave afsluttet i Orbit', text);
+        if (state.automation.doneNotifyAssignee && task.assigneeId && task.assigneeId !== state.currentUserId) {
+          state.addNotification(task.assigneeId, `Din opgave “${task.title}” blev afsluttet`, task.id);
+        }
+      }
+      if (
+        before.priority !== 'urgent' &&
+        task.priority === 'urgent' &&
+        state.automation.urgentAssigneeId &&
+        !task.assigneeId
+      ) {
+        state.updateTask(task.id, { assigneeId: state.automation.urgentAssigneeId }, 'sat kritisk prioritet');
+        state.addNotification(state.automation.urgentAssigneeId, `Kritisk opgave tildelt dig: “${task.title}”`, task.id);
       }
       prev.set(task.id, task);
     }
@@ -54,7 +72,8 @@ export default function App() {
     <HashRouter>
       <Routes>
         <Route element={<AppShell />}>
-          <Route index element={<Navigate to="/tavle" replace />} />
+          <Route index element={<Navigate to="/idag" replace />} />
+          <Route path="/idag" element={<TodayView />} />
           <Route path="/tavle" element={<BoardView />} />
           <Route path="/tabel" element={<TableView />} />
           <Route path="/tidslinje" element={<TimelineView />} />
@@ -66,7 +85,7 @@ export default function App() {
           <Route path="/import" element={<ImportView />} />
           <Route path="/integrationer" element={<IntegrationsView />} />
           <Route path="/outlook" element={<GraphView />} />
-          <Route path="*" element={<Navigate to="/tavle" replace />} />
+          <Route path="*" element={<Navigate to="/idag" replace />} />
         </Route>
       </Routes>
       <TaskDrawer />

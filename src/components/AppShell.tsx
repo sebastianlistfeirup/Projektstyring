@@ -3,8 +3,10 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { Moon, Plus, Search, Sun, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { VIEWS } from '../lib/nav';
+import { useI18n, useLang, t } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { Avatar } from './common';
+import NotificationCenter from './NotificationCenter';
 
 function openPalette() {
   window.dispatchEvent(new CustomEvent('orbit:open-palette'));
@@ -20,6 +22,10 @@ export default function AppShell() {
   const addProject = useStore((s) => s.addProject);
   const theme = useStore((s) => s.theme);
   const toggleTheme = useStore((s) => s.toggleTheme);
+  const toggleLang = useI18n((s) => s.toggleLang);
+
+  // Abonnér på sprog, så alle tekster re-render'er ved skift
+  const lang = useLang();
 
   const location = useLocation();
   const [adding, setAdding] = useState(false);
@@ -61,7 +67,8 @@ export default function AppShell() {
           <NavLink
             key={view.to}
             to={view.to}
-            title={view.label}
+            title={t(view.labelKey)}
+            aria-label={t(view.labelKey)}
             className={({ isActive }) =>
               cn(
                 'grid h-10 w-10 place-items-center rounded-xl transition-all duration-150',
@@ -77,7 +84,7 @@ export default function AppShell() {
         <div className="mt-auto flex flex-col items-center gap-2">
           <button
             onClick={toggleTheme}
-            title={theme === 'dark' ? 'Skift til lyst tema' : 'Skift til mørkt tema'}
+            title={theme === 'dark' ? t('shell.light') : t('shell.dark')}
             className="grid h-10 w-10 place-items-center rounded-xl text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/[0.06] dark:hover:text-zinc-100"
           >
             {theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
@@ -94,7 +101,7 @@ export default function AppShell() {
           </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-zinc-800 dark:text-zinc-100">Nordlys ApS</p>
-            <p className="text-[11px] text-zinc-500 dark:text-zinc-400">Workspace</p>
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t('shell.workspace')}</p>
           </div>
         </div>
 
@@ -104,7 +111,7 @@ export default function AppShell() {
             className="flex w-full items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-500 transition-colors hover:border-zinc-300 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-400 dark:hover:border-white/20"
           >
             <Search className="h-4 w-4" />
-            <span className="flex-1 text-left">Søg …</span>
+            <span className="flex-1 text-left">{t('shell.search')}</span>
             <kbd className="rounded border border-zinc-200 bg-zinc-100 px-1.5 text-[10px] font-medium text-zinc-500 dark:border-white/10 dark:bg-white/5 dark:text-zinc-400">
               Ctrl K
             </kbd>
@@ -112,10 +119,12 @@ export default function AppShell() {
         </div>
 
         <div className="mt-3 flex items-center justify-between px-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Projekter</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+            {t('shell.projects')}
+          </p>
           <button
             onClick={() => setAdding((v) => !v)}
-            title="Nyt projekt"
+            title={t('shell.newProject')}
             className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-200/70 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/[0.08] dark:hover:text-zinc-100"
           >
             {adding ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
@@ -133,7 +142,7 @@ export default function AppShell() {
             )}
           >
             <span className="grid h-2.5 w-2.5 place-items-center rounded-full bg-gradient-to-r from-indigo-400 to-violet-500" />
-            <span className="flex-1 truncate text-left">Alle projekter</span>
+            <span className="flex-1 truncate text-left">{t('shell.allProjects')}</span>
             <span className="text-[11px] text-zinc-400 dark:text-zinc-500">
               {tasks.filter((t) => t.status !== 'done' && t.status !== 'canceled').length}
             </span>
@@ -167,7 +176,7 @@ export default function AppShell() {
                   if (e.key === 'Escape') setAdding(false);
                 }}
                 onBlur={() => !name.trim() && setAdding(false)}
-                placeholder="Projektnavn …"
+                placeholder={t('shell.projectName')}
                 className="input py-1.5 text-sm"
               />
             </div>
@@ -175,14 +184,16 @@ export default function AppShell() {
         </div>
 
         <div className="border-t border-zinc-200/80 p-3 text-[11px] text-zinc-400 dark:border-white/[0.06] dark:text-zinc-500">
-          Data gemmes lokalt i browseren. Windows-notifikationer, Teams og eksport styres fra Integrationer-fanen.
+          {t('shell.footer')}
         </div>
       </aside>
 
       {/* Hovedindhold */}
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center gap-3 border-b border-zinc-200/80 bg-white/70 px-5 backdrop-blur dark:border-white/[0.06] dark:bg-[#17181c]/80">
-          <h1 className="truncate text-[15px] font-semibold">{currentView?.label ?? 'Orbit'}</h1>
+          <h1 className="truncate text-[15px] font-semibold">
+            {currentView ? t(currentView.labelKey) : 'Orbit'}
+          </h1>
           {activeProject && (
             <>
               <span className="text-zinc-300 dark:text-zinc-600">/</span>
@@ -193,9 +204,17 @@ export default function AppShell() {
             </>
           )}
           <div className="ml-auto flex items-center gap-2">
+            <NotificationCenter />
+            <button
+              onClick={toggleLang}
+              title="Skift sprog / Switch language"
+              className="btn-ghost px-2 text-xs font-semibold tracking-wide"
+            >
+              {lang === 'da' ? 'EN' : 'DA'}
+            </button>
             <button onClick={openPalette} className="btn-primary">
               <Plus className="h-4 w-4" />
-              Ny opgave
+              {t('shell.newTask')}
             </button>
           </div>
         </header>

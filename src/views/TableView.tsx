@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ChevronDown, ChevronUp, Search, Table2 } from 'lucide-react';
+import { BookmarkPlus, ChevronDown, ChevronUp, Search, Table2, X } from 'lucide-react';
 import { parseISO } from 'date-fns';
 import { useStore } from '../store/useStore';
 import { PRIORITY_META, STATUS_META, STATUS_ORDER } from '../lib/constants';
@@ -106,6 +106,10 @@ export default function TableView() {
   const sprints = useStore((s) => s.sprints);
   const activeProjectId = useStore((s) => s.activeProjectId);
   const selectTask = useStore((s) => s.selectTask);
+  const fieldDefs = useStore((s) => s.fieldDefs);
+  const savedViews = useStore((s) => s.savedViews);
+  const saveView = useStore((s) => s.saveView);
+  const deleteView = useStore((s) => s.deleteView);
 
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | TaskStatus>('all');
@@ -113,6 +117,21 @@ export default function TableView() {
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [viewName, setViewName] = useState('');
+
+  const activeFieldDefs = useMemo(
+    () => (activeProjectId ? fieldDefs.filter((f) => f.projectId === activeProjectId) : []),
+    [fieldDefs, activeProjectId],
+  );
+  const columnCount = 10 + activeFieldDefs.length;
+
+  const submitSaveView = () => {
+    const name = viewName.trim() || `Visning ${savedViews.length + 1}`;
+    saveView(name, { query, status: statusFilter, priority: priorityFilter, groupBy });
+    setViewName('');
+    setSaveOpen(false);
+  };
 
   const onSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -272,6 +291,20 @@ export default function TableView() {
             <span className="w-9 text-xs tabular-nums text-zinc-500 dark:text-zinc-400">{progress}%</span>
           </div>
         </td>
+        {activeFieldDefs.map((f) => {
+          const v = task.customFields?.[f.id];
+          return (
+            <td
+              key={f.id}
+              className={cn(
+                'px-3 py-2.5 text-sm text-zinc-600 dark:text-zinc-300',
+                f.type === 'number' && 'text-right tabular-nums',
+              )}
+            >
+              {v ?? <span className="text-zinc-400 dark:text-zinc-600">—</span>}
+            </td>
+          );
+        })}
       </tr>
     );
   };
@@ -284,6 +317,79 @@ export default function TableView() {
         <ViewHeader title="Tabel" subtitle="Sortér, filtrér og gruppér alle opgaver ét sted" />
 
         <div className="space-y-4">
+        {/* Gemte visninger */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {savedViews.map((v) => {
+            const isActive =
+              v.filters.query === query &&
+              v.filters.status === statusFilter &&
+              v.filters.priority === priorityFilter &&
+              v.filters.groupBy === groupBy;
+            return (
+              <span
+                key={v.id}
+                className={cn(
+                  'flex items-center gap-1 rounded-lg py-1 pl-2.5 pr-1 text-xs font-medium ring-1 ring-inset transition-colors',
+                  isActive
+                    ? 'bg-indigo-500/10 text-indigo-600 ring-indigo-500/30 dark:text-indigo-300'
+                    : 'bg-zinc-100 text-zinc-600 ring-zinc-200/80 hover:bg-zinc-200/60 dark:bg-white/[0.05] dark:text-zinc-300 dark:ring-white/[0.08] dark:hover:bg-white/[0.08]',
+                )}
+              >
+                <button
+                  onClick={() => {
+                    setQuery(v.filters.query);
+                    setStatusFilter(v.filters.status as 'all' | TaskStatus);
+                    setPriorityFilter(v.filters.priority as 'all' | Priority);
+                    setGroupBy(v.filters.groupBy as GroupBy);
+                  }}
+                  title={`Anvend visningen "${v.name}"`}
+                  className="max-w-[10rem] truncate"
+                >
+                  {v.name}
+                </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm(`Slet visningen "${v.name}"?`)) deleteView(v.id);
+                  }}
+                  title="Slet visning"
+                  className="grid h-4 w-4 place-items-center rounded text-zinc-400 transition-colors hover:text-rose-500"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            );
+          })}
+          <div className="relative">
+            <button onClick={() => setSaveOpen((o) => !o)} className="btn-outline text-xs">
+              <BookmarkPlus className="h-3.5 w-3.5" />
+              Gem visning
+            </button>
+            {saveOpen && (
+              <div className="glass-panel absolute left-0 top-full z-30 mt-1 w-60 rounded-xl p-2.5 shadow-panel">
+                <input
+                  autoFocus
+                  value={viewName}
+                  onChange={(e) => setViewName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') submitSaveView();
+                    if (e.key === 'Escape') setSaveOpen(false);
+                  }}
+                  placeholder={`Visning ${savedViews.length + 1}`}
+                  className="input w-full py-1.5 text-xs"
+                />
+                <div className="mt-2 flex items-center gap-1.5">
+                  <button onClick={submitSaveView} className="btn-primary px-2.5 py-1 text-xs">
+                    Gem
+                  </button>
+                  <button onClick={() => setSaveOpen(false)} className="btn-ghost px-2 py-1 text-xs">
+                    Annullér
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Filter-bar */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
@@ -360,11 +466,14 @@ export default function TableView() {
                     <HeaderCell label="Frist" sortKey="due" activeKey={sortKey} dir={sortDir} onSort={onSort} />
                     <HeaderCell label="Points" sortKey="points" activeKey={sortKey} dir={sortDir} onSort={onSort} className="hidden sm:table-cell" />
                     <HeaderCell label="Fremdrift" sortKey="progress" activeKey={sortKey} dir={sortDir} onSort={onSort} />
+                    {activeFieldDefs.map((f) => (
+                      <PlainHeaderCell key={f.id} label={f.name} />
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
                   {groups.map((group) => (
-                    <GroupRows key={group.id} group={group} showHeader={showGroupHeaders} renderRow={renderRow} />
+                    <GroupRows key={group.id} group={group} showHeader={showGroupHeaders} renderRow={renderRow} colSpan={columnCount} />
                   ))}
                 </tbody>
               </table>
@@ -381,16 +490,18 @@ function GroupRows({
   group,
   showHeader,
   renderRow,
+  colSpan,
 }: {
   group: Group;
   showHeader: boolean;
   renderRow: (task: Task) => ReactNode;
+  colSpan: number;
 }) {
   return (
     <>
       {showHeader && (
         <tr className="border-b border-zinc-200/70 bg-zinc-100/80 dark:border-white/[0.05] dark:bg-white/[0.05]">
-          <td colSpan={10} className="px-4 py-2">
+          <td colSpan={colSpan} className="px-4 py-2">
             <span className="flex items-center gap-2">
               <span className="text-xs font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-300">
                 {group.name}

@@ -2,7 +2,25 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { nanoid } from 'nanoid';
 import { addDays, addMonths, format } from 'date-fns';
-import type { ActivityEntry, ImportItem, Label, Priority, Project, Sprint, SprintStatus, Task, TaskStatus, Theme, User } from '../lib/types';
+import type {
+  ActivityEntry,
+  AppNotification,
+  AutomationSettings,
+  CustomFieldDef,
+  ImportItem,
+  Label,
+  Priority,
+  Project,
+  SavedView,
+  Sprint,
+  SprintStatus,
+  Task,
+  TaskStatus,
+  Theme,
+  TimeEntry,
+  TrashItem,
+  User,
+} from '../lib/types';
 import { seedActivity, seedLabels, seedProjects, seedSprints, seedTasks, seedUsers } from '../data/seed';
 import { PROJECT_TEMPLATES } from '../data/templates';
 
@@ -19,6 +37,7 @@ export interface NewTaskInput {
   estimate?: number | null;
   recurrence?: Task['recurrence'];
   labelIds?: string[];
+  blockedBy?: string[];
 }
 
 interface OrbitState {
@@ -30,6 +49,12 @@ interface OrbitState {
   sprints: Sprint[];
   tasks: Task[];
   activity: ActivityEntry[];
+  timeEntries: TimeEntry[];
+  notifications: AppNotification[];
+  trash: TrashItem[];
+  fieldDefs: CustomFieldDef[];
+  savedViews: SavedView[];
+  automation: AutomationSettings;
   activeProjectId: string | null;
   selectedTaskId: string | null;
 
@@ -41,6 +66,8 @@ interface OrbitState {
   addTask: (input: NewTaskInput) => Task;
   updateTask: (id: string, patch: Partial<Task>, log?: string) => void;
   deleteTask: (id: string) => void;
+  restoreTask: (trashId: string) => void;
+  emptyTrash: () => void;
   reorderTask: (taskId: string, newStatus: TaskStatus, toIndex: number) => void;
   moveTaskToSprint: (taskId: string, sprintId: string | null) => void;
   importTasks: (items: ImportItem[], projectId: string) => number;
@@ -51,9 +78,28 @@ interface OrbitState {
 
   addProject: (name: string, description?: string) => Project;
   addProjectFromTemplate: (templateId: string, customName?: string) => Project | null;
+  deleteProject: (projectId: string) => void;
   addSprint: (projectId: string, name: string, startDate: string, endDate: string, goal?: string) => void;
   setSprintStatus: (sprintId: string, status: SprintStatus) => void;
   updateUser: (id: string, patch: Partial<User>) => void;
+  shareProject: (projectId: string) => void;
+  unshareProject: (projectId: string) => void;
+
+  startTimer: (taskId: string) => void;
+  stopTimer: () => void;
+
+  addNotification: (userId: string, text: string, taskId?: string | null) => void;
+  markNotificationRead: (id: string) => void;
+  markAllNotificationsRead: () => void;
+
+  addFieldDef: (projectId: string, name: string, type: CustomFieldDef['type'], options?: string[]) => void;
+  setTaskFieldValue: (taskId: string, fieldId: string, value: string | number | null) => void;
+  removeFieldDef: (fieldId: string) => void;
+
+  saveView: (name: string, filters: SavedView['filters']) => void;
+  deleteView: (id: string) => void;
+
+  setAutomation: (patch: Partial<AutomationSettings>) => void;
 
   logActivity: (action: string, detail: string, taskId?: string | null, projectId?: string | null) => void;
   resetWorkspace: () => void;
@@ -67,6 +113,16 @@ function dateStr(d: Date): string {
   return format(d, 'yyyy-MM-dd');
 }
 
+function shiftDate(iso: string | null | undefined, deltaDays: number): string | null {
+  if (!iso) return null;
+  return dateStr(addDays(new Date(`${iso}T12:00:00`), deltaDays));
+}
+
+function pruneTrash(trash: TrashItem[]): TrashItem[] {
+  const cutoff = Date.now() - 30 * 86400000;
+  return trash.filter((t) => new Date(t.deletedAt).getTime() > cutoff).slice(0, 100);
+}
+
 export const useStore = create<OrbitState>()(
   persist(
     (set, get) => ({
@@ -78,6 +134,12 @@ export const useStore = create<OrbitState>()(
       sprints: seedSprints,
       tasks: seedTasks,
       activity: seedActivity,
+      timeEntries: [],
+      notifications: [],
+      trash: [],
+      fieldDefs: [],
+      savedViews: [],
+      automation: { doneTeams: true, doneNotifyAssignee: true, urgentAssigneeId: null },
       activeProjectId: 'p-app',
       selectedTaskId: null,
 
@@ -111,6 +173,7 @@ export const useStore = create<OrbitState>()(
           comments: [],
           order,
           recurrence: input.recurrence ?? null,
+          blockedBy: input.blockedBy ?? [],
         };
         set((s) => ({
           tasks: [...s.tasks, task],
@@ -124,12 +187,47 @@ export const useStore = create<OrbitState>()(
         const task = state.tasks.find((t) => t.id === id);
         if (!task) return;
         const now = new Date().toISOString();
+        const oldDue = task.dueDate;
         set((s) => ({
           tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...patch, updatedAt: now } : t)),
           activity: log
             ? [makeEntry(state.currentUserId, log, task.title, task.id, task.projectId), ...s.activity]
             : s.activity,
         }));
+
+        // Forskyd afhængige opgaver når datoer rykkes
+        const newDue = patch.dueDate !== undefined ? patch.dueDate : oldDue;
+        const delta = newDue && oldDue ? Math.round((new Date(`${newDue}T12:00:00`).getTime() - new Date(`${oldDue}T12:00:00`).getTime()) / 86400000) : 0;
+        if (delta !== 0) {
+          const tasks = get().tasks;
+          const visited = new Set<string>([id]);
+          let queue = [id];
+          const updates = new Map<string, Task>();
+          while (queue.length > 0) {
+            const next: string[] = [];
+            for (const blockerId of queue) {
+              for (const dep of tasks) {
+                if (visited.has(dep.id) || dep.status === 'done' || dep.status === 'canceled') continue;
+                if (!(dep.blockedBy ?? []).includes(blockerId)) continue;
+                visited.add(dep.id);
+                updates.set(dep.id, {
+                  ...dep,
+                  startDate: shiftDate(dep.startDate ?? dep.dueDate, delta),
+                  dueDate: shiftDate(dep.dueDate, delta),
+                  updatedAt: now,
+                });
+                next.push(dep.id);
+              }
+            }
+            queue = next;
+          }
+          if (updates.size > 0) {
+            set((s) => ({
+              tasks: s.tasks.map((t) => updates.get(t.id) ?? t),
+              activity: [makeEntry(s.currentUserId, 'forskød afhængige opgaver', task.title, id, task.projectId), ...s.activity],
+            }));
+          }
+        }
 
         // Tilbagevendende opgave: opret næste instans når den afsluttes
         if (patch.status === 'done' && task.recurrence && task.status !== 'done') {
@@ -161,12 +259,36 @@ export const useStore = create<OrbitState>()(
       deleteTask: (id) => {
         const state = get();
         const task = state.tasks.find((t) => t.id === id);
+        if (!task) return;
+        const running = state.timeEntries.find((e) => e.taskId === id && e.endedAt === null);
         set((s) => ({
           tasks: s.tasks.filter((t) => t.id !== id),
           selectedTaskId: s.selectedTaskId === id ? null : s.selectedTaskId,
-          activity: task
-            ? [makeEntry(state.currentUserId, 'slettede', task.title, null, task.projectId), ...s.activity]
-            : s.activity,
+          timeEntries: running ? s.timeEntries.map((e) => (e.id === running.id ? { ...e, endedAt: new Date().toISOString() } : e)) : s.timeEntries,
+          trash: pruneTrash([{ task, deletedAt: new Date().toISOString() }, ...s.trash]),
+          activity: [makeEntry(state.currentUserId, 'slettede', task.title, null, task.projectId), ...s.activity],
+        }));
+      },
+
+      restoreTask: (trashId) => {
+        const state = get();
+        const item = state.trash.find((t) => t.task.id === trashId);
+        if (!item) return;
+        if (state.tasks.some((t) => t.id === item.task.id)) {
+          set((s) => ({ trash: s.trash.filter((t) => t.task.id !== trashId) }));
+          return;
+        }
+        set((s) => ({
+          tasks: [...s.tasks, item.task],
+          trash: s.trash.filter((t) => t.task.id !== trashId),
+          activity: [makeEntry(state.currentUserId, 'gendannede', item.task.title, item.task.id, item.task.projectId), ...s.activity],
+        }));
+      },
+
+      emptyTrash: () => {
+        set((s) => ({
+          trash: [],
+          activity: [makeEntry(s.currentUserId, 'tømte papirkurven', `${s.trash.length} opgaver`, null, null), ...s.activity],
         }));
       },
 
@@ -230,8 +352,25 @@ export const useStore = create<OrbitState>()(
         const task = state.tasks.find((t) => t.id === taskId);
         if (!task || !text.trim()) return;
         const comment = { id: `c-${nanoid(6)}`, authorId: state.currentUserId, text: text.trim(), createdAt: new Date().toISOString() };
+        const mentions: AppNotification[] = [];
+        for (const user of state.users) {
+          if (user.id === state.currentUserId) continue;
+          const firstName = user.name.split(' ')[0];
+          const re = new RegExp(`@${firstName}(?!\\w)`, 'i');
+          if (re.test(text)) {
+            mentions.push({
+              id: `n-${nanoid(8)}`,
+              userId: user.id,
+              text: `${state.users.find((u) => u.id === state.currentUserId)?.name ?? 'Nogen'} nævnte dig i “${task.title}”`,
+              taskId,
+              read: false,
+              createdAt: new Date().toISOString(),
+            });
+          }
+        }
         set((s) => ({
           tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, comments: [...t.comments, comment], updatedAt: comment.createdAt } : t)),
+          notifications: [...mentions, ...s.notifications].slice(0, 200),
           activity: [makeEntry(state.currentUserId, 'kommenterede på', task.title, task.id, task.projectId), ...s.activity],
         }));
       },
@@ -265,6 +404,7 @@ export const useStore = create<OrbitState>()(
           key: name.replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase() || 'PRJ',
           color: colors[get().projects.length % colors.length],
           description,
+          publicToken: null,
         };
         set((s) => ({ projects: [...s.projects, project] }));
         return project;
@@ -296,6 +436,24 @@ export const useStore = create<OrbitState>()(
         return project;
       },
 
+      deleteProject: (projectId) => {
+        const state = get();
+        const project = state.projects.find((p) => p.id === projectId);
+        if (!project) return;
+        const removedTasks = state.tasks.filter((t) => t.projectId === projectId);
+        const trashItems: TrashItem[] = removedTasks.map((task) => ({ task, deletedAt: new Date().toISOString() }));
+        set((s) => ({
+          projects: s.projects.filter((p) => p.id !== projectId),
+          sprints: s.sprints.filter((sp) => sp.projectId !== projectId),
+          tasks: s.tasks.filter((t) => t.projectId !== projectId),
+          fieldDefs: s.fieldDefs.filter((f) => f.projectId !== projectId),
+          trash: pruneTrash([...trashItems, ...s.trash]),
+          activeProjectId: s.activeProjectId === projectId ? null : s.activeProjectId,
+          selectedTaskId: s.selectedTaskId && removedTasks.some((t) => t.id === s.selectedTaskId) ? null : s.selectedTaskId,
+          activity: [makeEntry(s.currentUserId, 'slettede projektet', `${project.name} (${removedTasks.length} opgaver)`, null, projectId), ...s.activity],
+        }));
+      },
+
       addSprint: (projectId, name, startDate, endDate, goal = '') => {
         set((s) => ({
           sprints: [...s.sprints, { id: `s-${nanoid(8)}`, projectId, name, goal, status: 'planned', startDate, endDate }],
@@ -317,6 +475,94 @@ export const useStore = create<OrbitState>()(
         set((s) => ({ users: s.users.map((u) => (u.id === id ? { ...u, ...patch } : u)) }));
       },
 
+      shareProject: (projectId) => {
+        set((s) => ({
+          projects: s.projects.map((p) => (p.id === projectId ? { ...p, publicToken: nanoid(18) } : p)),
+        }));
+      },
+
+      unshareProject: (projectId) => {
+        set((s) => ({
+          projects: s.projects.map((p) => (p.id === projectId ? { ...p, publicToken: null } : p)),
+        }));
+      },
+
+      startTimer: (taskId) => {
+        const now = new Date().toISOString();
+        set((s) => {
+          const stopped = s.timeEntries.map((e) => (e.endedAt === null ? { ...e, endedAt: now } : e));
+          return { timeEntries: [...stopped, { id: `te-${nanoid(8)}`, taskId, userId: s.currentUserId, startedAt: now, endedAt: null }] };
+        });
+      },
+
+      stopTimer: () => {
+        const now = new Date().toISOString();
+        set((s) => ({ timeEntries: s.timeEntries.map((e) => (e.endedAt === null ? { ...e, endedAt: now } : e)) }));
+      },
+
+      addNotification: (userId, text, taskId = null) => {
+        set((s) => ({
+          notifications: [
+            { id: `n-${nanoid(8)}`, userId, text, taskId, read: false, createdAt: new Date().toISOString() },
+            ...s.notifications,
+          ].slice(0, 200),
+        }));
+      },
+
+      markNotificationRead: (id) => {
+        set((s) => ({ notifications: s.notifications.map((n) => (n.id === id ? { ...n, read: true } : n)) }));
+      },
+
+      markAllNotificationsRead: () => {
+        set((s) => ({ notifications: s.notifications.map((n) => ({ ...n, read: true })) }));
+      },
+
+      addFieldDef: (projectId, name, type, options) => {
+        if (!name.trim()) return;
+        set((s) => ({
+          fieldDefs: [...s.fieldDefs, { id: `f-${nanoid(6)}`, projectId, name: name.trim(), type, options }],
+        }));
+      },
+
+      setTaskFieldValue: (taskId, fieldId, value) => {
+        set((s) => ({
+          tasks: s.tasks.map((t) => {
+            if (t.id !== taskId) return t;
+            const customFields = { ...(t.customFields ?? {}) };
+            if (value === null || value === '') delete customFields[fieldId];
+            else customFields[fieldId] = value;
+            return { ...t, customFields, updatedAt: new Date().toISOString() };
+          }),
+        }));
+      },
+
+      removeFieldDef: (fieldId) => {
+        set((s) => ({
+          fieldDefs: s.fieldDefs.filter((f) => f.id !== fieldId),
+          tasks: s.tasks.map((t) => {
+            if (!t.customFields || !(fieldId in t.customFields)) return t;
+            const customFields = { ...t.customFields };
+            delete customFields[fieldId];
+            return { ...t, customFields };
+          }),
+        }));
+      },
+
+      saveView: (name, filters) => {
+        if (!name.trim()) return;
+        set((s) => ({
+          savedViews: [...s.savedViews.filter((v) => v.name !== name.trim()), { id: `v-${nanoid(6)}`, name: name.trim(), filters, createdAt: new Date().toISOString() }],
+        }));
+      },
+
+      deleteView: (id) => {
+        set((s) => ({ savedViews: s.savedViews.filter((v) => v.id !== id) }));
+      },
+
+      setAutomation: (patch) => {
+        set((s) => ({ automation: { ...s.automation, ...patch } }));
+      },
+
       logActivity: (action, detail, taskId = null, projectId = null) => {
         set((s) => ({ activity: [makeEntry(s.currentUserId, action, detail, taskId, projectId), ...s.activity] }));
       },
@@ -329,6 +575,12 @@ export const useStore = create<OrbitState>()(
           sprints: seedSprints,
           tasks: seedTasks,
           activity: seedActivity,
+          timeEntries: [],
+          notifications: [],
+          trash: [],
+          fieldDefs: [],
+          savedViews: [],
+          automation: { doneTeams: true, doneNotifyAssignee: true, urgentAssigneeId: null },
           activeProjectId: 'p-app',
           selectedTaskId: null,
         }),
