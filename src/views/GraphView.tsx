@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   CalendarClock,
+  Check,
   CheckCircle2,
+  ClipboardCheck,
   ExternalLink,
   KeyRound,
   ListTodo,
   LogOut,
   Mail,
+  MailPlus,
   Video,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
@@ -16,12 +19,17 @@ import {
   graphEvents,
   graphLogin,
   graphLogout,
+  graphMessages,
+  graphPlannerTasks,
   graphStatus,
   graphTodos,
   type GraphEvent,
+  type GraphMessage,
+  type GraphPlannerTask,
   type GraphTodo,
 } from '../lib/companion';
-import { cn, formatDate } from '../lib/utils';
+import { cn, formatDate, formatDateShort } from '../lib/utils';
+import type { ImportItem } from '../lib/types';
 
 const CLIENT_ID_KEY = 'orbit-graph-clientid';
 
@@ -30,6 +38,7 @@ export default function GraphView() {
   const projects = useStore((s) => s.projects);
   const activeProjectId = useStore((s) => s.activeProjectId);
   const addTask = useStore((s) => s.addTask);
+  const importTasks = useStore((s) => s.importTasks);
 
   const [configured, setConfigured] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -40,6 +49,10 @@ export default function GraphView() {
   const [todos, setTodos] = useState<GraphTodo[] | null>(null);
   const [events, setEvents] = useState<GraphEvent[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [mails, setMails] = useState<GraphMessage[] | null>(null);
+  const [importedMails, setImportedMails] = useState<Set<string>>(new Set());
+  const [plannerTasks, setPlannerTasks] = useState<GraphPlannerTask[] | null>(null);
+  const [selectedPlanner, setSelectedPlanner] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
   const [busy, setBusy] = useState(false);
   const timers = useRef<number[]>([]);
@@ -145,6 +158,74 @@ export default function GraphView() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const loadMessages = async () => {
+    setBusy(true);
+    try {
+      const r = await graphMessages();
+      if (r.ok && r.items) {
+        setMails(r.items);
+        if (r.items.length === 0) say('Ingen mails fundet i indbakken.');
+      } else {
+        say(r.reason ?? 'Kunne ikke hente mails.', 'error');
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const importMail = (mail: GraphMessage) => {
+    const projectId = activeProjectId ?? projects[0]?.id;
+    if (!projectId || importedMails.has(mail.id)) return;
+    const title = mail.subject.replace(/^(?:(?:re|sv|fw):\s*)+/i, '').trim() || 'Mail uden emne';
+    addTask({
+      title,
+      projectId,
+      description: `Oprettet fra mail fra ${mail.from}.\n\n${mail.snippet}${mail.webLink ? `\n\nÅbn mail: ${mail.webLink}` : ''}`,
+    });
+    setImportedMails((prev) => new Set(prev).add(mail.id));
+    say('Opgave oprettet fra mail.');
+  };
+
+  const loadPlanner = async () => {
+    setBusy(true);
+    try {
+      const r = await graphPlannerTasks();
+      if (r.ok && r.items) {
+        setPlannerTasks(r.items);
+        setSelectedPlanner(new Set(r.items.map((i) => i.id)));
+        if (r.items.length === 0) say('Ingen Planner-opgaver fundet.');
+      } else {
+        say(r.reason ?? 'Kunne ikke hente Planner-opgaver.', 'error');
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const togglePlanner = (id: string) => {
+    setSelectedPlanner((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const importPlanner = () => {
+    const projectId = activeProjectId ?? projects[0]?.id;
+    if (!projectId) return;
+    const items: ImportItem[] = (plannerTasks ?? [])
+      .filter((t) => selectedPlanner.has(t.id))
+      .map((t) => ({
+        title: t.title,
+        dueDate: t.dueDate,
+        status: t.percentComplete === 100 ? 'done' : 'todo',
+      }));
+    if (items.length === 0) return;
+    const created = importTasks(items, projectId);
+    say(created > 0 ? `${created} opgaver importeret.` : 'Alle valgte opgaver findes allerede i Orbit.', created > 0 ? 'ok' : 'error');
   };
 
   const importSelected = () => {
@@ -294,6 +375,110 @@ export default function GraphView() {
             <p className={cn('mt-3 rounded-lg px-3 py-2 text-xs', message.tone === 'ok' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'bg-rose-500/10 text-rose-700 dark:text-rose-300')}>
               {message.text}
             </p>
+          )}
+        </section>
+
+        {/* E-mail til opgave */}
+        <section className="glass-panel animate-fade-in rounded-xl p-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-indigo-500/10 text-indigo-500 dark:bg-indigo-400/10 dark:text-indigo-300">
+              <MailPlus className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">E-mail til opgave</h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                {connected ? 'Opret opgaver direkte fra din indbakke' : 'Tilslut Microsoft 365 for at hente mails fra din indbakke'}
+              </p>
+            </div>
+            <button onClick={() => void loadMessages()} disabled={busy || !connected} className="btn-outline shrink-0 text-xs">
+              Hent seneste mails
+            </button>
+          </div>
+          {message && (
+            <p className={cn('mt-3 rounded-lg px-3 py-2 text-xs', message.tone === 'ok' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'bg-rose-500/10 text-rose-700 dark:text-rose-300')}>
+              {message.text}
+            </p>
+          )}
+          {mails && (
+            <ul className="mt-3 divide-y divide-zinc-200/70 dark:divide-white/[0.05]">
+              {mails.map((mail) => (
+                <li key={mail.id} className={cn('flex items-center gap-3 py-2.5', importedMails.has(mail.id) && 'opacity-50')}>
+                  <MailPlus className="h-4 w-4 shrink-0 text-zinc-400" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-zinc-800 dark:text-zinc-100">{mail.subject}</p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      fra {mail.from} · {formatDateShort(mail.received.slice(0, 10))}
+                    </p>
+                    <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">{mail.snippet}</p>
+                  </div>
+                  {importedMails.has(mail.id) ? (
+                    <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                      <Check className="h-3.5 w-3.5" />
+                      Importeret
+                    </span>
+                  ) : (
+                    <button onClick={() => importMail(mail)} className="btn-outline shrink-0 text-xs">
+                      Opret opgave
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        {/* Microsoft Planner */}
+        <section className="glass-panel animate-fade-in rounded-xl p-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-500/10 text-emerald-500 dark:bg-emerald-400/10 dark:text-emerald-300">
+              <ClipboardCheck className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Microsoft Planner</h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                {connected ? 'Importer opgaver fra dine Planner-planer' : 'Tilslut Microsoft 365 for at importere Planner-opgaver'}
+              </p>
+            </div>
+            <button onClick={() => void loadPlanner()} disabled={busy || !connected} className="btn-outline shrink-0 text-xs">
+              Hent Planner-opgaver
+            </button>
+          </div>
+          {message && (
+            <p className={cn('mt-3 rounded-lg px-3 py-2 text-xs', message.tone === 'ok' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'bg-rose-500/10 text-rose-700 dark:text-rose-300')}>
+              {message.text}
+            </p>
+          )}
+          {plannerTasks && (
+            <>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button onClick={importPlanner} disabled={selectedPlanner.size === 0} className="btn-primary py-1 text-xs">
+                  Importér valgte ({selectedPlanner.size})
+                </button>
+              </div>
+              {plannerTasks.length === 0 ? (
+                <p className="mt-3 text-sm text-zinc-400">Ingen Planner-opgaver fundet.</p>
+              ) : (
+                <ul className="mt-2 divide-y divide-zinc-200/70 dark:divide-white/[0.05]">
+                  {plannerTasks.map((item) => (
+                    <li key={item.id} className="flex items-center gap-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedPlanner.has(item.id)}
+                        onChange={() => togglePlanner(item.id)}
+                        className="h-4 w-4 rounded border-zinc-300 accent-indigo-500"
+                      />
+                      <span className="min-w-0 flex-1 truncate text-sm text-zinc-800 dark:text-zinc-100">{item.title}</span>
+                      {item.dueDate && (
+                        <span className="shrink-0 text-xs tabular-nums text-zinc-500 dark:text-zinc-400">{formatDate(item.dueDate)}</span>
+                      )}
+                      <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-zinc-500 dark:bg-white/[0.06] dark:text-zinc-400">
+                        {item.percentComplete}%
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
           )}
         </section>
 

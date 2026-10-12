@@ -9,6 +9,11 @@ export interface CompanionStatus {
   graphConfigured?: boolean;
   graphConnected?: boolean;
   graphAccount?: string | null;
+  aiConfigured?: boolean;
+  syncSnapshotAt?: string | null;
+  reminders?: { enabled: boolean; time: string };
+  reports?: { enabled: boolean; day: number; time: string };
+  online?: { name: string; since: string }[];
   exportDir?: string;
 }
 
@@ -55,6 +60,9 @@ export async function companionTeams(
 export async function companionSaveConfig(cfg: {
   teamsWebhook?: string;
   graphClientId?: string;
+  reminders?: { enabled?: boolean; time?: string };
+  reports?: { enabled?: boolean; day?: number; time?: string };
+  ai?: { baseUrl?: string; apiKey?: string; model?: string };
 }): Promise<{ ok: boolean }> {
   return post('/api/config', cfg);
 }
@@ -169,6 +177,124 @@ export async function graphEvents(): Promise<{ ok: boolean; items?: GraphEvent[]
   try {
     const res = await fetch(`${BASE}/api/graph/events`, { signal: AbortSignal.timeout(15000) });
     return (await res.json()) as { ok: boolean; items?: GraphEvent[]; reason?: string };
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+// ---------------- Synkronisering ----------------
+export interface SyncSnapshotPayload {
+  tasks: unknown[];
+  projects: unknown[];
+  sprints: unknown[];
+  users: unknown[];
+  labels: unknown[];
+  activity: unknown[];
+  updatedAt: string;
+}
+
+export interface PresenceEntry {
+  name: string;
+  since: string;
+}
+
+export async function syncPush(
+  clientId: string,
+  user: { id: string; name: string },
+  snapshot: SyncSnapshotPayload,
+): Promise<{ ok: boolean; updatedAt?: string }> {
+  try {
+    return await post('/api/sync/push', { clientId, user, snapshot });
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function syncPull(): Promise<{ ok: boolean; snapshot?: SyncSnapshotPayload; updatedAt?: string } | null> {
+  try {
+    const res = await fetch(`${BASE}/api/sync/state`, { signal: AbortSignal.timeout(4000) });
+    return (await res.json()) as { ok: boolean; snapshot?: SyncSnapshotPayload; updatedAt?: string };
+  } catch {
+    return null;
+  }
+}
+
+export async function getPresence(): Promise<PresenceEntry[]> {
+  try {
+    const res = await fetch(`${BASE}/api/presence`, { signal: AbortSignal.timeout(2000) });
+    const data = (await res.json()) as { ok: boolean; online?: PresenceEntry[] };
+    return data.online ?? [];
+  } catch {
+    return [];
+  }
+}
+
+// ---------------- Påmindelser & rapporter ----------------
+export interface ReminderResult {
+  ok: boolean;
+  title?: string;
+  lines?: string[];
+  openCount?: number;
+  reason?: string;
+}
+
+export async function runRemindersNow(): Promise<ReminderResult> {
+  try {
+    return await post('/api/reminders/run-now');
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export async function runReportNow(): Promise<{ ok: boolean; path?: string; reason?: string }> {
+  try {
+    return await post('/api/reports/run-now');
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+// ---------------- AI-assistent ----------------
+export async function aiComplete(
+  messages: { role: 'system' | 'user'; content: string }[],
+): Promise<{ ok: boolean; content?: string; reason?: string }> {
+  try {
+    return await post('/api/ai/complete', { messages });
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+// ---------------- Graph: mails & Planner ----------------
+export interface GraphMessage {
+  id: string;
+  subject: string;
+  from: string;
+  received: string;
+  snippet: string;
+  webLink: string | null;
+}
+
+export async function graphMessages(): Promise<{ ok: boolean; items?: GraphMessage[]; reason?: string }> {
+  try {
+    const res = await fetch(`${BASE}/api/graph/messages`, { signal: AbortSignal.timeout(15000) });
+    return (await res.json()) as { ok: boolean; items?: GraphMessage[]; reason?: string };
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export interface GraphPlannerTask {
+  id: string;
+  title: string;
+  dueDate: string | null;
+  percentComplete: number;
+}
+
+export async function graphPlannerTasks(): Promise<{ ok: boolean; items?: GraphPlannerTask[]; reason?: string }> {
+  try {
+    const res = await fetch(`${BASE}/api/graph/planner`, { signal: AbortSignal.timeout(15000) });
+    return (await res.json()) as { ok: boolean; items?: GraphPlannerTask[]; reason?: string };
   } catch {
     return { ok: false, reason: 'Companion-serveren svarer ikke' };
   }

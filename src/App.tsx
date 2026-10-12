@@ -7,14 +7,17 @@ import { useStore } from './store/useStore';
 import type { Task } from './lib/types';
 import { taskRef } from './lib/utils';
 import { companionNotify, companionTeams } from './lib/companion';
+import { startSync } from './lib/sync';
 import ActivityView from './views/ActivityView';
 import BacklogView from './views/BacklogView';
 import BoardView from './views/BoardView';
 import DashboardView from './views/DashboardView';
 import GraphView from './views/GraphView';
+import ImportView from './views/ImportView';
 import IntegrationsView from './views/IntegrationsView';
 import MyWorkView from './views/MyWorkView';
 import TableView from './views/TableView';
+import TeamView from './views/TeamView';
 import TimelineView from './views/TimelineView';
 
 export default function App() {
@@ -27,6 +30,9 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
+
+  // Tværgående synkronisering via companion-serveren
+  useEffect(() => startSync(), []);
 
   // Notifikationer + Teams-webhook når en opgave markeres færdig
   useEffect(() => {
@@ -53,8 +59,10 @@ export default function App() {
           <Route path="/tidslinje" element={<TimelineView />} />
           <Route path="/backlog" element={<BacklogView />} />
           <Route path="/min" element={<MyWorkView />} />
+          <Route path="/team" element={<TeamView />} />
           <Route path="/dashboard" element={<DashboardView />} />
           <Route path="/aktivitet" element={<ActivityView />} />
+          <Route path="/import" element={<ImportView />} />
           <Route path="/integrationer" element={<IntegrationsView />} />
           <Route path="/outlook" element={<GraphView />} />
           <Route path="*" element={<Navigate to="/tavle" replace />} />

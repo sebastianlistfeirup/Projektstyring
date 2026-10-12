@@ -1,8 +1,10 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { nanoid } from 'nanoid';
-import type { ActivityEntry, Priority, Project, Sprint, SprintStatus, Task, TaskStatus, Theme, User, Label } from '../lib/types';
+import { addDays, addMonths, format } from 'date-fns';
+import type { ActivityEntry, ImportItem, Label, Priority, Project, Sprint, SprintStatus, Task, TaskStatus, Theme, User } from '../lib/types';
 import { seedActivity, seedLabels, seedProjects, seedSprints, seedTasks, seedUsers } from '../data/seed';
+import { PROJECT_TEMPLATES } from '../data/templates';
 
 export interface NewTaskInput {
   title: string;
@@ -13,7 +15,10 @@ export interface NewTaskInput {
   priority?: Priority;
   description?: string;
   dueDate?: string | null;
+  startDate?: string | null;
   estimate?: number | null;
+  recurrence?: Task['recurrence'];
+  labelIds?: string[];
 }
 
 interface OrbitState {
@@ -38,14 +43,17 @@ interface OrbitState {
   deleteTask: (id: string) => void;
   reorderTask: (taskId: string, newStatus: TaskStatus, toIndex: number) => void;
   moveTaskToSprint: (taskId: string, sprintId: string | null) => void;
+  importTasks: (items: ImportItem[], projectId: string) => number;
 
   addComment: (taskId: string, text: string) => void;
   addSubtask: (taskId: string, title: string) => void;
   toggleSubtask: (taskId: string, subtaskId: string) => void;
 
   addProject: (name: string, description?: string) => Project;
+  addProjectFromTemplate: (templateId: string, customName?: string) => Project | null;
   addSprint: (projectId: string, name: string, startDate: string, endDate: string, goal?: string) => void;
   setSprintStatus: (sprintId: string, status: SprintStatus) => void;
+  updateUser: (id: string, patch: Partial<User>) => void;
 
   logActivity: (action: string, detail: string, taskId?: string | null, projectId?: string | null) => void;
   resetWorkspace: () => void;
@@ -53,6 +61,10 @@ interface OrbitState {
 
 function nextTaskNumber(tasks: Task[], projectId: string): number {
   return tasks.filter((t) => t.projectId === projectId).reduce((max, t) => Math.max(max, t.number), 0) + 1;
+}
+
+function dateStr(d: Date): string {
+  return format(d, 'yyyy-MM-dd');
 }
 
 export const useStore = create<OrbitState>()(
@@ -89,15 +101,16 @@ export const useStore = create<OrbitState>()(
           priority: input.priority ?? 'medium',
           assigneeId: input.assigneeId ?? null,
           reporterId: state.currentUserId,
-          labelIds: [],
+          labelIds: input.labelIds ?? [],
           createdAt: now,
           updatedAt: now,
-          startDate: null,
+          startDate: input.startDate ?? null,
           dueDate: input.dueDate ?? null,
           estimate: input.estimate ?? null,
           subtasks: [],
           comments: [],
           order,
+          recurrence: input.recurrence ?? null,
         };
         set((s) => ({
           tasks: [...s.tasks, task],
@@ -117,6 +130,32 @@ export const useStore = create<OrbitState>()(
             ? [makeEntry(state.currentUserId, log, task.title, task.id, task.projectId), ...s.activity]
             : s.activity,
         }));
+
+        // Tilbagevendende opgave: opret næste instans når den afsluttes
+        if (patch.status === 'done' && task.recurrence && task.status !== 'done') {
+          const base = task.dueDate ? new Date(`${task.dueDate}T12:00:00`) : new Date();
+          const nextBase =
+            task.recurrence === 'daily' ? addDays(base, 1) : task.recurrence === 'weekly' ? addDays(base, 7) : addMonths(base, 1);
+          const deltaMs = nextBase.getTime() - base.getTime();
+          const nextStart = task.startDate ? new Date(new Date(`${task.startDate}T12:00:00`).getTime() + deltaMs) : null;
+          const spawned = get().addTask({
+            title: task.title,
+            projectId: task.projectId,
+            sprintId: task.sprintId,
+            assigneeId: task.assigneeId,
+            priority: task.priority,
+            description: task.description,
+            estimate: task.estimate,
+            status: 'todo',
+            startDate: nextStart ? dateStr(nextStart) : null,
+            dueDate: dateStr(nextBase),
+            recurrence: task.recurrence,
+            labelIds: task.labelIds,
+          });
+          set((s) => ({
+            activity: [makeEntry(s.currentUserId, 'oprettede næste instans', spawned.title, spawned.id, spawned.projectId), ...s.activity],
+          }));
+        }
       },
 
       deleteTask: (id) => {
@@ -160,6 +199,30 @@ export const useStore = create<OrbitState>()(
           tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, sprintId, updatedAt: new Date().toISOString() } : t)),
           activity: [makeEntry(s.currentUserId, sprintId ? `planlagde i ${sprint?.name ?? 'sprint'}` : 'fjernede fra sprint', task.title, task.id, task.projectId), ...s.activity],
         }));
+      },
+
+      importTasks: (items, projectId) => {
+        const existing = new Set(
+          get()
+            .tasks.filter((t) => t.projectId === projectId)
+            .map((t) => t.title.trim().toLowerCase()),
+        );
+        let created = 0;
+        for (const item of items) {
+          const title = item.title?.trim();
+          if (!title || existing.has(title.toLowerCase())) continue;
+          get().addTask({
+            title,
+            projectId,
+            status: item.status ?? 'todo',
+            priority: item.priority ?? 'medium',
+            dueDate: item.dueDate ?? null,
+            description: item.description ?? '',
+          });
+          existing.add(title.toLowerCase());
+          created += 1;
+        }
+        return created;
       },
 
       addComment: (taskId, text) => {
@@ -207,6 +270,32 @@ export const useStore = create<OrbitState>()(
         return project;
       },
 
+      addProjectFromTemplate: (templateId, customName) => {
+        const tpl = PROJECT_TEMPLATES.find((t) => t.id === templateId);
+        if (!tpl) return null;
+        const project = get().addProject(customName?.trim() || tpl.name, tpl.description);
+        const base = new Date();
+        for (const t of tpl.tasks) {
+          const start = addDays(base, t.daysOffset);
+          const due = addDays(start, Math.max(0, t.durationDays - 1));
+          const assignee = get().users.find((u) => u.role === t.assigneeRole);
+          get().addTask({
+            title: t.title,
+            projectId: project.id,
+            status: 'todo',
+            priority: t.priority,
+            assigneeId: assignee?.id ?? null,
+            estimate: t.estimate,
+            startDate: dateStr(start),
+            dueDate: dateStr(due),
+          });
+        }
+        set((s) => ({
+          activity: [makeEntry(s.currentUserId, 'oprettede projekt fra skabelon', project.name, null, project.id), ...s.activity],
+        }));
+        return project;
+      },
+
       addSprint: (projectId, name, startDate, endDate, goal = '') => {
         set((s) => ({
           sprints: [...s.sprints, { id: `s-${nanoid(8)}`, projectId, name, goal, status: 'planned', startDate, endDate }],
@@ -222,6 +311,10 @@ export const useStore = create<OrbitState>()(
           sprints: s.sprints.map((sp) => (sp.id === sprintId ? { ...sp, status } : sp)),
           activity: [makeEntry(s.currentUserId, action, sprint.name, null, sprint.projectId), ...s.activity],
         }));
+      },
+
+      updateUser: (id, patch) => {
+        set((s) => ({ users: s.users.map((u) => (u.id === id ? { ...u, ...patch } : u)) }));
       },
 
       logActivity: (action, detail, taskId = null, projectId = null) => {

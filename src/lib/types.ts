@@ -10,6 +10,8 @@ export interface User {
   color: string; // tailwind color base, fx "indigo", "amber"
   role: string;
   email: string;
+  capacity?: number; // estimeret points pr. uge
+  vacationUntil?: string | null; // ISO-dato, fravær til og med
 }
 
 export interface Label {
@@ -51,6 +53,7 @@ export interface Task {
   subtasks: Subtask[];
   comments: Comment[];
   order: number; // rækkefølge i kolonne/liste
+  recurrence?: 'daily' | 'weekly' | 'monthly' | null; // opret næste instans når opgaven afsluttes
 }
 
 export interface Sprint {
@@ -79,4 +82,22 @@ export interface ActivityEntry {
   projectId: string | null;
   action: string; // fx "oprettede opgaven", "flyttede til I gang"
   detail?: string;
+}
+
+export interface ImportItem {
+  title: string;
+  dueDate?: string | null;
+  priority?: Priority;
+  status?: TaskStatus;
+  description?: string;
+}
+
+export interface SyncSnapshot {
+  tasks: Task[];
+  projects: Project[];
+  sprints: Sprint[];
+  users: User[];
+  labels: Label[];
+  activity: ActivityEntry[];
+  updatedAt: string;
 }

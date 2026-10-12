@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { CalendarClock, Check, Plus, Trash2, X } from 'lucide-react';
+import { CalendarClock, Check, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { PRIORITY_META, STATUS_META } from '../lib/constants';
 import { cn, formatDateShort, isOverdue, taskRef } from '../lib/utils';
+import { aiComplete } from '../lib/companion';
 import type { Priority, TaskStatus } from '../lib/types';
 import { Avatar, LabelChip, ProgressBar, StatusBadge } from '../components/common';
 
@@ -22,6 +23,9 @@ export default function TaskDrawer() {
 
   const [comment, setComment] = useState('');
   const [subtaskTitle, setSubtaskTitle] = useState('');
+  const [aiBusy, setAiBusy] = useState<'subtasks' | 'summary' | null>(null);
+  const [aiFeedback, setAiFeedback] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
+  const [summary, setSummary] = useState('');
 
   useEffect(() => {
     if (!task) return;
@@ -53,6 +57,65 @@ export default function TaskDrawer() {
     if (!subtaskTitle.trim()) return;
     addSubtask(task.id, subtaskTitle);
     setSubtaskTitle('');
+  };
+
+  const suggestSubtasks = async () => {
+    setAiBusy('subtasks');
+    setAiFeedback(null);
+    try {
+      const r = await aiComplete([
+        {
+          role: 'system',
+          content:
+            'Du er en dansk projektassistent. Foreslå 3-6 konkrete, handlingsrettede delopgaver til opgaven. Svar KUN med én delopgave pr. linje. Ingen overskrift, ingen nummerering, ingen tomme linjer.',
+        },
+        { role: 'user', content: `${task.title}\n${task.description || ''}` },
+      ]);
+      if (r.ok && r.content) {
+        const titles = r.content
+          .split('\n')
+          .map((t) => t.trim())
+          .filter(Boolean)
+          .slice(0, 8);
+        for (const t of titles) addSubtask(task.id, t);
+        setAiFeedback({ text: `${titles.length} underopgaver tilføjet`, tone: 'ok' });
+      } else {
+        setAiFeedback({ text: aiErrorText(r.reason), tone: 'error' });
+      }
+    } finally {
+      setAiBusy(null);
+    }
+  };
+
+  const summarizeComments = async () => {
+    if (task.comments.length === 0) return;
+    setAiBusy('summary');
+    setAiFeedback(null);
+    try {
+      const thread = task.comments
+        .map((c) => `${users.find((u) => u.id === c.authorId)?.name ?? 'Ukendt'}: ${c.text}`)
+        .join('\n');
+      const r = await aiComplete([
+        {
+          role: 'system',
+          content: 'Opsummér følgende kommentartråd på dansk på maks. 3 sætninger. Fokusér på beslutninger og næste skridt.',
+        },
+        { role: 'user', content: thread },
+      ]);
+      if (r.ok && r.content) {
+        setSummary(r.content.trim());
+      } else {
+        setAiFeedback({ text: aiErrorText(r.reason), tone: 'error' });
+      }
+    } finally {
+      setAiBusy(null);
+    }
+  };
+
+  const insertSummary = () => {
+    if (!summary) return;
+    addComment(task.id, `Opsummering (AI): ${summary}`);
+    setAiFeedback({ text: 'Opsummering tilføjet som kommentar.', tone: 'ok' });
   };
 
   const toggleLabel = (labelId: string) => {
@@ -190,6 +253,21 @@ export default function TaskDrawer() {
               )}
             </div>
 
+            <FieldLabel>Gentagelse</FieldLabel>
+            <select
+              value={task.recurrence ?? ''}
+              onChange={(e) => {
+                const value = e.target.value as '' | 'daily' | 'weekly' | 'monthly';
+                updateTask(task.id, { recurrence: value || null });
+              }}
+              className="input w-fit py-1.5"
+            >
+              <option value="">Ingen</option>
+              <option value="daily">Daglig</option>
+              <option value="weekly">Ugentlig</option>
+              <option value="monthly">Månedlig</option>
+            </select>
+
             <FieldLabel>Points</FieldLabel>
             <input
               type="number"
@@ -231,6 +309,55 @@ export default function TaskDrawer() {
               placeholder="Tilføj en beskrivelse …"
               className="input resize-none leading-relaxed"
             />
+          </section>
+
+          {/* AI-assistent */}
+          <section>
+            <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+              <Sparkles className="h-3.5 w-3.5" />
+              AI-assistent
+            </h3>
+            <div className="glass-panel rounded-xl p-3.5">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => void suggestSubtasks()}
+                  disabled={aiBusy !== null}
+                  className="btn-outline text-xs"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  {aiBusy === 'subtasks' ? 'Analyserer …' : 'Foreslå underopgaver'}
+                </button>
+                <button
+                  onClick={() => void summarizeComments()}
+                  disabled={aiBusy !== null || task.comments.length === 0}
+                  className="btn-outline text-xs"
+                >
+                  Opsummér kommentarer
+                </button>
+              </div>
+              {summary && (
+                <div className="mt-3">
+                  <p className="whitespace-pre-wrap rounded-lg bg-zinc-100 px-3 py-2 text-sm leading-relaxed dark:bg-white/[0.05]">
+                    {summary}
+                  </p>
+                  <button onClick={insertSummary} className="btn-outline mt-2 text-xs">
+                    Indsæt som kommentar
+                  </button>
+                </div>
+              )}
+            </div>
+            {aiFeedback && (
+              <p
+                className={cn(
+                  'mt-1.5 text-xs font-medium',
+                  aiFeedback.tone === 'ok'
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-rose-600 dark:text-rose-400',
+                )}
+              >
+                {aiFeedback.text}
+              </p>
+            )}
           </section>
 
           {/* Delopgaver */}
@@ -368,4 +495,11 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   return (
     <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{children}</span>
   );
+}
+
+function aiErrorText(reason?: string): string {
+  if (reason && /not configured|konfigurer/i.test(reason)) {
+    return 'AI-assistenten er ikke konfigureret – se Integrationer-fanen.';
+  }
+  return reason ?? 'AI-assistenten kunne ikke svare.';
 }

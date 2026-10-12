@@ -1,12 +1,12 @@
 import type { ActivityEntry, Label, Priority, Project, Sprint, Subtask, Task, TaskStatus, User } from '../lib/types';
 
 export const seedUsers: User[] = [
-  { id: 'u-me', name: 'Freja Lindberg', initials: 'FL', color: 'indigo', role: 'Projektleder', email: 'freja@nordlys.dk' },
-  { id: 'u-oscar', name: 'Oscar Nielsen', initials: 'ON', color: 'sky', role: 'Udvikler', email: 'oscar@nordlys.dk' },
-  { id: 'u-sofie', name: 'Sofie Holm', initials: 'SH', color: 'rose', role: 'Designer', email: 'sofie@nordlys.dk' },
-  { id: 'u-emil', name: 'Emil Christiansen', initials: 'EC', color: 'emerald', role: 'Udvikler', email: 'emil@nordlys.dk' },
-  { id: 'u-clara', name: 'Clara Møller', initials: 'CM', color: 'amber', role: 'QA', email: 'clara@nordlys.dk' },
-  { id: 'u-noah', name: 'Noah Sørensen', initials: 'NS', color: 'violet', role: 'Produktchef', email: 'noah@nordlys.dk' },
+  { id: 'u-me', name: 'Freja Lindberg', initials: 'FL', color: 'indigo', role: 'Projektleder', email: 'freja@nordlys.dk', capacity: 6 },
+  { id: 'u-oscar', name: 'Oscar Nielsen', initials: 'ON', color: 'sky', role: 'Udvikler', email: 'oscar@nordlys.dk', capacity: 12 },
+  { id: 'u-sofie', name: 'Sofie Holm', initials: 'SH', color: 'rose', role: 'Designer', email: 'sofie@nordlys.dk', capacity: 10 },
+  { id: 'u-emil', name: 'Emil Christiansen', initials: 'EC', color: 'emerald', role: 'Udvikler', email: 'emil@nordlys.dk', capacity: 12 },
+  { id: 'u-clara', name: 'Clara Møller', initials: 'CM', color: 'amber', role: 'QA', email: 'clara@nordlys.dk', capacity: 8 },
+  { id: 'u-noah', name: 'Noah Sørensen', initials: 'NS', color: 'violet', role: 'Produktchef', email: 'noah@nordlys.dk', capacity: 4 },
 ];
 
 export const seedLabels: Label[] = [
