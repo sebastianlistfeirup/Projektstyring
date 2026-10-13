@@ -6,7 +6,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { execFile } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -695,6 +695,7 @@ app.get('/api/graph/planner', async (_req, res) => {
       ok: true,
       items: (data.value ?? []).map((t) => ({
         id: t.id,
+        eTag: t['@odata.etag'] ?? '',
         title: t.title,
         dueDate: t.dueDateTime?.dateTime ? t.dueDateTime.dateTime.slice(0, 10) : null,
         percentComplete: t.percentComplete ?? 0,
@@ -1319,7 +1320,341 @@ app.get('/public/portal/:token', (req, res) => {
   res.send(html);
 });
 
+// ================= Eksterne integrationer =================
+function extCfg(key) {
+  return loadConfig()[key] ?? {};
+}
+
+function audit(action, detail) {
+  try {
+    appendFileSync(join(APP_DIR, 'audit.log'), `${new Date().toISOString()} ${action} ${detail}\n`);
+  } catch { /* ignorer */ }
+}
+
+function injectExternalTask(title, description, source) {
+  if (!lastSnapshot) return null;
+  const snap = lastSnapshot.snapshot;
+  const project = (snap.projects ?? [])[0];
+  if (!project) return null;
+  const maxNumber = (snap.tasks ?? []).filter((t) => t.projectId === project.id).reduce((m, t) => Math.max(m, t.number ?? 0), 0);
+  const task = {
+    id: `t-ext-${Date.now()}-${Math.round(Math.random() * 999)}`,
+    number: maxNumber + 1,
+    projectId: project.id,
+    sprintId: null,
+    title: String(title).slice(0, 200),
+    description: String(description ?? '').slice(0, 1500),
+    status: 'todo',
+    priority: 'medium',
+    assigneeId: null,
+    reporterId: source,
+    labelIds: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    startDate: null,
+    dueDate: null,
+    estimate: null,
+    subtasks: [],
+    comments: [],
+    order: 0,
+  };
+  snap.tasks = [...(snap.tasks ?? []), task];
+  lastSnapshot.updatedAt = new Date().toISOString();
+  broadcast({ type: 'sync', from: source });
+  return task;
+}
+
+// ---- Telegram-bot (polling) ----
+let telegramTimer = null;
+let telegramOffset = 0;
+
+async function tgSend(token, chatId, text) {
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: String(text).slice(0, 400) }),
+    });
+  } catch { /* ignorer */ }
+}
+
+function startTelegram() {
+  if (telegramTimer) return;
+  const token = extCfg('telegram').token;
+  if (!token) return;
+  telegramTimer = setInterval(async () => {
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=${telegramOffset}&timeout=5`);
+      const d = await r.json();
+      for (const u of d.result ?? []) {
+        telegramOffset = u.update_id + 1;
+        const text = u.message?.text?.trim();
+        const chatId = u.message?.chat?.id;
+        if (!text || chatId == null) continue;
+        if (text.startsWith('/start')) {
+          await tgSend(token, chatId, 'Hej! Skriv en besked, så opretter jeg en opgave i Orbit. ✅');
+          continue;
+        }
+        const task = injectExternalTask(text, 'Oprettet fra Telegram', 'telegram');
+        if (task) {
+          audit('telegram-task', task.title);
+          await tgSend(token, chatId, `Opgave oprettet: ${task.title}`);
+        } else {
+          await tgSend(token, chatId, 'Orbit er ikke startet endnu – åbn appen først.');
+        }
+      }
+    } catch { /* ignorer */ }
+  }, 10000);
+}
+
+app.post('/api/telegram/config', (req, res) => {
+  const token = String(req.body?.token ?? '').trim();
+  const cfg = loadConfig();
+  cfg.telegram = { token };
+  saveConfig(cfg);
+  if (telegramTimer) { clearInterval(telegramTimer); telegramTimer = null; }
+  startTelegram();
+  audit('telegram-config', token ? 'token gemt' : 'token fjernet');
+  res.json({ ok: true, running: Boolean(token) });
+});
+
+app.get('/api/telegram/status', (_req, res) => {
+  res.json({ ok: true, configured: Boolean(extCfg('telegram').token), running: Boolean(telegramTimer) });
+});
+
+// ---- Slack-kommando ----
+app.post('/api/slack/command', (req, res) => {
+  const body = req.body ?? {};
+  if (body.type === 'url_verification') return res.json({ challenge: body.challenge });
+  const cfg = extCfg('slack');
+  if (!cfg.commandToken || body.token !== cfg.commandToken) {
+    return res.status(401).json({ ok: false, reason: 'Ugyldig Slack-token' });
+  }
+  const text = String(body.text ?? '').trim();
+  if (!text) return res.json({ response_type: 'ephemeral', text: 'Skriv: /orbit <opgavetitel>' });
+  const task = injectExternalTask(text, `Fra Slack (af ${body.user_name ?? 'ukendt'})`, 'slack');
+  audit('slack-task', text);
+  res.json({ response_type: 'in_channel', text: `Opgave oprettet i Orbit: ${task ? task.title : '(åbn appen først)'}` });
+});
+
+app.post('/api/slack/config', (req, res) => {
+  const cfg = loadConfig();
+  cfg.slack = { commandToken: String(req.body?.commandToken ?? '') };
+  saveConfig(cfg);
+  audit('slack-config', 'gemt');
+  res.json({ ok: true });
+});
+
+// ---- Jira (to-vejs via PAT) ----
+function jiraAuth() {
+  const { email, token } = extCfg('jira');
+  return `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}`;
+}
+
+app.post('/api/jira/config', (req, res) => {
+  const { domain, email, token, project } = req.body ?? {};
+  const cfg = loadConfig();
+  cfg.jira = { domain: domain ?? '', email: email ?? '', token: token ?? '', project: project ?? '' };
+  saveConfig(cfg);
+  audit('jira-config', 'gemt');
+  res.json({ ok: true });
+});
+
+app.get('/api/jira/issues', async (_req, res) => {
+  const { domain, project } = extCfg('jira');
+  if (!domain || !project || !extCfg('jira').token) return res.json({ ok: false, reason: 'Jira er ikke konfigureret (domæne, projekt-nøgle og API-token under Integrationer)' });
+  try {
+    const r = await fetch(`https://${domain}/rest/api/3/search?jql=${encodeURIComponent(`project = ${project} AND statusCategory != Done ORDER BY updated DESC`)}&maxResults=50&fields=summary,status`, {
+      headers: { Authorization: jiraAuth(), Accept: 'application/json' },
+    });
+    if (!r.ok) return res.json({ ok: false, reason: `Jira svarede ${r.status} – tjek domæne/projekt/token` });
+    const d = await r.json();
+    res.json({
+      ok: true,
+      items: (d.issues ?? []).map((i) => ({ id: i.key, title: i.fields?.summary ?? i.key, state: i.fields?.status?.name ?? '' })),
+    });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
+});
+
+app.post('/api/jira/complete', async (req, res) => {
+  const { id } = req.body ?? {};
+  const { domain } = extCfg('jira');
+  if (!domain || !id) return res.status(400).json({ ok: false, reason: 'Mangler issue-nøgle eller konfiguration' });
+  try {
+    const auth = { Authorization: jiraAuth(), Accept: 'application/json' };
+    const tr = await fetch(`https://${domain}/rest/api/3/issue/${id}/transitions`, { headers: auth });
+    const td = await tr.json();
+    const doneTransition = (td.transitions ?? []).find((t) => /done|closed|resolved|complete/i.test(t.name)) ?? (td.transitions ?? [])[0];
+    if (!doneTransition) return res.json({ ok: false, reason: 'Ingen afslutnings-transition fundet' });
+    const r = await fetch(`https://${domain}/rest/api/3/issue/${id}/transitions`, {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transition: { id: doneTransition.id } }),
+    });
+    res.json({ ok: r.ok || r.status === 204, status: r.status });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
+});
+
+// ---- Trello (import + write-back) ----
+app.post('/api/trello/config', (req, res) => {
+  const { key, token, boardId } = req.body ?? {};
+  const cfg = loadConfig();
+  cfg.trello = { key: key ?? '', token: token ?? '', boardId: boardId ?? '' };
+  saveConfig(cfg);
+  audit('trello-config', 'gemt');
+  res.json({ ok: true });
+});
+
+app.get('/api/trello/cards', async (_req, res) => {
+  const { key, token, boardId } = extCfg('trello');
+  if (!key || !token || !boardId) return res.json({ ok: false, reason: 'Trello er ikke konfigureret (API-nøgle, token og board-id under Integrationer)' });
+  try {
+    const r = await fetch(`https://api.trello.com/1/boards/${boardId}/cards?filter=open&fields=name,desc,due&key=${key}&token=${token}`);
+    if (!r.ok) return res.json({ ok: false, reason: `Trello svarede ${r.status}` });
+    const d = await r.json();
+    res.json({ ok: true, items: (Array.isArray(d) ? d : []).slice(0, 80).map((c) => ({ id: c.id, title: c.name, due: c.due ? c.due.slice(0, 10) : null, description: c.desc ?? '' })) });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
+});
+
+app.post('/api/trello/complete', async (req, res) => {
+  const { key, token } = extCfg('trello');
+  const { id } = req.body ?? {};
+  if (!key || !token || !id) return res.status(400).json({ ok: false, reason: 'Mangler kort-id eller konfiguration' });
+  try {
+    const r = await fetch(`https://api.trello.com/1/cards/${id}?closed=true&key=${key}&token=${token}`, { method: 'PUT' });
+    res.json({ ok: r.ok, status: r.status });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
+});
+
+// ---- Microsoft Planner (write-back) ----
+app.post('/api/graph/planner/complete', async (req, res) => {
+  try {
+    const token = await graphAcquireSilent();
+    if (!token) return res.json({ ok: false, reason: 'Ikke tilsluttet Microsoft 365' });
+    const { id, etag } = req.body ?? {};
+    if (!id || !etag) return res.status(400).json({ ok: false, reason: 'Mangler planner-id/etag – importer opgaven igen' });
+    const r = await fetch(`https://graph.microsoft.com/v1.0/planner/tasks/${id}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'If-Match': etag },
+      body: JSON.stringify({ percentCompleted: 100, completedDateTime: new Date().toISOString() }),
+    });
+    res.json({ ok: r.ok, status: r.status });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
+});
+
+// ---- Windows-toast med knapper (Action Center) ----
+app.post('/api/notify-action', (req, res) => {
+  const { title, message, taskId } = req.body ?? {};
+  if (!title) return res.status(400).json({ ok: false, reason: 'Mangler titel' });
+  const base = `http://localhost:4310/public/toast-action/${encodeURIComponent(String(taskId ?? ''))}`;
+  const script = [
+    'try {',
+    'Import-Module BurntToast -ErrorAction Stop',
+    `$btn1 = New-BurntToastButton -Text 'Færdig' -Arguments '${base}?action=done'`,
+    `$btn2 = New-BurntToastButton -Text 'Åbn' -Arguments 'http://localhost:5173/#/tavle'`,
+    `New-BurntToastNotification -Text '${String(title).replace(/'/g, "''").slice(0, 90)}', '${String(message ?? '').replace(/'/g, "''").slice(0, 120)}' -Button $btn1, $btn2`,
+    '} catch {',
+    `try { New-BurntToastNotification -Text '${String(title).replace(/'/g, "''").slice(0, 90)}' } catch { }`,
+    '}',
+  ].join('; ');
+  execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 9000 }, () => {});
+  res.json({ ok: true });
+});
+
+app.get('/public/toast-action/:taskId', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  const snap = lastSnapshot?.snapshot;
+  const task = snap?.tasks?.find((t) => t.id === req.params.taskId);
+  if (!task) return res.status(404).send('<!doctype html><html lang="da"><body style="font-family:sans-serif;padding:2rem">Opgaven findes ikke (åbn Orbit først).</body></html>');
+  if (req.query.action === 'done' && task.status !== 'done') {
+    task.status = 'done';
+    task.updatedAt = new Date().toISOString();
+    broadcast({ type: 'sync', from: 'toast-action' });
+    audit('toast-done', task.title);
+  }
+  res.send(`<!doctype html><html lang="da"><head><meta charset="utf-8"><title>Orbit</title><style>body{font-family:'Segoe UI',sans-serif;background:#17181c;color:#e4e4e7;display:grid;place-items:center;height:100vh;margin:0}div{text-align:center}</style></head><body><div><h2>${req.query.action === 'done' ? '✅ Afsluttet' : 'Orbit'}</h2><p>${task.title.replace(/</g, '&lt;')}</p><p>Opdateret i Orbit.</p></div></body></html>`);
+});
+
+// ---- iCal-import (Google/Apple-kalender via offentlig feed) ----
+app.post('/api/ical/parse', async (req, res) => {
+  const url = String(req.body?.url ?? '').trim();
+  if (!/^https?:\/\//.test(url)) return res.status(400).json({ ok: false, reason: 'URL skal starte med http(s)://' });
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(20000) });
+    if (!r.ok) return res.json({ ok: false, reason: `Feed svarede ${r.status}` });
+    const text = await r.text();
+    const events = [];
+    const blocks = text.split('BEGIN:VEVENT').slice(1);
+    for (const b of blocks) {
+      const summary = /SUMMARY:(.{1,200})/.exec(b)?.[1]?.replace(/\\,/g, ',').trim();
+      const dtStart = /DTSTART(?:;[^:]*)?:(\d{8})/.exec(b)?.[1];
+      const desc = /DESCRIPTION:((?:.|\n )+)/.exec(b)?.[1]?.replace(/\n /g, '').slice(0, 300);
+      if (!summary || !dtStart) continue;
+      const date = `${dtStart.slice(0, 4)}-${dtStart.slice(4, 6)}-${dtStart.slice(6, 8)}`;
+      events.push({ title: summary, date, description: desc ?? '' });
+      if (events.length >= 60) break;
+    }
+    res.json({ ok: true, items: events });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
+});
+
+// ---- e-conomic (fakturakladde) ----
+app.post('/api/economic/config', (req, res) => {
+  const { agreementGrantToken, customerNumber } = req.body ?? {};
+  const cfg = loadConfig();
+  cfg.economic = { agreementGrantToken: agreementGrantToken ?? '', customerNumber: customerNumber ?? 0 };
+  saveConfig(cfg);
+  audit('economic-config', 'gemt');
+  res.json({ ok: true });
+});
+
+app.post('/api/economic/draft', async (req, res) => {
+  const { agreementGrantToken, customerNumber } = extCfg('economic');
+  const { lines } = req.body ?? {};
+  if (!agreementGrantToken || !customerNumber) return res.json({ ok: false, reason: 'e-conomic er ikke konfigureret (AgreementGrantToken og kundenummer under Integrationer)' });
+  if (!Array.isArray(lines) || lines.length === 0) return res.status(400).json({ ok: false, reason: 'Mangler linjer' });
+  try {
+    const r = await fetch('https://restapi.e-conomic.com/invoices/drafts', {
+      method: 'POST',
+      headers: {
+        'X-AgreementGrantToken': agreementGrantToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        currency: 'DKK',
+        date: new Date().toISOString().slice(0, 10),
+        customer: { customerNumber: Number(customerNumber) },
+        lines: lines.map((l) => ({
+          description: String(l.description ?? '').slice(0, 250),
+          quantity: Number(l.quantity ?? 1),
+          unit: { unitNumber: 1 },
+          unitNetPrice: Number(l.unitPrice ?? 0),
+        })),
+      }),
+    });
+    if (!r.ok) return res.json({ ok: false, reason: `e-conomic svarede ${r.status}: ${(await r.text()).slice(0, 160)}` });
+    const d = await r.json();
+    audit('economic-draft', `kladde ${d.draftInvoiceNumber ?? ''}`);
+    res.json({ ok: true, draftNumber: d.draftInvoiceNumber });
+  } catch (err) {
+    res.json({ ok: false, reason: String(err) });
+  }
+});
+
 server.listen(PORT, () => {
+  startTelegram();
   console.log(`Orbit Companion kører på http://127.0.0.1:${PORT}`);
   console.log(`Eksport-mappe: ${EXPORT_DIR}`);
 });

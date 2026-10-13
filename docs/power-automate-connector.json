@@ -1,0 +1,102 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Orbit API",
+    "description": "Læs opgaver, projekter og sprints fra Orbit Companion (port 4310). Alle kald sikres med headeren X-Orbit-Api-Token.",
+    "version": "1.0.0"
+  },
+  "host": "DIN-PC:4310",
+  "basePath": "/",
+  "schemes": ["http"],
+  "securityDefinitions": {
+    "OrbitApiToken": {
+      "type": "apiKey",
+      "name": "X-Orbit-Api-Token",
+      "in": "header",
+      "description": "API-token oprettet i Orbit under Integrationer → Webhooks & åbent API → Opret API-token."
+    }
+  },
+  "security": [{ "OrbitApiToken": [] }],
+  "paths": {
+    "/api/v1/tasks": {
+      "get": {
+        "operationId": "HentOpgaver",
+        "summary": "Hent alle opgaver",
+        "description": "Returnerer alle opgaver fra seneste synkroniserede snapshot.",
+        "responses": {
+          "200": {
+            "description": "Liste af opgaver",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string", "example": "t-a1b2c3d4" },
+                  "title": { "type": "string", "example": "Tilbagemelding til kunde" },
+                  "number": { "type": "integer", "example": 12 },
+                  "status": { "type": "string", "example": "inprogress" },
+                  "projectId": { "type": "string", "example": "p-app" },
+                  "assigneeId": { "type": "string", "example": "u-me" },
+                  "dueDate": { "type": "string", "example": "2026-10-20" }
+                }
+              }
+            }
+          },
+          "401": { "description": "Ugyldigt eller manglende X-Orbit-Api-Token" }
+        }
+      }
+    },
+    "/api/v1/projects": {
+      "get": {
+        "operationId": "HentProjekter",
+        "summary": "Hent alle projekter",
+        "description": "Returnerer alle projekter i arbejdsområdet.",
+        "responses": {
+          "200": {
+            "description": "Liste af projekter",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string", "example": "p-app" },
+                  "name": { "type": "string", "example": "App 2.0" },
+                  "key": { "type": "string", "example": "APP" },
+                  "color": { "type": "string", "example": "violet" }
+                }
+              }
+            }
+          },
+          "401": { "description": "Ugyldigt eller manglende X-Orbit-Api-Token" }
+        }
+      }
+    },
+    "/api/v1/sprints": {
+      "get": {
+        "operationId": "HentSprints",
+        "summary": "Hent alle sprints",
+        "description": "Returnerer alle sprints med status og datoer.",
+        "responses": {
+          "200": {
+            "description": "Liste af sprints",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string", "example": "s-x1y2z3w4" },
+                  "projectId": { "type": "string", "example": "p-app" },
+                  "name": { "type": "string", "example": "Sprint 14" },
+                  "status": { "type": "string", "example": "active" },
+                  "startDate": { "type": "string", "example": "2026-10-12" },
+                  "endDate": { "type": "string", "example": "2026-10-23" }
+                }
+              }
+            }
+          },
+          "401": { "description": "Ugyldigt eller manglende X-Orbit-Api-Token" }
+        }
+      }
+    }
+  }
+}

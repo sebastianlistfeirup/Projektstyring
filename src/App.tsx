@@ -11,6 +11,7 @@ import type { Task } from './lib/types';
 import { taskRef } from './lib/utils';
 import { aiComplete } from './lib/companion';
 import { completeAdopsWorkItem, closeGitIssue, completeTodoTask, companionNotify, companionTeams } from './lib/companion';
+import { completeJiraIssue, completePlannerTask, completeTrelloCard } from './lib/companion';
 import { celebrate } from './components/Confetti';
 import { startSync } from './lib/sync';
 import ActivityView from './views/ActivityView';
@@ -163,6 +164,15 @@ export default function App() {
         }
         if (task.extIds?.gitProvider && task.extIds.gitIssue) {
           void closeGitIssue(task.extIds.gitIssue);
+        }
+        if (task.extIds?.jiraKey) {
+          void completeJiraIssue(task.extIds.jiraKey);
+        }
+        if (task.extIds?.trelloId) {
+          void completeTrelloCard(task.extIds.trelloId);
+        }
+        if (task.extIds?.plannerId && task.extIds.plannerEtag) {
+          void completePlannerTask(task.extIds.plannerId, task.extIds.plannerEtag);
         }
       }
       if (

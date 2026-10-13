@@ -12,6 +12,7 @@ import PresenceCursors from './PresenceCursors';
 import RouteTransition from './RouteTransition';
 import ThemePicker from './ThemePicker';
 import TvMode from './TvMode';
+import { PresentationToggle } from './PresentationMode';
 
 function openPalette() {
   window.dispatchEvent(new CustomEvent('orbit:open-palette'));
@@ -383,6 +384,7 @@ export default function AppShell() {
               <Crosshair className="h-4 w-4" />
             </button>
             <NotificationCenter />
+            <PresentationToggle />
             <TvMode />
             <button
               onClick={toggleLang}

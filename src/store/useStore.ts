@@ -16,6 +16,7 @@ import type {
   IssueEntry,
   Label,
   NoteEntry,
+  NovaEntry,
   Priority,
   Project,
   Risk,
@@ -78,6 +79,7 @@ interface OrbitState {
   simpleMode: boolean;
   goals: Goal[];
   baselines: Baseline[];
+  novaLog: NovaEntry[];
   syncConflicts: { taskId: string; local: Task; remote: Task }[];
   activeProjectId: string | null;
   selectedTaskId: string | null;
@@ -147,6 +149,7 @@ interface OrbitState {
   addGoal: (title: string, note?: string) => void;
   updateGoal: (id: string, patch: Partial<Goal>) => void;
   deleteGoal: (id: string) => void;
+  answerNova: (question: string, answer: string) => void;
   saveBaseline: (projectId: string) => void;
   clearBaseline: (projectId: string) => void;
   shareProject: (projectId: string) => void;
@@ -239,6 +242,7 @@ export const useStore = create<OrbitState>()(
       simpleMode: false,
       goals: [],
       baselines: [],
+      novaLog: [],
       syncConflicts: [],
       activeProjectId: 'p-app',
       selectedTaskId: null,
@@ -295,6 +299,33 @@ export const useStore = create<OrbitState>()(
             ? [makeEntry(state.currentUserId, log, task.title, task.id, task.projectId), ...s.activity]
             : s.activity,
         }));
+
+        // Versionshistorik for fulgte felter
+        const HISTORY_FIELDS: Record<string, string> = {
+          status: 'Status',
+          priority: 'Prioritet',
+          assigneeId: 'Ansvarlig',
+          dueDate: 'Frist',
+          title: 'Titel',
+          sprintId: 'Sprint',
+        };
+        const historyEntries = Object.keys(HISTORY_FIELDS)
+          .filter((k) => k in patch)
+          .filter((k) => String((patch as Record<string, unknown>)[k] ?? '') !== String((task as unknown as Record<string, unknown>)[k] ?? ''))
+          .map((k) => ({
+            at: now,
+            userId: state.currentUserId,
+            field: HISTORY_FIELDS[k],
+            from: String((task as unknown as Record<string, unknown>)[k] ?? '—'),
+            to: String((patch as Record<string, unknown>)[k] ?? '—'),
+          }));
+        if (historyEntries.length > 0) {
+          set((s) => ({
+            tasks: s.tasks.map((t) =>
+              t.id === id ? { ...t, history: [...historyEntries, ...(t.history ?? [])].slice(0, 30) } : t,
+            ),
+          }));
+        }
 
         // Forskyd afhængige opgaver når datoer rykkes
         const newDue = patch.dueDate !== undefined ? patch.dueDate : oldDue;
@@ -945,6 +976,13 @@ export const useStore = create<OrbitState>()(
         set((s) => ({ goals: s.goals.filter((g) => g.id !== id) }));
       },
 
+      answerNova: (question, answer) => {
+        const date = new Date().toISOString().slice(0, 10);
+        set((s) => ({
+          novaLog: [{ date, question, answer }, ...s.novaLog.filter((n) => n.date !== date)].slice(0, 90),
+        }));
+      },
+
       saveBaseline: (projectId) => {
         const items = get()
           .tasks.filter((t) => t.projectId === projectId && (t.startDate || t.dueDate))
@@ -988,6 +1026,7 @@ export const useStore = create<OrbitState>()(
           simpleMode: false,
           goals: [],
           baselines: [],
+          novaLog: [],
           syncConflicts: [],
           activeProjectId: 'p-app',
           selectedTaskId: null,

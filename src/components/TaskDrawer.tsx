@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { CalendarClock, CalendarPlus, Check, ClipboardCheck, Copy, FileText, FolderInput, Paperclip, Pin, PinOff, Play, Plus, Sparkles, Square, Trash2, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { CalendarClock, CalendarPlus, Check, ChevronRight, ClipboardCheck, Copy, FileText, FolderInput, History, Paperclip, Pin, PinOff, Play, Plus, Sparkles, Square, Trash2, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { PRIORITY_META, STATUS_META } from '../lib/constants';
 import { cn, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
@@ -15,7 +15,8 @@ import {
   uploadAttachment,
   type AttachmentMeta,
 } from '../lib/companion';
-import type { Comment, CustomFieldDef, Priority, Task, TaskStatus } from '../lib/types';
+import type { Comment, CustomFieldDef, Priority, Sprint, Task, TaskStatus, User } from '../lib/types';
+import { estimateSuggestion } from '../lib/radar';
 import { Avatar, LabelChip, ProgressBar, StatusBadge } from '../components/common';
 
 export default function TaskDrawer() {
@@ -56,6 +57,13 @@ export default function TaskDrawer() {
   const [aiFeedback, setAiFeedback] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
   const [summary, setSummary] = useState('');
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  // AI-estimatforslag fra lignende afsluttede opgaver (vises kun mens estimate mangler)
+  const estimateHint = useMemo(() => {
+    if (!task || task.estimate != null) return null;
+    return estimateSuggestion(allTasks, task.title);
+  }, [task, allTasks]);
 
   useEffect(() => {
     if (!task) return;
@@ -692,14 +700,26 @@ export default function TaskDrawer() {
             </div>
 
             <FieldLabel>Points</FieldLabel>
-            <input
-              type="number"
-              min={0}
-              value={task.estimate ?? ''}
-              onChange={(e) => updateTask(task.id, { estimate: e.target.value ? Number(e.target.value) : null })}
-              placeholder="—"
-              className="input w-24 py-1.5"
-            />
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={0}
+                value={task.estimate ?? ''}
+                onChange={(e) => updateTask(task.id, { estimate: e.target.value ? Number(e.target.value) : null })}
+                placeholder="—"
+                className="input w-24 py-1.5"
+              />
+              {task.estimate == null && estimateHint !== null && (
+                <button
+                  onClick={() => updateTask(task.id, { estimate: estimateHint })}
+                  title="Brug AI-forslag baseret på gennemsnittet af lignende afsluttede opgaver"
+                  className="flex items-center gap-1 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2 py-1 text-[11px] font-semibold text-indigo-600 transition-colors hover:bg-indigo-500/20 dark:text-indigo-300"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  AI: ~{estimateHint} points
+                </button>
+              )}
+            </div>
 
             <FieldLabel>Milepæl</FieldLabel>
             <div className="flex items-center gap-2">
@@ -1180,6 +1200,51 @@ export default function TaskDrawer() {
               </div>
             </div>
           </section>
+
+          {/* Versionshistorik */}
+          <section>
+            <button
+              onClick={() => setHistoryOpen((o) => !o)}
+              className="flex w-full items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 transition-colors hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            >
+              <History className="h-3.5 w-3.5" />
+              Historik
+              {(task.history?.length ?? 0) > 0 && (
+                <span className="rounded bg-zinc-500/10 px-1.5 py-px text-[10px] tabular-nums text-zinc-500 dark:text-zinc-400">
+                  {task.history?.length}
+                </span>
+              )}
+              <span className="flex-1" />
+              <ChevronRight className={cn('h-3.5 w-3.5 transition-transform', historyOpen && 'rotate-90')} />
+            </button>
+            {historyOpen && (
+              <div className="mt-2.5">
+                {(task.history?.length ?? 0) === 0 ? (
+                  <p className="text-sm text-zinc-400">Ingen ændringer endnu.</p>
+                ) : (
+                  <ol className="relative space-y-3 border-l border-zinc-200 dark:border-white/[0.08]">
+                    {(task.history ?? []).slice(0, 8).map((h, i) => (
+                      <li key={`${h.at}-${i}`} className="relative ml-4">
+                        <span className="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full bg-indigo-400 ring-4 ring-white dark:ring-[#1b1c20]" />
+                        <p className="text-sm text-zinc-700 dark:text-zinc-200">
+                          <span className="font-medium">{h.field}:</span>{' '}
+                          <span className="text-zinc-400 dark:text-zinc-500">
+                            {historyValueLabel(h.field, h.from, users, sprints)}
+                          </span>
+                          {' → '}
+                          <span>{historyValueLabel(h.field, h.to, users, sprints)}</span>
+                        </p>
+                        <div className="mt-1 flex items-center gap-1.5">
+                          <Avatar user={users.find((u) => u.id === h.userId)} size="xs" />
+                          <span className="text-[11px] text-zinc-400">{timeAgo(h.at)}</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            )}
+          </section>
         </div>
 
         {/* Footer */}
@@ -1549,6 +1614,16 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   return (
     <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{children}</span>
   );
+}
+
+function historyValueLabel(field: string, value: string, users: User[], sprints: Sprint[]): string {
+  if (value === '' || value === '—') return '—';
+  if (field === 'Status') return STATUS_META[value as TaskStatus]?.label ?? value;
+  if (field === 'Prioritet') return PRIORITY_META[value as Priority]?.label ?? value;
+  if (field === 'Ansvarlig') return users.find((u) => u.id === value)?.name ?? 'Ukendt';
+  if (field === 'Sprint') return sprints.find((sp) => sp.id === value)?.name ?? value;
+  if (field === 'Frist') return /^\d{4}-\d{2}-\d{2}/.test(value) ? formatDateShort(value) : value;
+  return value;
 }
 
 function aiErrorText(reason?: string): string {

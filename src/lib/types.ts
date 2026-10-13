@@ -65,6 +65,10 @@ export interface Task {
     adopsId?: number;
     gitProvider?: 'github' | 'gitlab';
     gitIssue?: number;
+    jiraKey?: string;
+    trelloId?: string;
+    plannerId?: string;
+    plannerEtag?: string;
   }; // eksterne systemer
   approval?: Approval | null; // kundegodkendelse via offentligt link
   emoji?: string; // lille visuel markør på kortet
@@ -72,6 +76,7 @@ export interface Task {
   reminderAt?: string | null; // påmindelse på klokkeslæt (ISO)
   isMilestone?: boolean; // vises som diamant på tidslinjen
   kudos?: Kudo[]; // high-fives på afsluttede opgaver
+  history?: HistoryEntry[]; // versionshistorik (max 30)
 }
 
 export type NoteKind = 'note' | 'meeting' | 'decision';
@@ -159,6 +164,20 @@ export interface Baseline {
   projectId: string;
   savedAt: string;
   items: BaselineEntry[];
+}
+
+export interface HistoryEntry {
+  at: string; // ISO
+  userId: string;
+  field: string; // fx 'status', 'prioritet', 'frist'
+  from: string;
+  to: string;
+}
+
+export interface NovaEntry {
+  date: string; // yyyy-mm-dd
+  question: string;
+  answer: string;
 }
 
 export interface StandupEntry {

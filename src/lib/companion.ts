@@ -551,3 +551,151 @@ export async function closeGitIssue(id: number): Promise<{ ok: boolean; reason?:
 export function approvalUrl(token: string): string {
   return `http://${window.location.hostname}:4310/public/approve/${token}`;
 }
+
+// ---------------- Fase 9: Daglig Orbit + integrationsklienter ----------------
+export async function telegramStatus(): Promise<{ ok: boolean; configured?: boolean; running?: boolean }> {
+  try {
+    const res = await fetch(`${BASE}/api/telegram/status`, { headers: authHeaders(), signal: AbortSignal.timeout(3000) });
+    return await res.json();
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function saveTelegramConfig(token: string): Promise<{ ok: boolean; running?: boolean }> {
+  try {
+    return await post('/api/telegram/config', { token });
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function saveSlackConfig(commandToken: string): Promise<{ ok: boolean }> {
+  try {
+    return await post('/api/slack/config', { commandToken });
+  } catch {
+    return { ok: false };
+  }
+}
+
+export interface ExternalIssue {
+  id: string;
+  title: string;
+  state?: string;
+  eTag?: string;
+  due?: string | null;
+  description?: string;
+}
+
+export async function saveJiraConfig(cfg: { domain?: string; email?: string; token?: string; project?: string }): Promise<{ ok: boolean }> {
+  try {
+    return await post('/api/jira/config', cfg);
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function fetchJiraIssues(): Promise<{ ok: boolean; items?: ExternalIssue[]; reason?: string }> {
+  try {
+    const res = await fetch(`${BASE}/api/jira/issues`, { headers: authHeaders(), signal: AbortSignal.timeout(20000) });
+    return await res.json();
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export async function completeJiraIssue(key: string): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    return await post('/api/jira/complete', { id: key });
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export async function saveTrelloConfig(cfg: { key?: string; token?: string; boardId?: string }): Promise<{ ok: boolean }> {
+  try {
+    return await post('/api/trello/config', cfg);
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function fetchTrelloCards(): Promise<{ ok: boolean; items?: ExternalIssue[]; reason?: string }> {
+  try {
+    const res = await fetch(`${BASE}/api/trello/cards`, { headers: authHeaders(), signal: AbortSignal.timeout(20000) });
+    return await res.json();
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export async function completeTrelloCard(id: string): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    return await post('/api/trello/complete', { id });
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export interface PlannerTaskExt {
+  id: string;
+  eTag: string;
+  title: string;
+  dueDate: string | null;
+  percentComplete: number;
+}
+
+export async function fetchPlannerTasks(): Promise<{ ok: boolean; items?: PlannerTaskExt[]; reason?: string }> {
+  try {
+    const res = await fetch(`${BASE}/api/graph/planner`, { headers: authHeaders(), signal: AbortSignal.timeout(20000) });
+    return (await res.json()) as { ok: boolean; items?: PlannerTaskExt[]; reason?: string };
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export async function completePlannerTask(id: string, etag: string): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    return await post('/api/graph/planner/complete', { id, etag });
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export async function notifyWithActions(title: string, message: string, taskId?: string): Promise<{ ok: boolean }> {
+  try {
+    return await post('/api/notify-action', { title, message, taskId });
+  } catch {
+    return { ok: false };
+  }
+}
+
+export interface IcalEvent {
+  title: string;
+  date: string;
+  description: string;
+}
+
+export async function parseICalFeed(url: string): Promise<{ ok: boolean; items?: IcalEvent[]; reason?: string }> {
+  try {
+    return await post('/api/ical/parse', { url });
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}
+
+export async function saveEconomicConfig(cfg: { agreementGrantToken?: string; customerNumber?: number }): Promise<{ ok: boolean }> {
+  try {
+    return await post('/api/economic/config', cfg);
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function createEconomicDraft(lines: { description: string; quantity: number; unitPrice: number }[]): Promise<{ ok: boolean; draftNumber?: number; reason?: string }> {
+  try {
+    return await post('/api/economic/draft', { lines });
+  } catch {
+    return { ok: false, reason: 'Companion-serveren svarer ikke' };
+  }
+}

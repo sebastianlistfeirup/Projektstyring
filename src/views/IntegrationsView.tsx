@@ -2,12 +2,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlarmClock,
   BellRing,
+  Bug,
+  CalendarRange,
+  ClipboardCheck,
   Copy,
   Download,
   FileText,
   FolderOpen,
   HardDrive,
+  Hash,
   Link2,
+  MailPlus,
   MailWarning,
   Play,
   Plug,
@@ -15,9 +20,11 @@ import {
   Send,
   Share2,
   Sparkles,
+  SquareKanban,
   Trash2,
   Unplug,
   Users,
+  Workflow,
   Zap,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
@@ -33,23 +40,37 @@ import {
   companionTeams,
   createApiToken,
   createBackup,
+  createEconomicDraft,
   fetchAdopsWorkItems,
   fetchGitIssues,
+  fetchJiraIssues,
+  fetchPlannerTasks,
+  fetchTrelloCards,
   getSyncToken,
   getWebhooks,
   listBackups,
+  parseICalFeed,
   postStandup,
   removeWebhook,
   restoreBackup,
   runRemindersNow,
   runReportNow,
   saveAdopsConfig,
+  saveEconomicConfig,
   saveGitConfig,
+  saveJiraConfig,
+  saveSlackConfig,
+  saveTelegramConfig,
+  saveTrelloConfig,
   setSyncToken,
+  telegramStatus,
   type AdopsWorkItem,
   type BackupFile,
   type CompanionStatus,
+  type ExternalIssue,
   type GitIssue,
+  type IcalEvent,
+  type PlannerTaskExt,
 } from '../lib/companion';
 import { applySnapshot, getSyncUrl, isSyncEnabled, restartSync, setSyncEnabled, setSyncUrl } from '../lib/sync';
 import { cn, formatDate, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
@@ -114,6 +135,8 @@ export default function IntegrationsView() {
   const setRules = useStore((s) => s.setRules);
   const shareIntake = useStore((s) => s.shareIntake);
   const unshareIntake = useStore((s) => s.unshareIntake);
+  const timeEntries = useStore((s) => s.timeEntries);
+  const hourlyRate = useStore((s) => s.hourlyRate);
 
   const [status, setStatus] = useState<CompanionStatus | null>(null);
   const [webhook, setWebhook] = useState('');
@@ -150,6 +173,28 @@ export default function IntegrationsView() {
   const [gitRepo, setGitRepo] = useState('');
   const [gitItems, setGitItems] = useState<GitIssue[] | null>(null);
   const [gitSelected, setGitSelected] = useState<Set<number>>(new Set());
+  // Telegram / Slack / Jira / Trello / Planner / iCal / e-conomic
+  const [tgToken, setTgToken] = useState('');
+  const [tgStatus, setTgStatus] = useState<{ configured: boolean; running: boolean } | null>(null);
+  const [slackToken, setSlackToken] = useState('');
+  const [jiraDomain, setJiraDomain] = useState('');
+  const [jiraEmail, setJiraEmail] = useState('');
+  const [jiraToken, setJiraToken] = useState('');
+  const [jiraProject, setJiraProject] = useState('');
+  const [jiraItems, setJiraItems] = useState<ExternalIssue[] | null>(null);
+  const [jiraSelected, setJiraSelected] = useState<Set<string>>(new Set());
+  const [trelloKey, setTrelloKey] = useState('');
+  const [trelloToken, setTrelloToken] = useState('');
+  const [trelloBoard, setTrelloBoard] = useState('');
+  const [trelloItems, setTrelloItems] = useState<ExternalIssue[] | null>(null);
+  const [trelloSelected, setTrelloSelected] = useState<Set<string>>(new Set());
+  const [plannerItems, setPlannerItems] = useState<PlannerTaskExt[] | null>(null);
+  const [plannerSelected, setPlannerSelected] = useState<Set<string>>(new Set());
+  const [icalUrl, setIcalUrl] = useState('');
+  const [icalEvents, setIcalEvents] = useState<IcalEvent[] | null>(null);
+  const [icalSelected, setIcalSelected] = useState<Set<number>>(new Set());
+  const [econToken, setEconToken] = useState('');
+  const [econCustomer, setEconCustomer] = useState('');
   const [agentDraft, setAgentDraft] = useState<{ projectId: string; text: string } | null>(null);
   const [brandName, setBrandName] = useState(() => localStorage.getItem('orbit-brand') ?? 'Orbit');
   const prefilled = useRef(false);
@@ -178,6 +223,8 @@ export default function IntegrationsView() {
   const refresh = useCallback(async () => {
     const s = await companionStatus();
     setStatus(s);
+    const tg = await telegramStatus();
+    if (tg.ok) setTgStatus({ configured: Boolean(tg.configured), running: Boolean(tg.running) });
     if (s) {
       const [b, w] = await Promise.all([listBackups(), getWebhooks()]);
       if (b.ok && b.files) setBackups(b.files);
@@ -248,6 +295,30 @@ export default function IntegrationsView() {
       }),
     ];
     return lines.join('\n');
+  };
+
+  const extState = (s: string | undefined): 'todo' | 'inprogress' | 'done' =>
+    s && /done|closed|resolved|complete/i.test(s) ? 'done' : s && /progress|active|committed/i.test(s) ? 'inprogress' : 'todo';
+
+  const buildEconomicLines = () => {
+    const minutesByTask = new Map<string, number>();
+    for (const e of timeEntries) {
+      if (!e.endedAt) continue;
+      const mins = (new Date(e.endedAt).getTime() - new Date(e.startedAt).getTime()) / 60000;
+      if (mins <= 0) continue;
+      minutesByTask.set(e.taskId, (minutesByTask.get(e.taskId) ?? 0) + mins);
+    }
+    const lines: { description: string; quantity: number; unitPrice: number }[] = [];
+    for (const [taskId, minutes] of minutesByTask) {
+      const task = tasks.find((t) => t.id === taskId);
+      if (!task) continue;
+      lines.push({
+        description: `${taskRef(task, projects)} – ${task.title}`,
+        quantity: Math.round((minutes / 60) * 100) / 100,
+        unitPrice: hourlyRate,
+      });
+    }
+    return lines;
   };
 
   return (
@@ -1257,7 +1328,511 @@ export default function IntegrationsView() {
               )}
             </div>
           )}
-          <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">Bruger du Jira? Importer sprints via CSV under Import & skabeloner.</p>
+          <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">Bruger du Jira eller Trello? Deres egne sektioner finder du lige nedenunder.</p>
+        </Section>
+
+        {/* Telegram-bot */}
+        <Section icon={<Send className="h-5 w-5" />} title="Telegram-bot" subtitle="Skriv en besked til bottet på Telegram – opgaven lander i Orbit med det samme">
+          <div className="flex gap-2">
+            <input
+              type="password"
+              value={tgToken}
+              onChange={(e) => setTgToken(e.target.value)}
+              placeholder="Bot-token (fra @BotFather)"
+              className="input flex-1 py-1.5 font-mono text-xs"
+            />
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('tg-save', async () => {
+                  const r = await saveTelegramConfig(tgToken.trim());
+                  const s = await telegramStatus();
+                  if (s.ok) setTgStatus({ configured: Boolean(s.configured), running: Boolean(s.running) });
+                  if (!tgToken.trim()) return 'Telegram-token fjernet.';
+                  return r.running
+                    ? 'Bot kører – skriv /start til bottet på Telegram.'
+                    : 'Token gemt, men bottet kunne ikke startes – tjek tokenet (og at Companion kører).';
+                }, 'error')
+              }
+              className="btn-primary shrink-0 py-1.5 text-xs"
+            >
+              Gem konfiguration
+            </button>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span
+              className={cn(
+                'rounded-full px-2.5 py-1 text-[11px] font-medium',
+                tgStatus?.running
+                  ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-zinc-500/10 text-zinc-500 dark:text-zinc-400',
+              )}
+            >
+              {tgStatus?.running ? 'Bot kører' : tgStatus?.configured ? 'Konfigureret – bottet venter' : 'Ikke konfigureret'}
+            </span>
+            <span className="text-[11px] text-zinc-400 dark:text-zinc-500">
+              Skriv en besked til bottet på Telegram → opgave i Orbit. Trin-for-trin: docs/telegram.md
+            </span>
+          </div>
+        </Section>
+
+        {/* Slack */}
+        <Section icon={<Hash className="h-5 w-5" />} title="Slack" subtitle="Opret opgaver i Orbit direkte fra Slack med /orbit-kommandoen">
+          <div className="flex gap-2">
+            <input
+              type="password"
+              value={slackToken}
+              onChange={(e) => setSlackToken(e.target.value)}
+              placeholder="Kommando-token (Verification Token fra din Slack-app)"
+              className="input flex-1 py-1.5 font-mono text-xs"
+            />
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('slack-save', async () => {
+                  await saveSlackConfig(slackToken.trim());
+                  return slackToken.trim() ? 'Slack-konfiguration gemt.' : 'Slack-token fjernet.';
+                })
+              }
+              className="btn-primary shrink-0 py-1.5 text-xs"
+            >
+              Gem konfiguration
+            </button>
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-zinc-400 dark:text-zinc-500">
+            I din Slack-app: opret et Slash Command <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[10px] dark:bg-white/10">/orbit</code> → Request URL:{' '}
+            <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[10px] dark:bg-white/10">http://&lt;din-pc&gt;:4310/api/slack/command</code>. Opret app og token: docs/slack.md
+          </p>
+        </Section>
+
+        {/* Jira */}
+        <Section icon={<Bug className="h-5 w-5" />} title="Jira" subtitle="Hent issues fra Jira Cloud og skriv status tilbage – to-vejs">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+            <input value={jiraDomain} onChange={(e) => setJiraDomain(e.target.value)} placeholder="Domæne (fx firma.atlassian.net)" className="input py-1.5 font-mono text-xs" />
+            <input value={jiraEmail} onChange={(e) => setJiraEmail(e.target.value)} placeholder="E-mail (din Atlassian-konto)" className="input py-1.5 font-mono text-xs" />
+            <input type="password" value={jiraToken} onChange={(e) => setJiraToken(e.target.value)} placeholder="API-token" className="input py-1.5 font-mono text-xs" />
+            <input value={jiraProject} onChange={(e) => setJiraProject(e.target.value)} placeholder="Projekt-nøgle (fx APP)" className="input py-1.5 font-mono text-xs" />
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('jira-save', async () => {
+                  await saveJiraConfig({ domain: jiraDomain, email: jiraEmail, token: jiraToken, project: jiraProject });
+                  return 'Jira-konfiguration gemt.';
+                })
+              }
+              className="btn-outline py-1.5 text-xs"
+            >
+              Gem konfiguration
+            </button>
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('jira-fetch', async () => {
+                  const r = await fetchJiraIssues();
+                  if (!r.ok || !r.items) return r.reason ?? 'Kunne ikke hente issues.';
+                  setJiraItems(r.items);
+                  setJiraSelected(new Set(r.items.map((i) => i.id)));
+                  return `${r.items.length} åbne issues fundet.`;
+                }, 'error')
+              }
+              className="btn-outline py-1.5 text-xs"
+            >
+              Hent issues
+            </button>
+          </div>
+          {jiraItems && (
+            <div className="mt-3">
+              {jiraItems.length === 0 ? (
+                <p className="text-sm text-zinc-400">Ingen åbne issues.</p>
+              ) : (
+                <>
+                  <ul className="mb-2 max-h-56 space-y-1 overflow-y-auto">
+                    {jiraItems.map((item) => (
+                      <li key={item.id} className="flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-white/[0.04]">
+                        <input
+                          type="checkbox"
+                          checked={jiraSelected.has(item.id)}
+                          onChange={() =>
+                            setJiraSelected((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(item.id)) next.delete(item.id);
+                              else next.add(item.id);
+                              return next;
+                            })
+                          }
+                          className="h-4 w-4 accent-indigo-500"
+                        />
+                        <span className="w-20 shrink-0 truncate text-xs font-bold tabular-nums text-zinc-500">{item.id}</span>
+                        <span className="min-w-0 flex-1 truncate text-sm text-zinc-800 dark:text-zinc-100">{item.title}</span>
+                        {item.due && <span className="shrink-0 text-xs text-zinc-400">frist {formatDateShort(item.due)}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    disabled={jiraSelected.size === 0}
+                    onClick={() => {
+                      const projectId = activeProjectId ?? projects[0]?.id;
+                      if (!projectId || !jiraItems) return;
+                      const chosen = jiraItems.filter((i) => jiraSelected.has(i.id));
+                      for (const item of chosen) {
+                        const t = useStore.getState().addTask({ title: item.title, projectId, status: extState(item.state), dueDate: item.due ?? null, description: item.description ?? '' });
+                        setTaskExtIds(t.id, { jiraKey: item.id });
+                      }
+                      setJiraItems(null);
+                      say(`${chosen.length} issues importeret – afslut dem i Orbit, og Jira-transitionen udføres automatisk.`);
+                    }}
+                    className="btn-primary py-1 text-xs"
+                  >
+                    Importér valgte ({jiraSelected.size}) – med tilbage-skrivning
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">Afslut i Orbit → Jira-transition udføres automatisk.</p>
+        </Section>
+
+        {/* Trello */}
+        <Section icon={<SquareKanban className="h-5 w-5" />} title="Trello" subtitle="Hent kort fra et Trello-board og skriv status tilbage – to-vejs">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <input value={trelloKey} onChange={(e) => setTrelloKey(e.target.value)} placeholder="API-nøgle (fra trello.com/app-key)" className="input py-1.5 font-mono text-xs" />
+            <input type="password" value={trelloToken} onChange={(e) => setTrelloToken(e.target.value)} placeholder="Token (fra Trello-token-URL'en)" className="input py-1.5 font-mono text-xs" />
+            <input value={trelloBoard} onChange={(e) => setTrelloBoard(e.target.value)} placeholder="Board-id (står i board-URL'en)" className="input py-1.5 font-mono text-xs" />
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('trello-save', async () => {
+                  await saveTrelloConfig({ key: trelloKey, token: trelloToken, boardId: trelloBoard });
+                  return 'Trello-konfiguration gemt.';
+                })
+              }
+              className="btn-outline py-1.5 text-xs"
+            >
+              Gem konfiguration
+            </button>
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('trello-fetch', async () => {
+                  const r = await fetchTrelloCards();
+                  if (!r.ok || !r.items) return r.reason ?? 'Kunne ikke hente kort.';
+                  setTrelloItems(r.items);
+                  setTrelloSelected(new Set(r.items.map((i) => i.id)));
+                  return `${r.items.length} åbne kort fundet.`;
+                }, 'error')
+              }
+              className="btn-outline py-1.5 text-xs"
+            >
+              Hent kort
+            </button>
+          </div>
+          {trelloItems && (
+            <div className="mt-3">
+              {trelloItems.length === 0 ? (
+                <p className="text-sm text-zinc-400">Ingen åbne kort.</p>
+              ) : (
+                <>
+                  <ul className="mb-2 max-h-56 space-y-1 overflow-y-auto">
+                    {trelloItems.map((item) => (
+                      <li key={item.id} className="flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-white/[0.04]">
+                        <input
+                          type="checkbox"
+                          checked={trelloSelected.has(item.id)}
+                          onChange={() =>
+                            setTrelloSelected((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(item.id)) next.delete(item.id);
+                              else next.add(item.id);
+                              return next;
+                            })
+                          }
+                          className="h-4 w-4 accent-indigo-500"
+                        />
+                        <span className="min-w-0 flex-1 truncate text-sm text-zinc-800 dark:text-zinc-100">{item.title}</span>
+                        {item.due && <span className="shrink-0 text-xs text-zinc-400">frist {formatDateShort(item.due)}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    disabled={trelloSelected.size === 0}
+                    onClick={() => {
+                      const projectId = activeProjectId ?? projects[0]?.id;
+                      if (!projectId || !trelloItems) return;
+                      const chosen = trelloItems.filter((i) => trelloSelected.has(i.id));
+                      for (const item of chosen) {
+                        const t = useStore.getState().addTask({ title: item.title, projectId, status: extState(item.state), dueDate: item.due ?? null, description: item.description ?? '' });
+                        setTaskExtIds(t.id, { trelloId: item.id });
+                      }
+                      setTrelloItems(null);
+                      say(`${chosen.length} kort importeret – afslut dem i Orbit, og kortet arkiveres i Trello.`);
+                    }}
+                    className="btn-primary py-1 text-xs"
+                  >
+                    Importér valgte ({trelloSelected.size}) – med tilbage-skrivning
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">Kort med frist får samme frist i Orbit. Afslut i Orbit → kortet arkiveres i Trello.</p>
+        </Section>
+
+        {/* Microsoft Planner */}
+        <Section icon={<ClipboardCheck className="h-5 w-5" />} title="Microsoft Planner" subtitle="Hent Planner-opgaver fra din Microsoft 365-forbindelse og skriv status tilbage">
+          <div className="flex flex-wrap gap-2">
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('planner-fetch', async () => {
+                  const r = await fetchPlannerTasks();
+                  if (!r.ok || !r.items) return r.reason ?? 'Kunne ikke hente Planner-opgaver.';
+                  setPlannerItems(r.items);
+                  setPlannerSelected(new Set(r.items.map((i) => i.id)));
+                  return `${r.items.length} Planner-opgaver fundet.`;
+                }, 'error')
+              }
+              className="btn-outline py-1.5 text-xs"
+            >
+              Hent Planner-opgaver
+            </button>
+          </div>
+          {plannerItems && (
+            <div className="mt-3">
+              {plannerItems.length === 0 ? (
+                <p className="text-sm text-zinc-400">Ingen Planner-opgaver fundet.</p>
+              ) : (
+                <>
+                  <ul className="mb-2 max-h-56 space-y-1 overflow-y-auto">
+                    {plannerItems.map((item) => (
+                      <li key={item.id} className="flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-white/[0.04]">
+                        <input
+                          type="checkbox"
+                          checked={plannerSelected.has(item.id)}
+                          onChange={() =>
+                            setPlannerSelected((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(item.id)) next.delete(item.id);
+                              else next.add(item.id);
+                              return next;
+                            })
+                          }
+                          className="h-4 w-4 accent-indigo-500"
+                        />
+                        <span className="min-w-0 flex-1 truncate text-sm text-zinc-800 dark:text-zinc-100">{item.title}</span>
+                        {item.dueDate && <span className="shrink-0 text-xs text-zinc-400">frist {formatDateShort(item.dueDate)}</span>}
+                        <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-white/[0.06] dark:text-zinc-400">
+                          {item.percentComplete}%
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    disabled={plannerSelected.size === 0}
+                    onClick={() => {
+                      const projectId = activeProjectId ?? projects[0]?.id;
+                      if (!projectId || !plannerItems) return;
+                      const chosen = plannerItems.filter((i) => plannerSelected.has(i.id));
+                      for (const item of chosen) {
+                        const t = useStore.getState().addTask({
+                          title: item.title,
+                          projectId,
+                          status: item.percentComplete >= 100 ? 'done' : item.percentComplete > 0 ? 'inprogress' : 'todo',
+                          dueDate: item.dueDate,
+                        });
+                        setTaskExtIds(t.id, { plannerId: item.id, plannerEtag: item.eTag });
+                      }
+                      setPlannerItems(null);
+                      say(`${chosen.length} Planner-opgaver importeret – afslut dem i Orbit, og opgaven streges i Planner.`);
+                    }}
+                    className="btn-primary py-1 text-xs"
+                  >
+                    Importér valgte ({plannerSelected.size}) – med tilbage-skrivning
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">
+            Kræver Microsoft 365-forbindelse (fanen "Outlook & Microsoft 365"). Afslut i Orbit → opgaven streges i Planner.
+          </p>
+        </Section>
+
+        {/* Google/Apple-kalender via iCal */}
+        <Section icon={<CalendarRange className="h-5 w-5" />} title="Google/Apple-kalender (iCal)" subtitle="Hent begivenheder fra en offentlig iCal-feed og opret dem som opgaver">
+          <div className="flex gap-2">
+            <input
+              value={icalUrl}
+              onChange={(e) => setIcalUrl(e.target.value)}
+              placeholder="Offentlig iCal-feed-URL (Google: Indstillinger → Kalender → Integrer kalender; Apple: del kalender som offentlig)"
+              className="input flex-1 py-1.5 font-mono text-xs"
+            />
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('ical-fetch', async () => {
+                  const r = await parseICalFeed(icalUrl.trim());
+                  if (!r.ok || !r.items) return r.reason ?? 'Kunne ikke læse kalender-feedet.';
+                  setIcalEvents(r.items);
+                  setIcalSelected(new Set(r.items.map((_, i) => i)));
+                  return `${r.items.length} begivenheder fundet.`;
+                }, 'error')
+              }
+              className="btn-outline shrink-0 py-1.5 text-xs"
+            >
+              Hent begivenheder
+            </button>
+          </div>
+          {icalEvents && (
+            <div className="mt-3">
+              {icalEvents.length === 0 ? (
+                <p className="text-sm text-zinc-400">Ingen begivenheder i feedet.</p>
+              ) : (
+                <>
+                  <ul className="mb-2 max-h-56 space-y-1 overflow-y-auto">
+                    {icalEvents.map((ev, i) => (
+                      <li key={`${ev.date}-${i}`} className="flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-white/[0.04]">
+                        <input
+                          type="checkbox"
+                          checked={icalSelected.has(i)}
+                          onChange={() =>
+                            setIcalSelected((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(i)) next.delete(i);
+                              else next.add(i);
+                              return next;
+                            })
+                          }
+                          className="h-4 w-4 accent-indigo-500"
+                        />
+                        <span className="min-w-0 flex-1 truncate text-sm text-zinc-800 dark:text-zinc-100">{ev.title}</span>
+                        <span className="shrink-0 text-xs text-zinc-400">{formatDate(ev.date)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <button
+                    disabled={icalSelected.size === 0}
+                    onClick={() => {
+                      const projectId = activeProjectId ?? projects[0]?.id;
+                      if (!projectId || !icalEvents) return;
+                      let created = 0;
+                      icalEvents.forEach((ev, i) => {
+                        if (!icalSelected.has(i)) return;
+                        useStore.getState().addTask({ title: ev.title, projectId, status: 'todo', dueDate: ev.date, description: ev.description });
+                        created += 1;
+                      });
+                      setIcalEvents(null);
+                      say(`${created} begivenheder oprettet som opgaver med frist fra kalenderen.`);
+                    }}
+                    className="btn-primary py-1 text-xs"
+                  >
+                    Opret valgte som opgaver ({icalSelected.size})
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">
+            Kalenderen skal være offentlig med hemmelig URL – kun dem med linket kan se den.
+          </p>
+        </Section>
+
+        {/* e-conomic */}
+        <Section icon={<FileText className="h-5 w-5" />} title="e-conomic" subtitle="Lav en fakturakladde af din registrerede tid – klar til gennemgang og bogføring">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <input type="password" value={econToken} onChange={(e) => setEconToken(e.target.value)} placeholder="AgreementGrantToken" className="input py-1.5 font-mono text-xs" />
+            <input value={econCustomer} onChange={(e) => setEconCustomer(e.target.value)} placeholder="Kundenummer (debitor)" className="input py-1.5 font-mono text-xs" />
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('econ-save', async () => {
+                  await saveEconomicConfig({ agreementGrantToken: econToken, customerNumber: Number(econCustomer) || undefined });
+                  return 'e-conomic-konfiguration gemt.';
+                })
+              }
+              className="btn-outline py-1.5 text-xs"
+            >
+              Gem konfiguration
+            </button>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              disabled={!connected}
+              onClick={() =>
+                run('econ-draft', async () => {
+                  const lines = buildEconomicLines();
+                  if (lines.length === 0) return 'Ingen afsluttet tid at fakturere – registrer tid på opgaver først.';
+                  const r = await createEconomicDraft(lines);
+                  return r.ok && r.draftNumber != null
+                    ? `Fakturakladde nr. ${r.draftNumber} oprettet i e-conomic med ${lines.length} linje(r) à ${hourlyRate} DKK/time.`
+                    : r.reason ?? 'Kunne ikke oprette fakturakladden.';
+                }, 'error')
+              }
+              className="btn-primary py-1.5 text-xs"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              Opret fakturakladde fra registreret tid
+            </button>
+            <span className="text-[11px] text-zinc-400 dark:text-zinc-500">Timesats: {hourlyRate} DKK/time (ændres på dashboardet)</span>
+          </div>
+          <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">
+            Kladden vises i e-conomic til gennemgang og bogføring. Hvor du finder token: docs/economic.md
+          </p>
+        </Section>
+
+        {/* Outlook-hurtigtilføjelse */}
+        <Section icon={<MailPlus className="h-5 w-5" />} title="Outlook-hurtigtilføjelse" subtitle="Opret en opgave i Orbit direkte fra Outlook – uden at åbne appen">
+          {(() => {
+            const first = projects[0];
+            if (!first?.intakeToken) {
+              return <p className="text-sm text-zinc-400">Aktivér først en formular ovenfor – hurtigtilføjelsen bruger samme link til første projekt.</p>;
+            }
+            const url = `http://${window.location.hostname}:4310/public/intake/${first.intakeToken}`;
+            return (
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <code className="min-w-0 flex-1 truncate rounded bg-zinc-100 px-2 py-1.5 font-mono text-xs text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">{url}</code>
+                  <button
+                    onClick={() => void navigator.clipboard?.writeText(url).then(() => say('Hurtigtilføjelse-link kopieret.'))}
+                    className="btn-outline shrink-0 py-1.5 text-xs"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    Kopiér link
+                  </button>
+                </div>
+                <p className="text-[11px] leading-relaxed text-zinc-400 dark:text-zinc-500">
+                  Linket opretter opgaven i “{first.name}”. Opret en genvej i Outlook-båndet eller et bogmærke til linket – opgaven oprettes med det samme. Guide: docs/outlook.md
+                </p>
+              </div>
+            );
+          })()}
+        </Section>
+
+        {/* Power Automate */}
+        <Section icon={<Workflow className="h-5 w-5" />} title="Power Automate" subtitle="Byg flows der reagerer på Orbit – uden at skrive kode">
+          <ul className="space-y-1.5 text-sm text-zinc-600 dark:text-zinc-300">
+            <li className="flex items-start gap-2">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
+              <span>
+                Webhook-URL'et ovenfor (Webhooks & åbent API) virker som trigger i Power Automate ("When an HTTP request is received") – fx til Teams-beskeder, når en opgave afsluttes.
+              </span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
+              <span>
+                Importer Orbits færdige custom connector (<code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[10px] dark:bg-white/10">docs/power-automate-connector.json</code>) for at læse opgaver, projekter og sprints direkte i flows.
+              </span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
+              <span>
+                Trin-for-trin: docs/power-automate.md – i Power Automate vælger du Data → Custom connectors → Import.
+              </span>
+            </li>
+          </ul>
         </Section>
         {/* Formularer & hvid-label portal */}
         <Section icon={<Share2 className="h-5 w-5" />} title="Formularer & portal" subtitle="Lad kunder indsende opgaver uden login – og giv dem en portal med dit navn">
