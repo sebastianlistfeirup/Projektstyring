@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { Activity, BarChart3, Bot, CalendarRange, CircleGauge, FolderInput, Kanban, LayoutDashboard, ListChecks, ListTodo, Mail, NotebookPen, Plug, ShieldAlert, Sun, Table2, Target, Users } from 'lucide-react';
+import { Activity, BarChart3, Bot, CalendarRange, CircleGauge, FolderInput, Kanban, LayoutDashboard, ListChecks, ListTodo, Mail, MessageSquare, NotebookPen, Plug, ShieldAlert, Sun, Table2, Target, Users } from 'lucide-react';
 
 export interface NavItem {
   to: string;
@@ -15,6 +15,7 @@ export const VIEWS: NavItem[] = [
   { to: '/opgaver', label: 'Mine opgaver', labelKey: 'nav.mineopgaver', icon: ListChecks, keywords: ['mine', 'opgaver', 'liste', 'tjekliste', 'todo', 'plan'] },
   { to: '/aarshjul', label: 'Årshjul', labelKey: 'nav.aarshjul', icon: CircleGauge, keywords: ['årshjul', 'år', 'overblik', 'sæson', 'planlægning'] },
   { to: '/ai', label: 'AI-værksted', labelKey: 'nav.aiworkshop', icon: Bot, keywords: ['ai', 'agenter', 'orkestrator', 'pipeline', 'spil', 'udvikling', 'codex', 'claude'] },
+  { to: '/chat', label: 'AI-chat', labelKey: 'nav.aichat', icon: MessageSquare, keywords: ['chat', 'snak', 'besked', 'prompt', 'billeder', 'filer'] },
   { to: '/tavle', label: 'Tavle', labelKey: 'nav.board', icon: Kanban, keywords: ['board', 'kanban', 'opgaver'] },
   { to: '/tabel', label: 'Tabel', labelKey: 'nav.table', icon: Table2, keywords: ['liste', 'table', 'oversigt'] },
   { to: '/tidslinje', label: 'Tidslinje', labelKey: 'nav.timeline', icon: CalendarRange, keywords: ['gantt', 'plan', 'kalender'] },

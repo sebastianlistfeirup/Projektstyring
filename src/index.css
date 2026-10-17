@@ -673,3 +673,136 @@ html[data-density='compact'] ::-webkit-scrollbar {
     display: none !important;
   }
 }
+
+
+/* ============================================================
+   DESIGN-LØFT v2 – varmere, blødere, mere indbydende.
+   Ulagrede regler slår Tailwinds lag (samme trick som ovenfor).
+   ============================================================ */
+
+/* Varm papirbaggrund i lyst tema, dyb violet-kul i mørkt */
+body {
+  background-color: #f5f3ef;
+  background-image:
+    radial-gradient(1200px 800px at 85% -10%, rgba(129, 140, 248, 0.08), transparent 60%),
+    radial-gradient(1000px 700px at -10% 110%, rgba(52, 211, 153, 0.06), transparent 55%);
+}
+
+.dark body {
+  background-color: #121117;
+  background-image:
+    radial-gradient(1200px 800px at 85% -10%, rgba(129, 140, 248, 0.1), transparent 60%),
+    radial-gradient(1000px 700px at -10% 110%, rgba(52, 211, 153, 0.05), transparent 55%);
+}
+
+/* Blødere aurora – mindre " terminal ", mere stuemark */
+.aurora-blob {
+  opacity: 0.2;
+}
+
+.dark .aurora-blob {
+  opacity: 0.38;
+}
+
+/* Paneler: blødere kanter og et strejf af højde */
+.glass-panel {
+  border-color: rgba(24, 24, 27, 0.06);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow:
+    0 1px 2px rgba(24, 24, 27, 0.04),
+    0 8px 24px -12px rgba(24, 24, 27, 0.1);
+}
+
+.dark .glass-panel {
+  border-color: rgba(255, 255, 255, 0.07);
+  background: rgba(30, 31, 37, 0.82);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.2),
+    0 12px 32px -16px rgba(0, 0, 0, 0.5);
+}
+
+/* Primær knap: gradient + glød i stedet for flad farve */
+.btn-primary {
+  background-image: linear-gradient(135deg, var(--acc-400), var(--acc-600));
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.15),
+    0 4px 16px -4px var(--acc-glow);
+}
+
+.btn-primary:hover {
+  background-image: linear-gradient(135deg, color-mix(in srgb, var(--acc-400) 85%, white), var(--acc-500));
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.15),
+    0 6px 22px -4px var(--acc-glow);
+}
+
+/* Hero-panel (Mine opgaver): rolig mesh-gradient, der følger accentfarven */
+.hero-panel {
+  border: 1px solid rgba(24, 24, 27, 0.06);
+  background:
+    radial-gradient(600px 260px at 15% 0%, color-mix(in srgb, var(--acc-500) 10%, transparent), transparent 70%),
+    radial-gradient(500px 240px at 90% 100%, rgba(52, 211, 153, 0.08), transparent 70%),
+    rgba(255, 255, 255, 0.85);
+  box-shadow:
+    0 1px 2px rgba(24, 24, 27, 0.04),
+    0 16px 40px -20px rgba(24, 24, 27, 0.18);
+}
+
+.dark .hero-panel {
+  border-color: rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(600px 260px at 15% 0%, color-mix(in srgb, var(--acc-500) 16%, transparent), transparent 70%),
+    radial-gradient(500px 240px at 90% 100%, rgba(52, 211, 153, 0.07), transparent 70%),
+    rgba(30, 31, 38, 0.85);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.25),
+    0 20px 48px -20px rgba(0, 0, 0, 0.6);
+}
+
+/* Alle cards med lidt mere luft og rundhed som udgangspunkt */
+.glass-panel {
+  border-radius: 1rem;
+}
+
+/* Blød indtoning ved side-skift (allerede fin) + et strejf ved hover på rækker */
+@keyframes task-pop {
+  0% {
+    transform: scale(0.98);
+    opacity: 0.4;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-task-pop {
+  animation: task-pop 0.18s ease-out;
+}
+
+/* Mørk tilstand: blødere topbar og sidepanel */
+.dark header {
+  background: rgba(23, 24, 29, 0.75);
+}
+
+/* Søgefelt og select: blødere overgange */
+input,
+select,
+textarea {
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background-color 0.15s ease;
+}
+
+/* Lidt venligere fejl-/advarselsrød (rosé i stedet for neon) */
+.border-rose-500\/30,
+.border-rose-500\/40 {
+  border-color: rgba(244, 63, 94, 0.25);
+}
+
+/* Fokus-tilstand: accent, men blød */
+*:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--acc-500) 70%, transparent);
+  outline-offset: 2px;
+}

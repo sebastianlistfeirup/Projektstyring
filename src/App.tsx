@@ -21,6 +21,7 @@ import DashboardView from './views/DashboardView';
 import TasksView from './views/TasksView';
 import YearWheelView from './views/YearWheelView';
 import AiWorkshopView from './views/AiWorkshopView';
+import { AiChatView } from './views/AiChatView';
 import GraphView from './views/GraphView';
 import GoalsView from './views/GoalsView';
 import ImportView from './views/ImportView';
@@ -200,6 +201,7 @@ export default function App() {
           <Route path="/opgaver" element={<TasksView />} />
           <Route path="/aarshjul" element={<YearWheelView />} />
           <Route path="/ai" element={<AiWorkshopView />} />
+          <Route path="/chat" element={<AiChatView />} />
           <Route path="/tavle" element={<BoardView />} />
           <Route path="/tabel" element={<TableView />} />
           <Route path="/tidslinje" element={<TimelineView />} />
