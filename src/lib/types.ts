@@ -320,3 +320,37 @@ export interface AiJob {
   createdAt: string;
   updatedAt: string;
 }
+
+/* ---------- AI-chat (ChatGPT-lignende, drevet af companion) ---------- */
+
+export interface AiAttachment {
+  kind: 'image' | 'file';
+  name: string;
+  mime: string;
+  size?: number;
+  url?: string;     // orbit-fil (server)
+  path?: string;    // disksti på serveren (CLI'er kan læse den)
+  dataUrl?: string; // til inline visning / provider-inline
+}
+
+export type AiMessageStatus = 'streaming' | 'done' | 'error';
+
+export interface AiMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  text: string;
+  serviceId?: string; // hvilken tjeneste der svarede
+  attachments?: AiAttachment[];
+  artifacts?: AiAttachment[]; // producerede resultater (billede/lyd/3D/fil)
+  status: AiMessageStatus;
+  createdAt: string;
+}
+
+export interface AiChat {
+  id: string;
+  projectId: string | null;
+  title: string;
+  messages: AiMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
