@@ -31,8 +31,11 @@ import type {
   TimeEntry,
   TrashItem,
   User,
+  AiAgent,
+  AiJob,
 } from '../lib/types';
 import { seedActivity, seedLabels, seedProjects, seedSprints, seedTasks, seedUsers } from '../data/seed';
+import { seedAiAgents, seedAiJobs } from '../data/seedAi';
 import { PROJECT_TEMPLATES } from '../data/templates';
 
 export interface NewTaskInput {
@@ -104,6 +107,18 @@ interface OrbitState {
   toggleReaction: (taskId: string, commentId: string, emoji: string) => void;
   addSubtask: (taskId: string, title: string) => void;
   toggleSubtask: (taskId: string, subtaskId: string) => void;
+  /** Personlig rækkefølge til "Mine opgaver" */
+  mineOrder: string[];
+  setMineOrder: (ids: string[]) => void;
+  /** AI-værksted */
+  aiAgents: AiAgent[];
+  aiJobs: AiJob[];
+  orchestratorId: string | null;
+  setOrchestrator: (agentId: string | null) => void;
+  toggleAiAgent: (agentId: string) => void;
+  addAiJob: (input: Pick<AiJob, 'title' | 'projectId' | 'phase'> & Partial<AiJob>) => AiJob;
+  updateAiJob: (id: string, patch: Partial<AiJob>) => void;
+  deleteAiJob: (id: string) => void;
 
   addProject: (name: string, description?: string) => Project;
   addProjectFromTemplate: (templateId: string, customName?: string) => Project | null;
@@ -198,7 +213,7 @@ function collectMentions(state: { users: User[]; currentUserId: string }, text: 
   for (const user of state.users) {
     if (user.id === state.currentUserId) continue;
     const firstName = user.name.split(' ')[0];
-    const re = new RegExp(`@${firstName}(?!\\w)`, 'i');
+    const re = new RegExp(`@${firstName}(?!\w)`, 'i');
     if (re.test(text)) {
       mentions.push({
         id: `n-${nanoid(8)}`,
@@ -246,6 +261,43 @@ export const useStore = create<OrbitState>()(
       syncConflicts: [],
       activeProjectId: 'p-app',
       selectedTaskId: null,
+      mineOrder: [],
+      aiAgents: seedAiAgents,
+      aiJobs: seedAiJobs,
+      orchestratorId: 'ai-codex',
+
+      setOrchestrator: (agentId) => {
+        const agent = get().aiAgents.find((a) => a.id === agentId);
+        if (agentId !== null && (!agent || !agent.canOrchestrate)) return;
+        set({ orchestratorId: agentId });
+      },
+      toggleAiAgent: (agentId) =>
+        set((s) => ({
+          aiAgents: s.aiAgents.map((a) => (a.id === agentId ? { ...a, active: !a.active } : a)),
+        })),
+      addAiJob: (input) => {
+        const now = new Date().toISOString();
+        const job: AiJob = {
+          id: `aj-${nanoid(8)}`,
+          description: '',
+          agentId: null,
+          status: 'queued',
+          dependsOn: [],
+          question: '',
+          answer: '',
+          result: '',
+          createdAt: now,
+          updatedAt: now,
+          ...input,
+        };
+        set((s) => ({ aiJobs: [...s.aiJobs, job] }));
+        return job;
+      },
+      updateAiJob: (id, patch) =>
+        set((s) => ({
+          aiJobs: s.aiJobs.map((j) => (j.id === id ? { ...j, ...patch, updatedAt: new Date().toISOString() } : j)),
+        })),
+      deleteAiJob: (id) => set((s) => ({ aiJobs: s.aiJobs.filter((j) => j.id !== id) })),
 
       setTheme: (theme) => set({ theme }),
       toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
@@ -567,6 +619,8 @@ export const useStore = create<OrbitState>()(
           ),
         }));
       },
+
+      setMineOrder: (ids) => set({ mineOrder: ids }),
 
       addProject: (name, description = '') => {
         const colors = ['violet', 'sky', 'amber', 'emerald', 'rose', 'cyan'];
