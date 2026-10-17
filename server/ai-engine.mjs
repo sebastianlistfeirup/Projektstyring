@@ -430,42 +430,113 @@ async function produceMedia(job, text, cfg, dirs, emit) {
   return [];
 }
 
+// ---- live swarm-tilstand (deles til alle WS-klienter) ----------------------
+const swarmState = { active: null, last: null };
+
+function updateSwarm(run, obj) {
+  try {
+    if (obj.type === 'orchestrator') {
+      run.orchestratorId = obj.serviceId ?? null;
+      run.mode = obj.mode ?? null;
+    } else if (obj.type === 'plan') {
+      run.jobs = (obj.jobs ?? []).map((j) => ({
+        ...j,
+        status: 'queued',
+        liveText: '',
+        notes: [],
+        deltaCount: 0,
+        startedAt: null,
+        finishedAt: null,
+        text: '',
+        artifacts: [],
+        error: null,
+      }));
+    } else if (obj.type === 'job_start') {
+      const j = run.jobs.find((x) => x.id === obj.job?.id);
+      if (j) { j.status = 'running'; j.startedAt = Date.now(); }
+    } else if (obj.type === 'job_delta') {
+      const j = run.jobs.find((x) => x.id === obj.jobId);
+      if (j) {
+        j.deltaCount = (j.deltaCount ?? 0) + 1;
+        j.liveText = ((j.liveText ?? '') + String(obj.delta ?? '')).slice(-400);
+        j.lastDeltaAt = Date.now();
+      }
+    } else if (obj.type === 'job_status') {
+      const j = run.jobs.find((x) => x.id === obj.jobId);
+      if (j) j.notes = [...(j.notes ?? []).slice(-3), String(obj.status ?? '')];
+    } else if (obj.type === 'job_note') {
+      if (obj.jobId) {
+        const j = run.jobs.find((x) => x.id === obj.jobId);
+        if (j) j.notes = [...(j.notes ?? []).slice(-3), String(obj.note ?? '')];
+      } else {
+        run.notes = [...(run.notes ?? []).slice(-4), String(obj.note ?? '')];
+      }
+    } else if (obj.type === 'job_done') {
+      const r = obj.result ?? {};
+      const j = run.jobs.find((x) => x.id === r.jobId);
+      if (j) {
+        j.status = 'done';
+        j.text = String(r.text ?? '').slice(0, 2000);
+        j.artifacts = r.artifacts ?? [];
+        j.finishedAt = Date.now();
+      }
+    } else if (obj.type === 'job_error') {
+      const j = run.jobs.find((x) => x.id === obj.jobId);
+      if (j) { j.status = 'error'; j.error = String(obj.error ?? ''); j.finishedAt = Date.now(); }
+    }
+  } catch { /* swarm-tilstand er ikke kritisk */ }
+}
+
 async function executeRun({ runId, goal, bible, predefinedJobs, cfg, dirs, emit }) {
+  const run = {
+    runId, goal,
+    startedAt: Date.now(),
+    orchestratorId: null,
+    mode: null,
+    status: 'running',
+    jobs: [],
+    notes: [],
+    finishedAt: null,
+  };
+  swarmState.active = run;
+  const track = (obj) => { updateSwarm(run, obj); emit({ ...obj, runId, goal }); };
+  try {
+  track({ type: 'run_start', runId, goal, startedAt: new Date().toISOString() });
   const availability = await serviceAvailability(cfg);
   const orchestratorId = await pickOrchestrator(cfg, availability);
-  emit({ type: 'orchestrator', serviceId: orchestratorId, mode: orchestratorId ? 'llm' : 'regler' });
+  track({ type: 'orchestrator', serviceId: orchestratorId, mode: orchestratorId ? 'llm' : 'regler' });
 
   let jobs;
   if (Array.isArray(predefinedJobs) && predefinedJobs.length) {
     jobs = predefinedJobs;
   } else if (orchestratorId) {
     try { jobs = await planWithLLM({ orchestratorId, goal, bible, cfg, dirs, availability }); }
-    catch (e) { emit({ type: 'job_note', jobId: null, note: `Orkestrator-plan fejlede (${e.message}) — bruger regelbaseret plan.` }); jobs = planByRules({ goal, availability }); }
+    catch (e) { track({ type: 'job_note', jobId: null, note: `Orkestrator-plan fejlede (${e.message}) — bruger regelbaseret plan.` }); jobs = planByRules({ goal, availability }); }
   } else {
     jobs = planByRules({ goal, availability });
   }
-  emit({ type: 'plan', jobs: jobs.map(({ id, title, serviceId, phase, dependsOn, description }) => ({ id, title, serviceId, phase, dependsOn, description })) });
+  track({ type: 'plan', jobs: jobs.map(({ id, title, serviceId, phase, dependsOn, description }) => ({ id, title, serviceId, phase, dependsOn, description })) });
 
   const doneText = new Map();
   const results = [];
   const pending = new Set(jobs.map((j) => j.id));
 
   const runJob = async (job) => {
-    emit({ type: 'job_start', job });
+    track({ type: 'job_start', job });
     const ctx = [
       bible ? { role: 'system', text: `Projektets bibel:\n${bible.slice(0, 6000)}` } : null,
       { role: 'user', text: `Projektmål: ${goal}\n\nDin opgave (${job.phase}): ${job.title}\n${job.description}\n\nLav et konkret, færdigt resultat. Svar på dansk.` },
       ...[...doneText.entries()].filter(([id]) => job.dependsOn.includes(jobs.findIndex((j) => j.id === id))).map(([, text]) => ({ role: 'user', text: `Resultat fra tidligere job:\n${text.slice(0, 3000)}` })),
     ].filter(Boolean);
     try {
-      const text = await runChat({ serviceId: job.serviceId, messages: ctx, cfg, dirs, onDelta: (d) => emit({ type: 'job_delta', jobId: job.id, delta: d }) });
+      const text = await runChat({ serviceId: job.serviceId, messages: ctx, cfg, dirs, onDelta: (d) => track({ type: 'job_delta', jobId: job.id, delta: d }) });
       doneText.set(job.id, text);
-      const artifacts = await produceMedia(job, text, cfg, dirs, emit);
+      const artifacts = await produceMedia(job, text, cfg, dirs, track);
       const res = { jobId: job.id, title: job.title, serviceId: job.serviceId, phase: job.phase, text, artifacts };
       results.push(res);
-      emit({ type: 'job_done', result: res });
+      track({ type: 'job_done', result: res });
     } catch (e) {
-      emit({ type: 'job_error', jobId: job.id, error: e.message });
+      track({ type: 'job_error', jobId: job.id, error: e.message });
     }
     pending.delete(job.id);
   };
@@ -481,14 +552,22 @@ async function executeRun({ runId, goal, bible, predefinedJobs, cfg, dirs, emit 
     }
     if (!running.size && !ready.length) {
       const stuck = jobs.filter((j) => pending.has(j.id));
-      if (stuck.length) emit({ type: 'job_note', jobId: null, note: `${stuck.length} job(s) sprunget over pga. afhængigheder: ${stuck.map((j) => j.title).join(', ')}` });
+      if (stuck.length) track({ type: 'job_note', jobId: null, note: `${stuck.length} job(s) sprunget over pga. afhængigheder: ${stuck.map((j) => j.title).join(', ')}` });
       break;
     }
     await new Promise((r) => setTimeout(r, 300));
   }
 
   writeFileSync(join(dirs.runs, `${runId}.json`), JSON.stringify({ runId, goal, orchestratorId, jobs, results, finishedAt: new Date().toISOString() }, null, 2));
-  emit({ type: 'done', summary: results.map((r) => ({ title: r.title, serviceId: r.serviceId })) });
+  track({ type: 'done', summary: results.map((r) => ({ title: r.title, serviceId: r.serviceId })) });
+  } finally {
+    if (swarmState.active === run) {
+      if (run.status === 'running') run.status = 'error';
+      run.finishedAt = Date.now();
+      swarmState.last = run;
+      swarmState.active = null;
+    }
+  }
 }
 
 // ---- HTTP-ruter --------------------------------------------------------------
@@ -504,7 +583,19 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   const sse = (res) => {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'Access-Control-Allow-Origin': '*' });
     res.write('retry: 2000\n\n');
-    return (obj) => { res.write(`data: ${JSON.stringify(obj)}\n\n`); broadcast?.({ type: 'ai', ...obj }); };
+    const lastWs = new Map();
+    return (obj) => {
+      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+      // Throttle hurtige delta-hændelser over WebSocket, så swarm-visningen ikke oversvømmes.
+      const key = obj.jobId ? `${obj.type}:${obj.jobId}` : obj.type;
+      const now = Date.now();
+      if (obj.type === 'delta' || obj.type === 'job_delta') {
+        const t0 = lastWs.get(key) ?? 0;
+        if (now - t0 < 120) return;
+        lastWs.set(key, now);
+      }
+      broadcast?.({ type: 'ai', ...obj });
+    };
   };
 
   app.get('/api/ai/services', async (_req, res) => {
@@ -561,6 +652,11 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       if (existsSync(p) && p.startsWith(base)) return res.sendFile(p);
     }
     res.status(404).end();
+  });
+
+  // Live swarm-tilstand: aktiv kørsel eller seneste afsluttede.
+  app.get('/api/ai/swarm', (_req, res) => {
+    res.json({ ok: true, run: swarmState.active ?? swarmState.last });
   });
 
   app.get('/api/ai/runs', (_req, res) => {
