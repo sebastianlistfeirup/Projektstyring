@@ -32,7 +32,9 @@ import type {
   TrashItem,
   User,
   AiAgent,
+  AiChat,
   AiJob,
+  AiMessage,
 } from '../lib/types';
 import { seedActivity, seedLabels, seedProjects, seedSprints, seedTasks, seedUsers } from '../data/seed';
 import { seedAiAgents, seedAiJobs } from '../data/seedAi';
@@ -119,6 +121,15 @@ interface OrbitState {
   addAiJob: (input: Pick<AiJob, 'title' | 'projectId' | 'phase'> & Partial<AiJob>) => AiJob;
   updateAiJob: (id: string, patch: Partial<AiJob>) => void;
   deleteAiJob: (id: string) => void;
+  /** AI-chat */
+  aiChats: AiChat[];
+  addAiChat: (input: { projectId: string | null; title: string }) => AiChat;
+  deleteAiChat: (id: string) => void;
+  addAiMessage: (chatId: string, msg: Omit<AiMessage, 'id' | 'createdAt'>) => AiMessage;
+  updateAiMessage: (chatId: string, msgId: string, patch: Partial<AiMessage>) => void;
+  /** Projekt-bibler (rolle-dokumenter til orkestrering) */
+  bibles: Record<string, string>;
+  setBible: (projectId: string, text: string) => void;
 
   addProject: (name: string, description?: string) => Project;
   addProjectFromTemplate: (templateId: string, customName?: string) => Project | null;
@@ -298,6 +309,29 @@ export const useStore = create<OrbitState>()(
           aiJobs: s.aiJobs.map((j) => (j.id === id ? { ...j, ...patch, updatedAt: new Date().toISOString() } : j)),
         })),
       deleteAiJob: (id) => set((s) => ({ aiJobs: s.aiJobs.filter((j) => j.id !== id) })),
+      aiChats: [],
+      addAiChat: (input) => {
+        const now = new Date().toISOString();
+        const chat: AiChat = { id: `ac-${nanoid(8)}`, messages: [], createdAt: now, updatedAt: now, ...input };
+        set((s) => ({ aiChats: [chat, ...s.aiChats] }));
+        return chat;
+      },
+      deleteAiChat: (id) => set((s) => ({ aiChats: s.aiChats.filter((c) => c.id !== id) })),
+      addAiMessage: (chatId, msg) => {
+        const full: AiMessage = { id: `am-${nanoid(8)}`, createdAt: new Date().toISOString(), ...msg };
+        set((s) => ({
+          aiChats: s.aiChats.map((c) => (c.id === chatId ? { ...c, updatedAt: full.createdAt, messages: [...c.messages, full] } : c)),
+        }));
+        return full;
+      },
+      updateAiMessage: (chatId, msgId, patch) =>
+        set((s) => ({
+          aiChats: s.aiChats.map((c) =>
+            c.id === chatId ? { ...c, messages: c.messages.map((m) => (m.id === msgId ? { ...m, ...patch } : m)) } : c,
+          ),
+        })),
+      bibles: {},
+      setBible: (projectId, text) => set((s) => ({ bibles: { ...s.bibles, [projectId]: text } })),
 
       setTheme: (theme) => set({ theme }),
       toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
