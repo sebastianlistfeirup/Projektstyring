@@ -22,6 +22,7 @@ export const seedProjects: Project[] = [
   { id: 'p-app', name: 'App 2.0', key: 'APP', color: 'violet', description: 'Ny mobilapp med offline-first, betaling og moderniseret backend.' },
   { id: 'p-hjb', name: 'Hjemmeside & Brand', key: 'HJB', color: 'sky', description: 'Ny visuel identitet og hjemmeside med fokus på SEO og konvertering.' },
   { id: 'p-iit', name: 'Intern IT-omlægning', key: 'IIT', color: 'amber', description: 'Samling af it-drift: Microsoft 365-oprydning, sikkerhed og enheder.' },
+  { id: 'p-game', name: 'Dragenatten (spil)', key: 'SPIL', color: 'pink', description: 'Nordisk mørk fantasy-spil: udforsk, saml sjæle og opdræt din drage.' },
 ];
 
 export const seedSprints: Sprint[] = [

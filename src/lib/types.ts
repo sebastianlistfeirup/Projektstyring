@@ -285,3 +285,38 @@ export interface SyncSnapshot {
   activity: ActivityEntry[];
   updatedAt: string;
 }
+
+/* ---------- AI-værksted ---------- */
+
+export type AiAgentKind = 'subscription' | 'api' | 'local';
+
+export type AiPhase = 'concept' | 'design' | 'prototype' | 'production' | 'testing' | 'polish' | 'release';
+
+export type AiJobStatus = 'queued' | 'inprogress' | 'review' | 'blocked' | 'done';
+
+export interface AiAgent {
+  id: string;
+  name: string;
+  provider: string;
+  kind: AiAgentKind;
+  color: string; // tailwind-farve, fx "indigo", "emerald"
+  strengths: string[];
+  canOrchestrate: boolean;
+  active: boolean;
+}
+
+export interface AiJob {
+  id: string;
+  projectId: string;
+  title: string;
+  description: string;
+  agentId: string | null; // hvilken AI der udfører
+  phase: AiPhase;
+  status: AiJobStatus;
+  dependsOn: string[]; // id'er på jobs der skal være færdige først
+  question: string; // åbent spørgsmål der skal afklares
+  answer: string;
+  result: string; // output / link / noter fra AI'en
+  createdAt: string;
+  updatedAt: string;
+}
