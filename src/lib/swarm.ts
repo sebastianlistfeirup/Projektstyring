@@ -3,6 +3,15 @@ import { fetchAiServices, type AiServiceInfo } from './aiApi';
 
 /* ---------- typer ---------- */
 
+export interface SwarmSubagent {
+  subId: string;
+  name: string;
+  status: 'running' | 'done';
+  startedAt: number;
+  finishedAt: number | null;
+  text: string;
+}
+
 export interface SwarmJob {
   id: string;
   title: string;
@@ -20,6 +29,7 @@ export interface SwarmJob {
   text: string;
   artifacts: { kind: string; name: string; mime: string; url?: string }[];
   error: string | null;
+  subagents?: SwarmSubagent[];
 }
 
 export interface SwarmRun {
@@ -95,6 +105,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
               text: '',
               artifacts: [],
               error: null,
+              subagents: [],
             })),
           },
         });
@@ -124,6 +135,49 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
                     deltaCount: j.deltaCount + 1,
                     liveText: (j.liveText + String(evt.delta ?? '')).slice(-400),
                     lastDeltaAt: Date.now(),
+                  }
+                : j,
+            ),
+          },
+        });
+        break;
+      }
+      case 'subagent_start': {
+        if (!cur) break;
+        const sid = String(evt.subId ?? '');
+        set({
+          run: {
+            ...cur,
+            jobs: cur.jobs.map((j) =>
+              j.id === String(evt.jobId ?? '')
+                ? {
+                    ...j,
+                    subagents: [
+                      ...(j.subagents ?? []).filter((s) => s.subId !== sid),
+                      { subId: sid, name: String(evt.name ?? 'Underagent'), status: 'running' as const, startedAt: Date.now(), finishedAt: null, text: '' },
+                    ],
+                  }
+                : j,
+            ),
+          },
+        });
+        break;
+      }
+      case 'subagent_done': {
+        if (!cur) break;
+        const sid = String(evt.subId ?? '');
+        set({
+          run: {
+            ...cur,
+            jobs: cur.jobs.map((j) =>
+              j.id === String(evt.jobId ?? '')
+                ? {
+                    ...j,
+                    subagents: (j.subagents ?? []).map((s) =>
+                      s.subId === sid
+                        ? { ...s, status: 'done' as const, text: String(evt.text ?? '').slice(0, 400), finishedAt: Date.now() }
+                        : s,
+                    ),
                   }
                 : j,
             ),

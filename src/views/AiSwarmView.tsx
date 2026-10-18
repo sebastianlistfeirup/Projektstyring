@@ -302,6 +302,24 @@ function SwarmCanvas({ run, services, active }: {
             ctx.lineWidth = 1.5;
             ctx.stroke();
           }
+          // underagenter: små satellitter i kredsløb om den kørende node
+          const subs = j.subagents ?? [];
+          subs.forEach((s, si) => {
+            const N = Math.max(1, subs.length);
+            const a2 = frame * 0.045 + n.seed + (si * Math.PI * 2) / N;
+            ctx.beginPath();
+            ctx.moveTo(n.x + Math.cos(a2) * 17, n.y + Math.sin(a2) * 17);
+            ctx.lineTo(n.x + Math.cos(a2) * 40, n.y + Math.sin(a2) * 40);
+            ctx.strokeStyle = c + (s.status === 'running' ? 'aa' : '44');
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(n.x + Math.cos(a2) * 40, n.y + Math.sin(a2) * 40, s.status === 'running' ? 4.5 : 3.5, 0, Math.PI * 2);
+            ctx.fillStyle = s.status === 'running' ? '#fbbf24' : '#34d399';
+            if (s.status === 'running') { ctx.shadowColor = '#fbbf24'; ctx.shadowBlur = 8; }
+            ctx.fill();
+            ctx.shadowBlur = 0;
+          });
           ctx.font = 'bold 10px sans-serif';
           ctx.fillStyle = `${ink}0.85)`;
           ctx.fillText(serviceName(services, j.serviceId), n.x, n.y + 38);
@@ -400,6 +418,30 @@ function JobCard({ j, services, runActive }: { j: SwarmJob; services: Record<str
         </div>
         <div className="text-[11px] opacity-70 mt-1 truncate">{j.title}</div>
 
+        {/* Underagenter (fx Claude Code's Task-subagenter) — separate indrykkede linjer */}
+        {(j.subagents?.length ?? 0) > 0 && (
+          <div className="mt-2 space-y-1 border-l-2 pl-2" style={{ borderColor: `${color}55` }}>
+            {j.subagents!.map((s) => (
+              <div key={s.subId} className="flex items-start gap-1.5 text-[10px] leading-snug">
+                {s.status === 'running' ? (
+                  <Activity size={10} className="mt-0.5 shrink-0 text-emerald-400 animate-pulse" />
+                ) : (
+                  <CheckCircle2 size={10} className="mt-0.5 shrink-0 text-emerald-400/70" />
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate opacity-80">{s.name}</span>
+                  {s.status === 'done' && s.text && <span className="block truncate opacity-40">{s.text.slice(0, 90)}</span>}
+                  <span className="block opacity-35">
+                    {s.status === 'running'
+                      ? `${t('swarm.active')} · ${fmtDur(Date.now() - s.startedAt)}`
+                      : fmtDur(s.finishedAt ? s.finishedAt - s.startedAt : null)}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {j.status === 'running' && (
           <div className="mt-2 space-y-1.5">
             <div ref={liveRef} className="h-24 overflow-hidden rounded-lg bg-black/40 dark:bg-black/50 p-2 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap break-words text-emerald-100/90">
@@ -445,6 +487,74 @@ function JobCard({ j, services, runActive }: { j: SwarmJob; services: Record<str
         {j.status === 'error' && (
           <p className="mt-2 text-[10.5px] text-rose-300/90 leading-relaxed">{j.error}</p>
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ================= tidslinje for kørslen ================= */
+
+function RunTimeline({ run, services, active }: { run: SwarmRun; services: Record<string, AiServiceInfo> | null; active: boolean }) {
+  const rows = useMemo(() => {
+    const js = run.jobs.filter((j) => j.startedAt);
+    if (!js.length) return null;
+    const t0 = Math.min(run.startedAt, ...js.map((j) => j.startedAt!));
+    const t1 = Math.max(run.finishedAt ?? Date.now(), ...js.map((j) => j.finishedAt ?? Date.now()));
+    return { t0, t1: Math.max(t1, t0 + 1000), jobs: js };
+  }, [run]);
+  if (!rows) return null;
+  const span = rows.t1 - rows.t0;
+  const pctOf = (t: number) => Math.max(0, Math.min(100, ((t - rows.t0) / span) * 100));
+  const fmtClock = (t: number) => new Date(t).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  return (
+    <div className="rounded-2xl border border-white/10 glass-panel p-3">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider opacity-60 flex items-center gap-1.5">
+          <Clock size={12} /> {t('swarm.timeline')}
+        </h3>
+        <span className="text-[9.5px] opacity-40 tabular-nums">{fmtClock(rows.t0)} → {fmtClock(rows.t1)}</span>
+      </div>
+      <div className="relative">
+        {/* nu-cursor */}
+        <div className="absolute top-0 bottom-0 w-px bg-emerald-300/70 z-10 pointer-events-none" style={{ left: `${pctOf(Date.now())}%` }} />
+        <div className="space-y-1">
+          {rows.jobs.map((j) => {
+            const color = hex(serviceColor(services, j.serviceId));
+            const end = j.finishedAt ?? (active && j.status === 'running' ? Date.now() : j.startedAt!);
+            const width = Math.max(0.4, pctOf(end) - pctOf(j.startedAt!));
+            return (
+              <div key={j.id} className="flex items-center gap-2" title={`${serviceName(services, j.serviceId)} · ${j.title}`}>
+                <span className="w-32 shrink-0 truncate text-right text-[10px] opacity-60">{serviceName(services, j.serviceId)}</span>
+                <div className="relative h-4 flex-1">
+                  {/* hovedbar */}
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full transition-all duration-700"
+                    style={{
+                      left: `${pctOf(j.startedAt!)}%`,
+                      width: `${width}%`,
+                      background: color,
+                      opacity: j.status === 'done' ? 0.75 : j.status === 'error' ? 0.9 : 1,
+                    }}
+                  />
+                  {/* underagent-segmenter */}
+                  {(j.subagents ?? []).map((s) => {
+                    const send = s.finishedAt ?? (active && s.status === 'running' ? Date.now() : s.startedAt);
+                    return (
+                      <div
+                        key={s.subId}
+                        className="absolute top-1/2 -translate-y-1/2 h-[3px] rounded-full bg-amber-300"
+                        style={{ left: `${pctOf(s.startedAt)}%`, width: `${Math.max(0.4, pctOf(send) - pctOf(s.startedAt))}%`, opacity: s.status === 'running' ? 1 : 0.55 }}
+                        title={s.name}
+                      />
+                    );
+                  })}
+                </div>
+                <span className="w-24 shrink-0 truncate text-[9.5px] opacity-45">{j.title}</span>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -595,6 +705,9 @@ export function AiSwarmView() {
               </div>
             )}
           </div>
+
+          {/* tidslinje: præcis hvem arbejdede hvornår, inkl. underagenter */}
+          <RunTimeline run={shown} services={services} active={active} />
 
           {/* agent-kort */}
           {jobs.length > 0 && (
