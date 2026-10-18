@@ -390,7 +390,7 @@ const da = {
   'notes.emptyList': 'Ingen noter endnu',
   'notes.decisionMeta': 'Beslutning · {date} · af {name}',
   'notes.allProjectsHint': 'Intet projekt valgt – noter vises fra alle projekter.',
-  // Risici
+  // Risici & fejl
   'risks.title': 'Risici & fejl',
   'risks.subtitle': 'Risikomatrise og fejl-log pr. projekt',
   'risks.matrixTitle': 'Risikomatrise',
