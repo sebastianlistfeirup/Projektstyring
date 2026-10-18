@@ -1269,7 +1269,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       const availability = await serviceAvailability(cfg);
       const orchestratorId = await pickOrchestrator(cfg, availability);
       if (!orchestratorId) return res.status(409).json({ ok: false, reason: 'Ingen orkestrator tilgængelig (installér et CLI).' });
-      const prompt = `Skriv en projekt-bibel (rollebog) for projektet "${project ?? 'Uden navn'}". ${notes ? `Stikord/noter fra brugeren:\n${String(notes).slice(0, 3000)}\n\n` : ''}${current ? `Nuværende udkast:\n${String(current).slice(0, 2000)}\n\nForbedr og udbyg det.` : ''}Bibelen skal fastlægge: overordnet vision/stil, hvilken AI-tjeneste der har hvilken rolle (kodning, design, 3D, lyd, video, review), tone/sprog og kvalitetskrav. Skriv den på dansk, kompakt (max 400 ord), så den kan prependes til enhver agent-prompt.`;
+      const prompt = `Skriv en projekt-bibel (rollebog) for projektet "${project ?? 'Uden navn'}". ${notes ? `Stikord/noter fra brugeren:\n${String(notes).slice(0, 3000)}\n\n` : ''}${current ? `Nuværende udkast:\n${String(current).slice(0, 2000)}\n\nForbedr og udbyg det.` : ''}Biblen skal fastlægge: overordnet vision/stil, hvilken AI-tjeneste der har hvilken rolle (kodning, design, 3D, lyd, video, review), tone/sprog og kvalitetskrav. Skriv den på dansk, kompakt (max 400 ord), så den kan prependes til enhver agent-prompt.`;
       const text = await runChat({ serviceId: orchestratorId, messages: [{ role: 'user', text: prompt }], cfg, dirs });
       res.json({ ok: true, bible: text.trim() });
     } catch (e) {
