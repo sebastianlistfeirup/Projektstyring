@@ -8,7 +8,7 @@ import { WebSocketServer } from 'ws';
 import { execFile } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, networkInterfaces } from 'node:os';
 import { registerAiRoutes } from './ai-engine.mjs';
 
 const PORT = 4310;
@@ -1657,8 +1657,16 @@ app.post('/api/economic/draft', async (req, res) => {
 // ---- AI-motor (abonnement-first orkestrering) ----
 registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, EXPORT_DIR });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   startTelegram();
   console.log(`Orbit Companion kører på http://127.0.0.1:${PORT}`);
+  // LAN-adresser, så app'en også kan nås fra telefonen på samme Wi-Fi.
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a.family === 'IPv4' && !a.internal) {
+        console.log(`  Telefon (samme Wi-Fi): http://${a.address}:${PORT}`);
+      }
+    }
+  }
   console.log(`Eksport-mappe: ${EXPORT_DIR}`);
 });
