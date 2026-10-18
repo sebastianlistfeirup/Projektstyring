@@ -13,9 +13,10 @@ import {
 import { useLang, t } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { connectSwarm, useSwarm, serviceColor, serviceName, type SwarmJob, type SwarmRun } from '../lib/swarm';
+import { companionBase } from '../lib/companion';
 import type { AiServiceInfo } from '../lib/aiApi';
 
-const BASE_URL = 'http://127.0.0.1:4310';
+const BASE_URL = companionBase();
 const PHASES = ['concept', 'design', 'prototype', 'production', 'testing', 'polish', 'release'];
 
 const SERVICE_HEX: Record<string, string> = {
@@ -580,7 +581,7 @@ export function AiSwarmView() {
   }, []);
 
   useEffect(() => {
-    fetch('http://127.0.0.1:4310/api/ai/runs').then((r) => r.json()).then((j) => setHistory((j?.runs ?? []).slice(0, 6))).catch(() => undefined);
+    fetch(`${BASE_URL}/api/ai/runs`).then((r) => r.json()).then((j) => setHistory((j?.runs ?? []).slice(0, 6))).catch(() => undefined);
   }, [run?.status]);
 
   const shown = archived ?? run;

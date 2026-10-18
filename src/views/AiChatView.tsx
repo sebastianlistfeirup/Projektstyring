@@ -20,7 +20,7 @@ import {
 import { useStore } from '../store/useStore';
 import { useLang, t } from '../lib/i18n';
 import { cn } from '../lib/utils';
-import { companionStatus } from '../lib/companion';
+import { companionBase, companionStatus } from '../lib/companion';
 import {
   fetchAiServices,
   saveAiPrefs,
@@ -32,7 +32,7 @@ import {
 } from '../lib/aiApi';
 import type { AiAttachment, AiChat, AiMessage } from '../lib/types';
 
-const BASE_URL = 'http://127.0.0.1:4310';
+const BASE_URL = companionBase();
 
 /* ---------- lille markdown-renderer (fed, kode, lister) ---------- */
 
