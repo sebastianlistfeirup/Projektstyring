@@ -227,7 +227,8 @@ async function chatOllama({ baseUrl, model, messages, onDelta, signal }) {
 }
 
 // CLI: prompt som argument ud fra skabelon; stdout streames linjevis.
-function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, signal }) {
+// jsonl: stdout parses som Claude stream-json (én JSON pr. linje) → onEvent i stedet for rå delta.
+function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, jsonl, signal }) {
   return new Promise((resolve, reject) => {
     const parts = (cliTemplate || '-p {prompt}').split(' ').map((t) => (t === '{prompt}' ? prompt : t));
     const child = spawn(cmd, parts, { cwd: cwd ?? process.cwd(), env: { ...process.env, NO_COLOR: '1' } });
@@ -235,7 +236,19 @@ function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, signal }) {
     signal?.addEventListener('abort', kill);
     const timer = setTimeout(kill, 15 * 60 * 1000);
     let out = '';
+    let lineBuf = '';
     const feed = (chunk) => {
+      if (jsonl) {
+        lineBuf += chunk;
+        const lines = lineBuf.split('\n');
+        lineBuf = lines.pop() ?? '';
+        for (const line of lines) {
+          const t = line.trim();
+          if (!t) continue;
+          try { onEvent?.(JSON.parse(t)); } catch { onDelta?.(`${line}\n`); }
+        }
+        return;
+      }
       out += chunk;
       onDelta(chunk);
     };
@@ -249,6 +262,35 @@ function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, signal }) {
       else reject(new Error(`'${cmd}' afsluttede med kode ${code} uden output`));
     });
   });
+}
+
+// Claude Code stream-json → tekst-delta + Task-underagent-hændelser.
+// Gør det muligt at vise Claude's egne subagenter som separate underlinjer i sværmen.
+function watchClaudeStreamJson({ onText, onSubagent }) {
+  const byTool = new Map(); // tool_use_id → subagent
+  return (ev) => {
+    if (!ev || typeof ev !== 'object') return;
+    if (ev.type === 'assistant' && Array.isArray(ev.message?.content)) {
+      for (const b of ev.message.content) {
+        if (b.type === 'text' && b.text) onText?.(b.text);
+        else if (b.type === 'tool_use' && b.name === 'Task') {
+          const desc = String(b.input?.description ?? b.input?.prompt ?? 'Underagent').slice(0, 180);
+          byTool.set(b.id, { subId: b.id });
+          onSubagent?.({ phase: 'start', subId: b.id, name: desc });
+        }
+      }
+    } else if (ev.type === 'user' && Array.isArray(ev.message?.content)) {
+      for (const b of ev.message.content) {
+        if (b.type === 'tool_result' && byTool.has(b.tool_use_id)) {
+          const txt = typeof b.content === 'string'
+            ? b.content
+            : Array.isArray(b.content) ? b.content.map((c) => c?.text ?? '').join('') : '';
+          onSubagent?.({ phase: 'done', subId: b.tool_use_id, text: String(txt).slice(0, 600) });
+          byTool.delete(b.tool_use_id);
+        }
+      }
+    }
+  };
 }
 
 async function readSse(res, onData) {
@@ -268,7 +310,8 @@ async function readSse(res, onData) {
 }
 
 // Samlet chat-dispatcher. Returnerer samlet tekst.
-export async function runChat({ serviceId, messages, cfg, dirs, onDelta, signal }) {
+// onSubagent: kun for CLI'er der streamer strukturerede events (Claude stream-json).
+export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubagent, signal }) {
   const svc = serviceById(serviceId);
   if (!svc) throw new Error(`Ukendt tjeneste: ${serviceId}`);
   assertUsable(svc, cfg);
@@ -278,7 +321,20 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, signal 
   const delta = (d) => { acc += d; onDelta?.(d, acc); };
   if (svc.kind === 'cli') {
     const prompt = messages.map(contentToText).join('\n\n---\n\n');
-    await chatCli({ cmd: p.cmd ?? svc.cmd, cliTemplate: p.cliTemplate ?? svc.cliTemplate, prompt, cwd: dirs.cwd, onDelta: delta, signal });
+    const template = p.cliTemplate ?? svc.cliTemplate;
+    // Claude køres med stream-json så Task-underagenter kan spores som egne linjer.
+    // Brugerdefinerede skabeloner respekteres (så går subagent-sporing stille tabt).
+    const useJson = serviceId === 'claude' && template === svc.cliTemplate;
+    await chatCli({
+      cmd: p.cmd ?? svc.cmd,
+      cliTemplate: useJson ? `${template} --output-format stream-json --verbose` : template,
+      prompt,
+      cwd: dirs.cwd,
+      jsonl: useJson,
+      onDelta: delta,
+      onEvent: useJson ? watchClaudeStreamJson({ onText: delta, onSubagent }) : undefined,
+      signal,
+    });
   } else if (svc.kind === 'local') {
     await chatOllama({ baseUrl: p.baseUrl ?? svc.baseUrl, model: p.model ?? svc.model, messages, onDelta: delta, signal });
   } else {
@@ -450,7 +506,20 @@ function updateSwarm(run, obj) {
         text: '',
         artifacts: [],
         error: null,
+        subagents: [],
       }));
+    } else if (obj.type === 'subagent_start') {
+      const j = run.jobs.find((x) => x.id === obj.jobId);
+      if (j) {
+        j.subagents = [
+          ...(j.subagents ?? []).filter((s) => s.subId !== obj.subId),
+          { subId: obj.subId, name: obj.name, status: 'running', startedAt: Date.now(), finishedAt: null, text: '' },
+        ];
+      }
+    } else if (obj.type === 'subagent_done') {
+      const j = run.jobs.find((x) => x.id === obj.jobId);
+      const s = j?.subagents?.find((x) => x.subId === obj.subId);
+      if (s) { s.status = 'done'; s.text = String(obj.text ?? '').slice(0, 400); s.finishedAt = Date.now(); }
     } else if (obj.type === 'job_start') {
       const j = run.jobs.find((x) => x.id === obj.job?.id);
       if (j) { j.status = 'running'; j.startedAt = Date.now(); }
@@ -529,7 +598,11 @@ async function executeRun({ runId, goal, bible, predefinedJobs, cfg, dirs, emit 
       ...[...doneText.entries()].filter(([id]) => job.dependsOn.includes(jobs.findIndex((j) => j.id === id))).map(([, text]) => ({ role: 'user', text: `Resultat fra tidligere job:\n${text.slice(0, 3000)}` })),
     ].filter(Boolean);
     try {
-      const text = await runChat({ serviceId: job.serviceId, messages: ctx, cfg, dirs, onDelta: (d) => track({ type: 'job_delta', jobId: job.id, delta: d }) });
+      const text = await runChat({
+        serviceId: job.serviceId, messages: ctx, cfg, dirs,
+        onDelta: (d) => track({ type: 'job_delta', jobId: job.id, delta: d }),
+        onSubagent: (sub) => track({ type: sub.phase === 'start' ? 'subagent_start' : 'subagent_done', jobId: job.id, ...sub }),
+      });
       doneText.set(job.id, text);
       const artifacts = await produceMedia(job, text, cfg, dirs, track);
       const res = { jobId: job.id, title: job.title, serviceId: job.serviceId, phase: job.phase, text, artifacts };
