@@ -356,7 +356,7 @@ export async function createBackup(): Promise<{ ok: boolean; path?: string; coun
 export async function listBackups(): Promise<{ ok: boolean; files?: BackupFile[]; reason?: string }> {
   try {
     const res = await fetch(`${BASE}/api/backup/list`, { headers: authHeaders(), signal: AbortSignal.timeout(4000) });
-    return (await res.json()) as { ok: boolean; files?: BackupFile[] };
+    return (await res.json()) as { ok: boolean; files?: BackupFile[]; reason?: string };
   } catch {
     return { ok: false };
   }
