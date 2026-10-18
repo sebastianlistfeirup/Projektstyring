@@ -1,8 +1,7 @@
 // Klient til Orbit Companions AI-motor (server/ai-engine.mjs).
 import type { AiAttachment, AiMessage } from './types';
-import { companionBase } from './companion';
 
-const BASE = companionBase();
+const BASE = 'http://127.0.0.1:4310';
 
 export interface AiServiceInfo {
   id: string;
@@ -132,6 +131,8 @@ export async function streamChat(
   }
 }
 
+export type OrchestrateMode = 'standard' | 'roles' | 'debate' | 'vote';
+
 export interface OrchestrateHandlers {
   onEvent: (evt: Record<string, unknown>) => void;
   onError: (msg: string) => void;
@@ -139,7 +140,7 @@ export interface OrchestrateHandlers {
 
 /** Start en orkestreret kørsel (plan + eksekvering). */
 export async function streamOrchestrate(
-  input: { goal: string; bible?: string; jobs?: unknown[] },
+  input: { goal: string; bible?: string; jobs?: unknown[]; mode?: OrchestrateMode; pauseAfterPlan?: boolean },
   handlers: OrchestrateHandlers,
   signal: AbortSignal,
 ): Promise<void> {
@@ -150,5 +151,174 @@ export async function streamOrchestrate(
     }, signal);
   } catch (e) {
     if (!signal.aborted) handlers.onError(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/**
+ * Start en kørsel uden at lytte på hændelserne selv — sværmen opdateres via WebSocket.
+ * Strømmen konsumeres dog til ende, så serveren ikke afbryder kørslen ved 'close'.
+ */
+export async function fireOrchestrate(input: {
+  goal: string;
+  bible?: string;
+  jobs?: unknown[];
+  mode?: OrchestrateMode;
+  pauseAfterPlan?: boolean;
+}): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const r = await fetch(`${BASE}/api/ai/orchestrate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!r.ok || !r.body) return { ok: false, reason: `Companion svarede ${r.status}` };
+    const reader = r.body.getReader();
+    for (;;) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export interface Trigger {
+  id: string;
+  name: string;
+  kind: 'cron' | 'webhook';
+  cron?: string;
+  token?: string;
+  goal: string;
+  bible?: string;
+  mode?: OrchestrateMode;
+  enabled: boolean;
+  webhookUrl?: string | null;
+}
+
+export async function fetchTriggers(): Promise<Trigger[]> {
+  try {
+    const r = await fetch(`${BASE}/api/ai/triggers`);
+    const j = await r.json();
+    return j?.ok ? (j.triggers ?? []) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveTrigger(body: Partial<Trigger>): Promise<boolean> {
+  try {
+    const r = await fetch(`${BASE}/api/ai/triggers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteTrigger(id: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${BASE}/api/ai/triggers/${id}`, { method: 'DELETE' });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+export interface PipelineTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  builtin?: boolean;
+  jobs: { id: string; title: string; serviceId: string | null; phase: string; dependsOn: number[]; description: string; team?: boolean }[];
+}
+
+export async function fetchTemplates(): Promise<PipelineTemplate[]> {
+  try {
+    const r = await fetch(`${BASE}/api/ai/templates`);
+    const j = await r.json();
+    return j?.ok ? (j.templates ?? []) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveTemplate(body: { name: string; description?: string; jobs: unknown[] }): Promise<boolean> {
+  try {
+    const r = await fetch(`${BASE}/api/ai/templates`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteTemplate(id: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${BASE}/api/ai/templates/${id}`, { method: 'DELETE' });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function suggestTemplate(goal: string, bible?: string): Promise<{ ok: boolean; jobs?: PipelineTemplate['jobs']; reason?: string }> {
+  try {
+    const r = await fetch(`${BASE}/api/ai/templates/suggest`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal, bible }) });
+    const j = await r.json();
+    return j?.ok ? { ok: true, jobs: j.jobs } : { ok: false, reason: j?.reason };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export interface CostSummary {
+  totalRuns: number;
+  totalJobs: number;
+  estKr: number;
+  byService: { id: string; name: string; kind: string; jobs: number; subscriptionCovered: boolean; estKr: number }[];
+}
+
+export async function fetchCosts(): Promise<CostSummary | null> {
+  try {
+    const r = await fetch(`${BASE}/api/ai/costs`);
+    const j = await r.json();
+    return j?.ok ? j : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function sendRunMessage(runId: string, text: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${BASE}/api/ai/runs/${runId}/message`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function skipRunJob(runId: string, jobId: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${BASE}/api/ai/runs/${runId}/skip`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId }) });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function cancelRun(runId: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${BASE}/api/ai/runs/${runId}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function approvePlan(runId: string, jobs: unknown[]): Promise<boolean> {
+  try {
+    const r = await fetch(`${BASE}/api/ai/runs/${runId}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobs }) });
+    return r.ok;
+  } catch {
+    return false;
   }
 }
