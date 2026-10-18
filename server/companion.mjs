@@ -9,6 +9,7 @@ import { execFile } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { registerAiRoutes } from './ai-engine.mjs';
 
 const PORT = 4310;
 const APP_DIR = join(homedir(), '.orbit');
@@ -1652,6 +1653,9 @@ app.post('/api/economic/draft', async (req, res) => {
     res.json({ ok: false, reason: String(err) });
   }
 });
+
+// ---- AI-motor (abonnement-first orkestrering) ----
+registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, EXPORT_DIR });
 
 server.listen(PORT, () => {
   startTelegram();
