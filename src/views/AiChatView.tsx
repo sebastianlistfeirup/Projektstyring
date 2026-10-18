@@ -11,6 +11,7 @@ import {
   Play,
   Plus,
   Send,
+  Sparkles,
   Square,
   Trash2,
   Wifi,
@@ -20,7 +21,7 @@ import {
 import { useStore } from '../store/useStore';
 import { useLang, t } from '../lib/i18n';
 import { cn } from '../lib/utils';
-import { companionBase, companionStatus } from '../lib/companion';
+import { companionStatus } from '../lib/companion';
 import {
   fetchAiServices,
   saveAiPrefs,
@@ -32,7 +33,7 @@ import {
 } from '../lib/aiApi';
 import type { AiAttachment, AiChat, AiMessage } from '../lib/types';
 
-const BASE_URL = companionBase();
+const BASE_URL = 'http://127.0.0.1:4310';
 
 /* ---------- lille markdown-renderer (fed, kode, lister) ---------- */
 
@@ -326,6 +327,9 @@ export function AiChatView() {
   const [prefs, setPrefs] = useState<{ allowPaidApis: boolean; orchestrator: string } | null>(null);
   const [companionOk, setCompanionOk] = useState<boolean | null>(null);
   const [service, setService] = useState<string>('auto');
+  const [runMode, setRunMode] = useState<'standard' | 'roles' | 'debate' | 'vote'>('standard');
+  const [pausePlan, setPausePlan] = useState(false);
+  const [suggestingBible, setSuggestingBible] = useState(false);
   const [text, setText] = useState('');
   const [pending, setPending] = useState<AiAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -387,7 +391,7 @@ export function AiChatView() {
       const msgText = () => (useStore.getState().aiChats.find((c) => c.id === chat.id)?.messages ?? []).find((x) => x.id === msg.id)?.text ?? '';
       const jobText: Record<string, string> = {};
       await streamOrchestrate(
-        { goal: body, bible: bible || undefined },
+        { goal: body, bible: bible || undefined, mode: runMode, pauseAfterPlan: pausePlan },
         {
           onEvent: (evt) => {
             let out = msgText();
@@ -529,7 +533,7 @@ export function AiChatView() {
                   <span className="text-[10px] opacity-40">{bible ? `${bible.length} ${t('chat.chars')}` : t('chat.bibleEmpty')}</span>
                 </button>
                 {bibleOpen && (
-                  <div className="px-3 pb-3">
+                  <div className="px-3 pb-3 space-y-1.5">
                     <textarea
                       value={bible}
                       onChange={(e) => setBible(chat.projectId!, e.target.value)}
@@ -537,6 +541,28 @@ export function AiChatView() {
                       rows={4}
                       className="w-full rounded-xl bg-black/20 dark:bg-black/30 border border-white/10 px-3 py-2 text-[12px] outline-none focus:border-indigo-400/60 resize-y"
                     />
+                    <button
+                      disabled={suggestingBible}
+                      onClick={async () => {
+                        if (!chat.projectId) return;
+                        setSuggestingBible(true);
+                        try {
+                          const r = await fetch(`${BASE_URL}/api/ai/bible/suggest`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ project: chatProject?.name ?? '', current: bible }),
+                          });
+                          const j = await r.json();
+                          if (j?.ok && j.bible) setBible(chat.projectId, j.bible);
+                        } finally {
+                          setSuggestingBible(false);
+                        }
+                      }}
+                      className="rounded-lg border border-indigo-400/40 text-indigo-300 px-2.5 py-1 text-[10.5px] hover:bg-indigo-400/10 transition disabled:opacity-40 flex items-center gap-1"
+                    >
+                      {suggestingBible ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
+                      {suggestingBible ? t('chat.suggestingBible') : t('chat.suggestBible')}
+                    </button>
                   </div>
                 )}
               </div>
@@ -604,6 +630,25 @@ export function AiChatView() {
                   </button>
                 )}
               </div>
+              {service === 'auto' && (
+                <div className="px-3 pb-2 flex flex-wrap items-center gap-2">
+                  <select
+                    value={runMode}
+                    onChange={(e) => setRunMode(e.target.value as 'standard' | 'roles' | 'debate' | 'vote')}
+                    title={t('chat.modeHint')}
+                    className="rounded-lg bg-black/20 dark:bg-black/30 border border-white/10 px-2 py-1 text-[10.5px] outline-none"
+                  >
+                    <option value="standard">{t('swarm.mode.standard')}</option>
+                    <option value="roles">{t('swarm.mode.roles')}</option>
+                    <option value="debate">{t('swarm.mode.debate')}</option>
+                    <option value="vote">{t('swarm.mode.vote')}</option>
+                  </select>
+                  <label className="flex items-center gap-1.5 text-[10.5px] opacity-60 cursor-pointer" title={t('chat.modeHint')}>
+                    <input type="checkbox" checked={pausePlan} onChange={(e) => setPausePlan(e.target.checked)} className="accent-indigo-500" />
+                    {t('chat.pausePlan')}
+                  </label>
+                </div>
+              )}
               <div className="px-3 pb-2 text-[10px] opacity-35 flex items-center gap-1.5">
                 {uploading ? <Loader2 size={10} className="animate-spin" /> : null}
                 {t('chat.composerHint')}
