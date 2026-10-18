@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Bot,
   Check,
@@ -9,12 +10,15 @@ import {
   Loader2,
   Play,
   Plus,
+  Radar,
   Trash2,
   X,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useLang, t } from '../lib/i18n';
 import { cn } from '../lib/utils';
+import { streamOrchestrate } from '../lib/aiApi';
+import { connectSwarm, useSwarm } from '../lib/swarm';
 import type { AiAgent, AiJob, AiJobStatus, AiPhase } from '../lib/types';
 
 /* ---------- metadata ---------- */
@@ -36,6 +40,44 @@ const STATUS_STYLE: Record<AiJobStatus, string> = {
   blocked: 'bg-rose-500/10 text-rose-600 dark:text-rose-300',
   done: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300',
 };
+
+/* ---------- live sværm-banner: viser aktive AI-kørsler med link til swarm ---------- */
+
+function SwarmLiveBar() {
+  const run = useSwarm((s) => s.run);
+  const connected = useSwarm((s) => s.connected);
+  useLang();
+  if (!run || run.status !== 'running') return null;
+  const running = run.jobs.filter((j) => j.status === 'running').length;
+  const done = run.jobs.filter((j) => j.status === 'done').length;
+  const names = run.jobs
+    .filter((j) => j.status === 'running')
+    .slice(0, 3)
+    .map((j) => j.serviceId ?? '?')
+    .join(', ');
+  return (
+    <Link
+      to="/swarm"
+      className="mb-5 flex items-center gap-3 rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-2.5 transition hover:bg-emerald-400/15"
+    >
+      <span className="relative flex h-2.5 w-2.5 shrink-0">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400" />
+      </span>
+      <Radar className="h-4 w-4 shrink-0 text-emerald-400" />
+      <span className="min-w-0 flex-1 truncate text-[12.5px] text-emerald-200 dark:text-emerald-300">
+        {connected ? (
+          <>
+            <b>{running}</b> {t('swarm.agents').toLowerCase()} live{names ? ` (${names})` : ''} · {done}/{run.jobs.length}
+          </>
+        ) : (
+          t('swarm.noCompanionShort')
+        )}
+      </span>
+      <span className="shrink-0 text-[11px] font-semibold text-emerald-300">{t('swarm.title')} →</span>
+    </Link>
+  );
+}
 
 const kindLabel = (kind: AiAgent['kind']) => t(`ai.kind.${kind}`);
 
@@ -352,9 +394,12 @@ export default function AiWorkshopView() {
   const orchestratorId = useStore((s) => s.orchestratorId);
   const setOrchestrator = useStore((s) => s.setOrchestrator);
   const toggleAiAgent = useStore((s) => s.toggleAiAgent);
+  const updateAiJob = useStore((s) => s.updateAiJob);
+  const bibles = useStore((s) => s.bibles);
 
   const [projectFilter, setProjectFilter] = useState<string>('all');
   const [modal, setModal] = useState<{ job: AiJob | null; phase: AiPhase } | null>(null);
+  const [pipelineRunning, setPipelineRunning] = useState(false);
 
   const filteredJobs = useMemo(
     () => jobs.filter((j) => projectFilter === 'all' || j.projectId === projectFilter),
@@ -367,6 +412,45 @@ export default function AiWorkshopView() {
   const blocked = filteredJobs.filter((j) => j.status === 'blocked');
   const doneCount = filteredJobs.filter((j) => j.status === 'done').length;
   const pct = filteredJobs.length ? Math.round((doneCount / filteredJobs.length) * 100) : 0;
+
+  // Kør alle kø-jobs i pipelinen via AI-motoren (companion).
+  const runPipeline = async () => {
+    const queued = filteredJobs.filter((j) => j.status === 'queued' && j.agentId);
+    if (!queued.length || pipelineRunning) return;
+    setPipelineRunning(true);
+    connectSwarm(); // så swarm-visningen kan følge med live, mens pipelinen kører
+    const serviceOf = (agentId: string | null) => agentId?.replace(/^ai-/, '') ?? null;
+    const idx = new Map(queued.map((j, i) => [j.id, i]));
+    const predefinedJobs = queued.map((j, i) => ({
+      id: `job-${i}`,
+      title: j.title,
+      serviceId: serviceOf(j.agentId),
+      phase: j.phase,
+      dependsOn: j.dependsOn.map((d) => idx.get(d)).filter((n): n is number => n !== undefined),
+      description: j.description || j.title,
+    }));
+    const goal = `Pipeline: ${queued.map((j) => j.title).join('; ')}`;
+    const bible = projectFilter !== 'all' ? bibles[projectFilter] ?? '' : '';
+    queued.forEach((j) => updateAiJob(j.id, { status: 'inprogress' }));
+    await streamOrchestrate(
+      { goal, bible: bible || undefined, jobs: predefinedJobs },
+      {
+        onEvent: (evt) => {
+          if (evt.type === 'job_done') {
+            const r = evt.result as { jobId: string; text: string };
+            const local = queued[Number(String(r.jobId).replace('job-', ''))];
+            if (local) updateAiJob(local.id, { status: 'review', result: r.text.slice(0, 4000) });
+          } else if (evt.type === 'job_error') {
+            const local = queued[Number(String((evt as { jobId?: string }).jobId ?? '').replace('job-', ''))];
+            if (local) updateAiJob(local.id, { status: 'blocked', question: String(evt.error ?? '') });
+          }
+        },
+        onError: () => queued.forEach((j) => updateAiJob(j.id, { status: 'blocked' })),
+      },
+      new AbortController().signal,
+    );
+    setPipelineRunning(false);
+  };
 
   return (
     <div className="h-full overflow-y-auto">
@@ -390,12 +474,24 @@ export default function AiWorkshopView() {
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
+            <button
+              onClick={runPipeline}
+              disabled={pipelineRunning || !filteredJobs.some((j) => j.status === 'queued' && j.agentId)}
+              className="btn-primary rounded-xl disabled:opacity-40"
+              title={t('ai.runPipelineHint')}
+            >
+              {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              {t('ai.runPipeline')}
+            </button>
             <button onClick={() => setModal({ job: null, phase: 'concept' })} className="btn-primary rounded-xl">
               <Plus className="h-4 w-4" />
               {t('ai.newJob')}
             </button>
           </div>
         </div>
+
+        {/* Live sværm-banner */}
+        <SwarmLiveBar />
 
         {/* Agent-roster */}
         <div className="mb-6 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
