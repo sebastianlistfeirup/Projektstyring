@@ -1,197 +1,253 @@
 import { create } from 'zustand';
+import { fetchAiServices, type AiServiceInfo } from './aiApi';
+
+/* ---------- typer ---------- */
 
 export interface SwarmJob {
-  jobId: string;
-  serviceId: string;
-  phase: string;
-  role: string;
+  id: string;
   title: string;
+  serviceId: string | null;
+  phase: string;
+  dependsOn: number[];
+  description: string;
   status: 'queued' | 'running' | 'done' | 'error';
-  progress: number;
-  note?: string;
-  startedAt?: number;
-  endedAt?: number;
+  liveText: string;
+  notes: string[];
+  deltaCount: number;
+  lastDeltaAt: number | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+  text: string;
+  artifacts: { kind: string; name: string; mime: string; url?: string }[];
+  error: string | null;
 }
 
 export interface SwarmRun {
   runId: string;
-  projectId: string;
-  pipeline: string;
-  orchestrator?: string;
-  jobs: Record<string, SwarmJob>;
-  status: 'running' | 'done' | 'error';
+  goal: string;
   startedAt: number;
-  endedAt?: number;
+  orchestratorId: string | null;
+  mode: string | null;
+  status: 'running' | 'done' | 'error';
+  jobs: SwarmJob[];
+  notes: string[];
+  finishedAt: number | null;
 }
 
-interface SwarmState {
+interface SwarmStore {
   connected: boolean;
-  active: SwarmRun | null;
-  last: SwarmRun | null;
-  services: Record<string, { id: string; name: string; color: string; kind: string }> | null;
+  run: SwarmRun | null;
+  services: Record<string, AiServiceInfo> | null;
   setConnected: (v: boolean) => void;
-  apply: (msg: any) => void;
-  setState: (s: { active: SwarmRun | null; last: SwarmRun | null }) => void;
-  setServices: (s: SwarmState['services']) => void;
+  setRun: (r: SwarmRun | null) => void;
+  apply: (evt: Record<string, unknown>) => void;
+  refreshServices: () => Promise<void>;
 }
 
-function cloneRun(run: SwarmRun | null): SwarmRun | null {
-  if (!run) return null;
-  return { ...run, jobs: { ...run.jobs } };
-}
+/* ---------- tilstand ---------- */
 
-export const useSwarm = create<SwarmState>((set) => ({
+export const useSwarm = create<SwarmStore>()((set, get) => ({
   connected: false,
-  active: null,
-  last: null,
+  run: null,
   services: null,
   setConnected: (v) => set({ connected: v }),
-  setState: (s) => set({ active: s.active, last: s.last }),
-  setServices: (s) => set({ services: s }),
-  apply: (msg) =>
-    set((state) => {
-      const d = msg?.data ?? msg;
-      if (!d || typeof d !== 'object') return state;
-      const type = d.type as string;
-      const target = (state.active && state.active.runId === d.runId) ? cloneRun(state.active) : null;
-      const run = target ?? (d.runId ? {
-        runId: d.runId,
-        projectId: d.projectId || '',
-        pipeline: d.pipeline || '',
-        jobs: {},
-        status: 'running' as const,
-        startedAt: Date.now(),
-      } : null);
-      if (!run) return state;
-
-      const upsert = (job: Partial<SwarmJob> & { jobId: string }) => {
-        run.jobs[job.jobId] = { ...run.jobs[job.jobId], ...job } as SwarmJob;
-      };
-
-      switch (type) {
-        case 'run_start':
-          run.pipeline = d.pipeline || run.pipeline;
-          run.projectId = d.projectId || run.projectId;
-          run.status = 'running';
-          run.startedAt = d.startedAt || Date.now();
-          break;
-        case 'orchestrator':
-          run.orchestrator = d.serviceId;
-          break;
-        case 'plan':
-          for (const j of d.jobs || []) {
-            upsert({ jobId: j.jobId, serviceId: j.serviceId, phase: j.phase, role: j.role, title: j.title, status: 'queued', progress: 0 });
-          }
-          break;
-        case 'job_start':
-          upsert({ jobId: d.jobId, serviceId: d.serviceId, phase: d.phase, role: d.role, title: d.title, status: 'running', progress: 0, startedAt: Date.now() });
-          break;
-        case 'job_delta':
-          if (run.jobs[d.jobId]) {
-            run.jobs[d.jobId].progress = Math.min(99, (run.jobs[d.jobId].progress || 0) + (d.delta || 1));
-            if (d.note) run.jobs[d.jobId].note = d.note;
-          }
-          break;
-        case 'job_status':
-          if (run.jobs[d.jobId]) {
-            run.jobs[d.jobId].status = d.status;
-            if (d.note) run.jobs[d.jobId].note = d.note;
-            if (d.status === 'done' || d.status === 'error') {
-              run.jobs[d.jobId].progress = d.status === 'done' ? 100 : run.jobs[d.jobId].progress;
-              run.jobs[d.jobId].endedAt = Date.now();
-            }
-          }
-          break;
-        case 'job_note':
-          if (run.jobs[d.jobId]) run.jobs[d.jobId].note = d.note;
-          break;
-        case 'job_done':
-          upsert({ jobId: d.jobId, status: 'done', progress: 100, endedAt: Date.now(), note: d.note });
-          break;
-        case 'job_error':
-          upsert({ jobId: d.jobId, status: 'error', note: d.error || d.note, endedAt: Date.now() });
-          break;
-        case 'done':
-          run.status = 'done';
-          run.endedAt = Date.now();
-          break;
-        case 'error':
-          run.status = 'error';
-          run.endedAt = Date.now();
-          break;
-        default:
-          return state;
+  setRun: (r) => set({ run: r }),
+  refreshServices: async () => {
+    const s = await fetchAiServices();
+    set({ services: s?.services ?? null });
+  },
+  apply: (evt) => {
+    const cur = get().run;
+    switch (evt.type) {
+      case 'run_start':
+        set({
+          run: {
+            runId: String(evt.runId ?? ''),
+            goal: String(evt.goal ?? ''),
+            startedAt: Date.parse(String(evt.startedAt ?? '')) || Date.now(),
+            orchestratorId: null,
+            mode: null,
+            status: 'running',
+            jobs: [],
+            notes: [],
+            finishedAt: null,
+          },
+        });
+        break;
+      case 'orchestrator':
+        if (cur) set({ run: { ...cur, orchestratorId: (evt.serviceId as string) ?? null, mode: String(evt.mode ?? '') } });
+        break;
+      case 'plan': {
+        if (!cur) break;
+        const jobs = (evt.jobs as SwarmJob[] | undefined) ?? [];
+        set({
+          run: {
+            ...cur,
+            jobs: jobs.map((j) => ({
+              ...j,
+              status: 'queued' as const,
+              liveText: '',
+              notes: [],
+              deltaCount: 0,
+              lastDeltaAt: null,
+              startedAt: null,
+              finishedAt: null,
+              text: '',
+              artifacts: [],
+              error: null,
+            })),
+          },
+        });
+        break;
       }
-
-      const isActive = run.status === 'running';
-      return { active: isActive ? run : null, last: isActive ? state.last : run };
-    }),
+      case 'job_start': {
+        if (!cur) break;
+        const job = evt.job as { id: string } | undefined;
+        set({
+          run: {
+            ...cur,
+            jobs: cur.jobs.map((j) => (j.id === job?.id ? { ...j, status: 'running' as const, startedAt: Date.now() } : j)),
+          },
+        });
+        break;
+      }
+      case 'job_delta': {
+        if (!cur) break;
+        const id = String(evt.jobId ?? '');
+        set({
+          run: {
+            ...cur,
+            jobs: cur.jobs.map((j) =>
+              j.id === id
+                ? {
+                    ...j,
+                    deltaCount: j.deltaCount + 1,
+                    liveText: (j.liveText + String(evt.delta ?? '')).slice(-400),
+                    lastDeltaAt: Date.now(),
+                  }
+                : j,
+            ),
+          },
+        });
+        break;
+      }
+      case 'job_status':
+      case 'job_note': {
+        if (!cur) break;
+        const id = evt.jobId ? String(evt.jobId) : null;
+        const note = String(evt.status ?? evt.note ?? '');
+        if (!id) {
+          set({ run: { ...cur, notes: [...cur.notes.slice(-4), note] } });
+        } else {
+          set({
+            run: {
+              ...cur,
+              jobs: cur.jobs.map((j) => (j.id === id ? { ...j, notes: [...j.notes.slice(-3), note] } : j)),
+            },
+          });
+        }
+        break;
+      }
+      case 'job_done': {
+        if (!cur) break;
+        const r = evt.result as { jobId: string; text: string; artifacts?: SwarmJob['artifacts'] } | undefined;
+        if (!r) break;
+        set({
+          run: {
+            ...cur,
+            jobs: cur.jobs.map((j) =>
+              j.id === r.jobId
+                ? { ...j, status: 'done' as const, text: String(r.text ?? '').slice(0, 2000), artifacts: r.artifacts ?? [], finishedAt: Date.now() }
+                : j,
+            ),
+          },
+        });
+        break;
+      }
+      case 'job_error': {
+        if (!cur) break;
+        const id = String(evt.jobId ?? '');
+        set({
+          run: {
+            ...cur,
+            jobs: cur.jobs.map((j) =>
+              j.id === id ? { ...j, status: 'error' as const, error: String(evt.error ?? ''), finishedAt: Date.now() } : j,
+            ),
+          },
+        });
+        break;
+      }
+      case 'done':
+        if (cur) set({ run: { ...cur, status: 'done', finishedAt: Date.now() } });
+        break;
+      case 'error':
+        if (cur && evt.runId) set({ run: { ...cur, status: 'error', finishedAt: Date.now() } });
+        break;
+      default:
+        break;
+    }
+  },
 }));
 
+/* ---------- WebSocket-forbindelse ---------- */
+
+const WS_URL = 'ws://127.0.0.1:4310/ws';
+const API = 'http://127.0.0.1:4310';
 let ws: WebSocket | null = null;
 let retry = 0;
-let syncTimer: number | null = null;
+let started = false;
 
-function syncState() {
-  fetch('http://127.0.0.1:4310/api/ai/swarm')
-    .then((r) => (r.ok ? r.json() : null))
-    .then((s) => { if (s) useSwarm.getState().setState(s); })
-    .catch(() => {});
-  fetch('http://127.0.0.1:4310/api/ai/services')
-    .then((r) => (r.ok ? r.json() : null))
-    .then((s) => { if (s) useSwarm.getState().setServices(s); })
-    .catch(() => {});
-}
-
-function refreshServices() {
-  fetch('http://127.0.0.1:4310/api/ai/services')
-    .then((r) => (r.ok ? r.json() : null))
-    .then((s) => { if (s) useSwarm.getState().setServices(s); })
-    .catch(() => {});
-}
-
-export function connectSwarm() {
-  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+async function syncState() {
   try {
-    ws = new WebSocket('ws://127.0.0.1:4310/ws');
-  } catch {
-    scheduleReconnect();
-    return;
-  }
-  ws.onopen = () => {
-    retry = 0;
-    useSwarm.getState().setConnected(true);
-    syncState();
-    refreshServices();
-    if (syncTimer) window.clearInterval(syncTimer);
-    syncTimer = window.setInterval(syncState, 5000);
-  };
-  ws.onmessage = (ev) => {
+    const r = await fetch(`${API}/api/ai/swarm`);
+    const j = await r.json();
+    if (j?.ok) useSwarm.getState().setRun(j.run ?? null);
+  } catch { /* companion offline */ }
+}
+
+export function connectSwarm(): void {
+  if (started) return;
+  started = true;
+  const connect = () => {
     try {
-      const msg = JSON.parse(ev.data);
-      if (msg.type === 'ai') useSwarm.getState().apply(msg);
-    } catch { /* ignore malformed */ }
+      ws = new WebSocket(WS_URL);
+    } catch {
+      scheduleReconnect();
+      return;
+    }
+    ws.onopen = () => {
+      retry = 0;
+      useSwarm.getState().setConnected(true);
+      void syncState();
+      void useSwarm.getState().refreshServices();
+    };
+    ws.onmessage = (m) => {
+      try {
+        const obj = JSON.parse(String(m.data));
+        if (obj?.type === 'ai') useSwarm.getState().apply(obj);
+      } catch { /* ignorer ikke-JSON */ }
+    };
+    ws.onclose = () => {
+      useSwarm.getState().setConnected(false);
+      scheduleReconnect();
+    };
+    ws.onerror = () => ws?.close();
   };
-  ws.onclose = () => {
-    useSwarm.getState().setConnected(false);
-    if (syncTimer) { window.clearInterval(syncTimer); syncTimer = null; }
-    scheduleReconnect();
+  const scheduleReconnect = () => {
+    const delay = Math.min(15000, 1500 * 2 ** retry++);
+    setTimeout(connect, delay);
   };
-  ws.onerror = () => { try { ws?.close(); } catch { /* noop */ } };
+  connect();
+  // Fallback-sync, så visningen også opdaterer uden WS (fx ældre companion).
+  setInterval(() => { void syncState(); }, 5000);
 }
 
-function scheduleReconnect() {
-  const delay = Math.min(15000, 1500 * 2 ** retry);
-  retry += 1;
-  window.setTimeout(connectSwarm, delay);
-}
+/* ---------- hjælpere ---------- */
 
-export function serviceColor(id: string | undefined): string {
-  const services = useSwarm.getState().services;
+export function serviceColor(services: Record<string, AiServiceInfo> | null, id: string | null): string {
   return (id && services?.[id]?.color) || 'slate';
 }
 
-export function serviceName(id: string | undefined): string {
-  const services = useSwarm.getState().services;
+export function serviceName(services: Record<string, AiServiceInfo> | null, id: string | null): string {
   return (id && services?.[id]?.name) || id || '—';
 }
