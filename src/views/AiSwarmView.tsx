@@ -2,21 +2,67 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  Ban,
+  CalendarClock,
+  Check,
   CheckCircle2,
   CircleDashed,
   Clock,
+  Coins,
+  Copy,
   Cpu,
+  FastForward,
   History,
+  LayoutTemplate,
+  Pause,
+  Play,
   Radio,
+  Save,
+  Send,
+  SkipForward,
+  Sparkles,
+  Square,
+  Trash2,
+  Volume2,
+  VolumeX,
+  Webhook,
   Zap,
 } from 'lucide-react';
 import { useLang, t } from '../lib/i18n';
 import { cn } from '../lib/utils';
-import { connectSwarm, useSwarm, serviceColor, serviceName, type SwarmJob, type SwarmRun } from '../lib/swarm';
-import { companionBase } from '../lib/companion';
+import {
+  connectSwarm,
+  useSwarm,
+  serviceColor,
+  serviceName,
+  toggleSwarmSound,
+  swarmSoundOn,
+  replayEvents,
+  type SwarmEvent,
+  type SwarmJob,
+  type SwarmRun,
+} from '../lib/swarm';
+import {
+  approvePlan,
+  cancelRun,
+  deleteTemplate,
+  deleteTrigger,
+  fetchCosts,
+  fetchTemplates,
+  fetchTriggers,
+  fireOrchestrate,
+  saveTemplate,
+  saveTrigger,
+  sendRunMessage,
+  skipRunJob,
+  suggestTemplate,
+  type CostSummary,
+  type PipelineTemplate,
+  type Trigger,
+} from '../lib/aiApi';
 import type { AiServiceInfo } from '../lib/aiApi';
 
-const BASE_URL = companionBase();
+const BASE_URL = 'http://127.0.0.1:4310';
 const PHASES = ['concept', 'design', 'prototype', 'production', 'testing', 'polish', 'release'];
 
 const SERVICE_HEX: Record<string, string> = {
@@ -381,118 +427,6 @@ function avgJobMs(jobs: SwarmJob[]): number | null {
   return timed.reduce((a, j) => a + (j.finishedAt! - j.startedAt!), 0) / timed.length;
 }
 
-/* ================= agent-kort ================= */
-
-function JobCard({ j, services, runActive }: { j: SwarmJob; services: Record<string, AiServiceInfo> | null; runActive: boolean }) {
-  const liveRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = liveRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [j.liveText, j.notes]);
-
-  const color = hex(serviceColor(services, j.serviceId));
-  const waiting = (j.dependsOn ?? [])
-    .map((d) => ({ idx: d }))
-    .length;
-
-  return (
-    <div
-      className={cn(
-        'relative rounded-2xl border overflow-hidden transition-all duration-500',
-        j.status === 'running' && 'border-white/20 shadow-2xl',
-        j.status === 'done' && 'border-emerald-400/20 opacity-90',
-        j.status === 'queued' && 'border-white/8 opacity-55',
-        j.status === 'error' && 'border-rose-400/40',
-      )}
-      style={j.status === 'running' ? { boxShadow: `0 0 42px -10px ${color}88` } : undefined}
-    >
-      <div className="h-1 w-full" style={{ background: `linear-gradient(90deg, ${color}, transparent)` }} />
-      <div className="p-3 bg-black/15 dark:bg-black/30">
-        <div className="flex items-center gap-2">
-          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color, boxShadow: j.status === 'running' ? `0 0 10px 2px ${color}aa` : undefined }} />
-          <span className="text-[12px] font-semibold flex-1 truncate">{serviceName(services, j.serviceId)}</span>
-          <span className="text-[9px] px-1.5 py-0.5 rounded-full border border-white/10 opacity-60">{t(`ai.phase.${j.phase}`) === `ai.phase.${j.phase}` ? j.phase : t(`ai.phase.${j.phase}`)}</span>
-          {j.status === 'running' && <Activity size={12} className="text-emerald-400 animate-pulse" />}
-          {j.status === 'done' && <CheckCircle2 size={12} className="text-emerald-400" />}
-          {j.status === 'error' && <AlertTriangle size={12} className="text-rose-400" />}
-          {j.status === 'queued' && <CircleDashed size={12} className="opacity-40" />}
-        </div>
-        <div className="text-[11px] opacity-70 mt-1 truncate">{j.title}</div>
-
-        {/* Underagenter (fx Claude Code's Task-subagenter) — separate indrykkede linjer */}
-        {(j.subagents?.length ?? 0) > 0 && (
-          <div className="mt-2 space-y-1 border-l-2 pl-2" style={{ borderColor: `${color}55` }}>
-            {j.subagents!.map((s) => (
-              <div key={s.subId} className="flex items-start gap-1.5 text-[10px] leading-snug">
-                {s.status === 'running' ? (
-                  <Activity size={10} className="mt-0.5 shrink-0 text-emerald-400 animate-pulse" />
-                ) : (
-                  <CheckCircle2 size={10} className="mt-0.5 shrink-0 text-emerald-400/70" />
-                )}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate opacity-80">{s.name}</span>
-                  {s.status === 'done' && s.text && <span className="block truncate opacity-40">{s.text.slice(0, 90)}</span>}
-                  <span className="block opacity-35">
-                    {s.status === 'running'
-                      ? `${t('swarm.active')} · ${fmtDur(Date.now() - s.startedAt)}`
-                      : fmtDur(s.finishedAt ? s.finishedAt - s.startedAt : null)}
-                  </span>
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {j.status === 'running' && (
-          <div className="mt-2 space-y-1.5">
-            <div ref={liveRef} className="h-24 overflow-hidden rounded-lg bg-black/40 dark:bg-black/50 p-2 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap break-words text-emerald-100/90">
-              {j.liveText.slice(-360) || '…'}
-              {runActive && <span className="inline-block w-1.5 h-3 ml-0.5 bg-emerald-300 animate-pulse" />}
-              {j.notes.slice(-1).map((n, i) => (
-                <div key={i} className="text-sky-300/80 italic mt-1">_{n}_</div>
-              ))}
-            </div>
-            <div className="flex items-center justify-between text-[9.5px] opacity-50">
-              <span>{j.deltaCount.toLocaleString('da-DK')} {t('swarm.activity')}</span>
-              <span className="flex items-center gap-1"><Clock size={9} /> {fmtDur(Date.now() - (j.startedAt ?? Date.now()))}</span>
-            </div>
-          </div>
-        )}
-
-        {j.status === 'done' && (
-          <div className="mt-2 space-y-1.5">
-            <p className="text-[10.5px] leading-relaxed opacity-70 line-clamp-4">{j.text.slice(0, 420)}</p>
-            {(j.artifacts?.length ?? 0) > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {j.artifacts!.map((a, i) => (
-                  <a key={i} href={a.url?.startsWith('/') ? `${BASE_URL}${a.url}` : a.url} target="_blank" rel="noreferrer">
-                    {a.kind === 'image' ? (
-                      <img src={a.url?.startsWith('/') ? `${BASE_URL}${a.url}` : a.url} alt={a.name} className="h-12 w-12 rounded-lg object-cover border border-white/10" />
-                    ) : (
-                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 truncate max-w-[110px]">{a.name}</span>
-                    )}
-                  </a>
-                ))}
-              </div>
-            )}
-            <div className="text-[9.5px] opacity-40 flex items-center gap-1"><Clock size={9} /> {fmtDur(j.startedAt && j.finishedAt ? j.finishedAt - j.startedAt : null)}</div>
-          </div>
-        )}
-
-        {j.status === 'queued' && (
-          <p className="mt-2 text-[10px] opacity-45">
-            {waiting > 0 ? t('swarm.waitingOn').replace('{n}', String(waiting)) : t('ai.status.queued')}
-          </p>
-        )}
-
-        {j.status === 'error' && (
-          <p className="mt-2 text-[10.5px] text-rose-300/90 leading-relaxed">{j.error}</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
 /* ================= tidslinje for kørslen ================= */
 
 function RunTimeline({ run, services, active }: { run: SwarmRun; services: Record<string, AiServiceInfo> | null; active: boolean }) {
@@ -561,17 +495,539 @@ function RunTimeline({ run, services, active }: { run: SwarmRun; services: Recor
   );
 }
 
+/* ================= agent-kort ================= */
+
+function JobCard({ j, services, runActive, onSkip }: { j: SwarmJob; services: Record<string, AiServiceInfo> | null; runActive: boolean; onSkip?: (jobId: string) => void }) {
+  const liveRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = liveRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [j.liveText, j.notes, j.subagents]);
+
+  const color = hex(serviceColor(services, j.serviceId));
+  const waiting = (j.dependsOn ?? [])
+    .map((d) => ({ idx: d }))
+    .length;
+
+  return (
+    <div
+      className={cn(
+        'relative rounded-2xl border overflow-hidden transition-all duration-500',
+        j.status === 'running' && 'border-white/20 shadow-2xl',
+        j.status === 'done' && 'border-emerald-400/20 opacity-90',
+        j.status === 'queued' && 'border-white/8 opacity-55',
+        j.status === 'error' && 'border-rose-400/40',
+      )}
+      style={j.status === 'running' ? { boxShadow: `0 0 42px -10px ${color}88` } : undefined}
+    >
+      <div className="h-1 w-full" style={{ background: `linear-gradient(90deg, ${color}, transparent)` }} />
+      <div className="p-3 bg-black/15 dark:bg-black/30">
+        <div className="flex items-center gap-2">
+          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color, boxShadow: j.status === 'running' ? `0 0 10px 2px ${color}aa` : undefined }} />
+          <span className="text-[12px] font-semibold flex-1 truncate">{serviceName(services, j.serviceId)}</span>
+          {j.team && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded-full border border-violet-400/40 text-violet-300 shrink-0">{t('swarm.team')}</span>
+          )}
+          <span className="text-[9px] px-1.5 py-0.5 rounded-full border border-white/10 opacity-60">{t(`ai.phase.${j.phase}`) === `ai.phase.${j.phase}` ? j.phase : t(`ai.phase.${j.phase}`)}</span>
+          {j.status === 'running' && <Activity size={12} className="text-emerald-400 animate-pulse" />}
+          {j.status === 'done' && <CheckCircle2 size={12} className="text-emerald-400" />}
+          {j.status === 'error' && <AlertTriangle size={12} className="text-rose-400" />}
+          {j.status === 'queued' && <CircleDashed size={12} className="opacity-40" />}
+          {runActive && (j.status === 'queued' || j.status === 'error') && onSkip && (
+            <button
+              onClick={() => onSkip(j.id)}
+              title={t('swarm.skipJob')}
+              className="shrink-0 rounded-md p-1 opacity-50 hover:opacity-100 hover:bg-white/10 transition"
+            >
+              <SkipForward size={12} />
+            </button>
+          )}
+        </div>
+        <div className="text-[11px] opacity-70 mt-1 truncate">{j.title}</div>
+
+        {/* Underagenter (holdmedlemmer / CLI-subagenter) — separate indrykkede linjer med live-tekst */}
+        {(j.subagents?.length ?? 0) > 0 && (
+          <div className="mt-2 space-y-1 border-l-2 pl-2" style={{ borderColor: `${color}55` }}>
+            {j.subagents!.map((s) => (
+              <div key={s.subId} className="flex items-start gap-1.5 text-[10px] leading-snug">
+                {s.status === 'running' ? (
+                  <Activity size={10} className="mt-0.5 shrink-0 text-emerald-400 animate-pulse" />
+                ) : (
+                  <CheckCircle2 size={10} className="mt-0.5 shrink-0 text-emerald-400/70" />
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate opacity-80">{s.name}</span>
+                  {s.text && <span className="block truncate opacity-40">{s.text.slice(-90)}</span>}
+                  <span className="block opacity-35">
+                    {s.status === 'running'
+                      ? `${t('swarm.active')} · ${fmtDur(Date.now() - s.startedAt)}`
+                      : fmtDur(s.finishedAt ? s.finishedAt - s.startedAt : null)}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {j.status === 'running' && (
+          <div className="mt-2 space-y-1.5">
+            <div ref={liveRef} className="h-24 overflow-hidden rounded-lg bg-black/40 dark:bg-black/50 p-2 font-mono text-[10.5px] leading-relaxed whitespace-pre-wrap break-words text-emerald-100/90">
+              {j.liveText.slice(-360) || '…'}
+              {runActive && <span className="inline-block w-1.5 h-3 ml-0.5 bg-emerald-300 animate-pulse" />}
+              {j.notes.slice(-1).map((n, i) => (
+                <div key={i} className="text-sky-300/80 italic mt-1">_{n}_</div>
+              ))}
+            </div>
+            <div className="flex items-center justify-between text-[9.5px] opacity-50">
+              <span>{j.deltaCount.toLocaleString('da-DK')} {t('swarm.activity')}</span>
+              <span className="flex items-center gap-1"><Clock size={9} /> {fmtDur(Date.now() - (j.startedAt ?? Date.now()))}</span>
+            </div>
+          </div>
+        )}
+
+        {j.status === 'done' && (
+          <div className="mt-2 space-y-1.5">
+            <p className="text-[10.5px] leading-relaxed opacity-70 line-clamp-4">{j.text.slice(0, 420)}</p>
+            {(j.artifacts?.length ?? 0) > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {j.artifacts!.map((a, i) => (
+                  <a key={i} href={a.url?.startsWith('/') ? `${BASE_URL}${a.url}` : a.url} target="_blank" rel="noreferrer">
+                    {a.kind === 'image' ? (
+                      <img src={a.url?.startsWith('/') ? `${BASE_URL}${a.url}` : a.url} alt={a.name} className="h-12 w-12 rounded-lg object-cover border border-white/10" />
+                    ) : (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 truncate max-w-[110px]">{a.name}</span>
+                    )}
+                  </a>
+                ))}
+              </div>
+            )}
+            <div className="text-[9.5px] opacity-40 flex items-center gap-1"><Clock size={9} /> {fmtDur(j.startedAt && j.finishedAt ? j.finishedAt - j.startedAt : null)}</div>
+          </div>
+        )}
+
+        {j.status === 'queued' && (
+          <p className="mt-2 text-[10px] opacity-45">
+            {waiting > 0 ? t('swarm.waitingOn').replace('{n}', String(waiting)) : t('ai.status.queued')}
+          </p>
+        )}
+
+        {j.status === 'error' && (
+          <div className="mt-2">
+            <p className="text-[10.5px] text-rose-300/90 leading-relaxed">{j.error}</p>
+            <p className="text-[9px] opacity-40 mt-1">{t('swarm.selfHealHint')}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ================= besked til orkestratoren + aflys (idé 14) ================= */
+
+function RunControls({ run }: { run: SwarmRun }) {
+  const [msg, setMsg] = useState('');
+  const [sound, setSound] = useState(swarmSoundOn());
+  const send = async () => {
+    const text = msg.trim();
+    if (!text) return;
+    setMsg('');
+    await sendRunMessage(run.runId, text);
+  };
+  return (
+    <div className="rounded-2xl border border-indigo-400/25 bg-indigo-500/[0.06] p-3">
+      <div className="flex flex-col sm:flex-row gap-2">
+        <input
+          value={msg}
+          onChange={(e) => setMsg(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && void send()}
+          placeholder={t('swarm.messagePlaceholder')}
+          className="flex-1 rounded-xl bg-black/20 dark:bg-black/30 border border-white/10 px-3 py-2 text-[12px] outline-none focus:border-indigo-400/50 transition"
+        />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setSound(toggleSwarmSound())}
+            title={t('swarm.soundToggle')}
+            className="rounded-xl border border-white/10 p-2 opacity-70 hover:opacity-100 transition"
+          >
+            {sound ? <Volume2 size={14} /> : <VolumeX size={14} />}
+          </button>
+          <button onClick={() => void send()} disabled={!msg.trim()} className="btn-primary rounded-xl px-3 py-2 text-[11px] flex items-center gap-1.5 disabled:opacity-40">
+            <Send size={12} /> {t('swarm.sendMessage')}
+          </button>
+          <button
+            onClick={() => { if (window.confirm(t('swarm.confirmCancel'))) void cancelRun(run.runId); }}
+            className="rounded-xl border border-rose-400/30 text-rose-300 px-3 py-2 text-[11px] flex items-center gap-1.5 hover:bg-rose-400/10 transition"
+          >
+            <Square size={12} /> {t('swarm.cancelRun')}
+          </button>
+        </div>
+      </div>
+      {(run.instructions?.length ?? 0) > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {run.instructions!.map((ins, i) => (
+            <span key={i} className="text-[9.5px] px-2 py-0.5 rounded-full bg-indigo-400/15 border border-indigo-400/30 text-indigo-200 truncate max-w-[260px]">{ins}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================= godkendelse/redigering af plan (idé 1/2) ================= */
+
+interface PlanDraft { id: string; title: string; serviceId: string | null; phase: string; dependsOn: number[]; description: string; team?: boolean }
+
+function ApprovalModal({ services, onClose }: { services: Record<string, AiServiceInfo> | null; onClose: () => void }) {
+  const approval = useSwarm((s) => s.approval);
+  const setApproval = useSwarm((s) => s.setApproval);
+  const [draft, setDraft] = useState<PlanDraft[]>([]);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (approval && !ready) {
+      setDraft(approval.jobs.map((j) => ({ id: j.id, title: j.title, serviceId: j.serviceId, phase: j.phase, dependsOn: [...(j.dependsOn ?? [])], description: j.description, team: j.team })));
+      setReady(true);
+    }
+    if (!approval) { setReady(false); onClose(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approval]);
+
+  if (!approval) return null;
+
+  const patch = (i: number, p: Partial<PlanDraft>) => setDraft((d) => d.map((x, xi) => (xi === i ? { ...x, ...p } : x)));
+
+  const approve = async () => {
+    const jobs = draft.filter((j) => j.title.trim()).map((j, i) => ({ ...j, id: j.id || `job-${i}`, dependsOn: (j.dependsOn ?? []).filter((d) => d !== i && d < draft.length) }));
+    const ok = await approvePlan(approval.runId, jobs);
+    if (ok) { setApproval(null); onClose(); }
+  };
+
+  const serviceOpts = (current: string | null) => {
+    const ids = new Set([...Object.keys(services ?? {}), ...(current ? [current] : [])]);
+    return [...ids].map((id) => (
+      <option key={id} value={id}>{services?.[id]?.name ?? id}{services?.[id] && !services[id].available ? ' (offline)' : ''}</option>
+    ));
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center p-4" role="dialog" aria-modal>
+      <div className="absolute inset-0 bg-zinc-950/70 backdrop-blur-sm" />
+      <div className="glass-panel animate-fade-in relative max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-3xl p-5">
+        <h3 className="text-base font-bold flex items-center gap-2">
+          <Check size={16} className="text-emerald-400" /> {t('swarm.approvalTitle')}
+        </h3>
+        <p className="text-[11px] opacity-55 mt-1 mb-3">{t('swarm.approvalHint')}</p>
+        <div className="space-y-2">
+          {draft.map((j, i) => (
+            <div key={j.id || i} className="rounded-2xl border border-white/10 bg-black/15 dark:bg-black/25 p-2.5 space-y-1.5">
+              <div className="flex gap-1.5">
+                <input value={j.title} onChange={(e) => patch(i, { title: e.target.value })} className="flex-1 rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[12px] outline-none focus:border-indigo-400/50" placeholder={t('swarm.jobTitle')} />
+                <button onClick={() => setDraft((d) => d.filter((_, xi) => xi !== i))} className="rounded-lg p-1.5 opacity-40 hover:opacity-100 hover:text-rose-400 transition" title={t('ai.delete')}>
+                  <Trash2 size={13} />
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <select value={j.serviceId ?? ''} onChange={(e) => patch(i, { serviceId: e.target.value || null })} className="rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none">
+                  <option value="">—</option>
+                  {serviceOpts(j.serviceId)}
+                </select>
+                <select value={j.phase} onChange={(e) => patch(i, { phase: e.target.value })} className="rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none">
+                  {PHASES.map((p) => <option key={p} value={p}>{t(`ai.phase.${p}`) === `ai.phase.${p}` ? p : t(`ai.phase.${p}`)}</option>)}
+                </select>
+                <label className="flex items-center gap-1 text-[10px] opacity-60 px-1">
+                  <input type="checkbox" checked={Boolean(j.team)} onChange={(e) => patch(i, { team: e.target.checked })} className="accent-violet-500" />
+                  {t('swarm.team')}
+                </label>
+              </div>
+              <textarea value={j.description} onChange={(e) => patch(i, { description: e.target.value })} rows={2} className="w-full rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none focus:border-indigo-400/50 resize-none" placeholder={t('ai.descriptionPlaceholder')} />
+            </div>
+          ))}
+        </div>
+        <button
+          onClick={() => setDraft((d) => [...d, { id: `job-${d.length}`, title: '', serviceId: null, phase: 'produktion', dependsOn: [], description: '' }])}
+          className="mt-2 rounded-xl border border-dashed border-white/15 px-3 py-1.5 text-[11px] opacity-60 hover:opacity-100 transition flex items-center gap-1"
+        >
+          <PlusIcon /> {t('swarm.addJob')}
+        </button>
+        <div className="mt-4 flex items-center gap-2">
+          <button onClick={() => { setApproval(null); void cancelRun(approval.runId); onClose(); }} className="rounded-xl border border-rose-400/30 text-rose-300 px-3 py-2 text-[11px] hover:bg-rose-400/10 transition">
+            {t('swarm.cancelRun')}
+          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={approve} className="btn-primary rounded-xl px-4 py-2 text-[12px] flex items-center gap-1.5">
+              <Check size={13} /> {t('swarm.approve')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlusIcon() {
+  return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14" /></svg>;
+}
+
+/* ================= autonome triggere (idé 15) ================= */
+
+function TriggersPanel() {
+  const [triggers, setTriggers] = useState<Trigger[]>([]);
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ name: '', kind: 'cron' as 'cron' | 'webhook', cron: '0 8 * * 1', goal: '', mode: 'standard' as Trigger['mode'] });
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const reload = () => void fetchTriggers().then(setTriggers);
+  useEffect(reload, []);
+
+  const add = async () => {
+    if (!form.name.trim() || !form.goal.trim()) return;
+    await saveTrigger({ ...form, cron: form.kind === 'cron' ? form.cron : undefined });
+    setForm({ name: '', kind: 'cron', cron: '0 8 * * 1', goal: '', mode: 'standard' });
+    reload();
+  };
+
+  return (
+    <div className="rounded-2xl border border-white/10 glass-panel p-3">
+      <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center gap-2 text-left">
+        <CalendarClock size={13} className="opacity-60" />
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider opacity-60 flex-1">{t('swarm.triggers')}</h3>
+        <span className="text-[10px] opacity-40">{triggers.length}</span>
+      </button>
+      {open && (
+        <div className="mt-2.5 space-y-2">
+          {triggers.length === 0 && <p className="text-[10.5px] opacity-45">{t('swarm.noTriggers')}</p>}
+          {triggers.map((tr) => (
+            <div key={tr.id} className="rounded-xl border border-white/10 bg-black/10 dark:bg-white/[0.03] p-2.5">
+              <div className="flex items-center gap-2">
+                {tr.kind === 'cron' ? <CalendarClock size={12} className="text-sky-400 shrink-0" /> : <Webhook size={12} className="text-teal-400 shrink-0" />}
+                <span className="text-[11.5px] font-medium flex-1 truncate">{tr.name}</span>
+                <span className="text-[9px] px-1.5 py-0.5 rounded-full border border-white/10 opacity-50">{tr.kind === 'cron' ? tr.cron : 'webhook'}</span>
+                <button onClick={() => { void deleteTrigger(tr.id).then(reload); }} className="opacity-40 hover:opacity-100 hover:text-rose-400 transition"><Trash2 size={12} /></button>
+              </div>
+              <p className="text-[10px] opacity-50 truncate mt-0.5">{tr.goal}</p>
+              {tr.webhookUrl && (
+                <button
+                  onClick={() => { void navigator.clipboard?.writeText(`http://127.0.0.1:4310${tr.webhookUrl}`); setCopied(tr.id); setTimeout(() => setCopied(null), 1500); }}
+                  className="mt-1 text-[9.5px] flex items-center gap-1 text-teal-300/80 hover:text-teal-200 transition"
+                >
+                  <Copy size={9} /> {copied === tr.id ? <Check size={9} /> : null} http://127.0.0.1:4310{tr.webhookUrl}
+                </button>
+              )}
+            </div>
+          ))}
+          <div className="rounded-xl border border-dashed border-white/15 p-2.5 space-y-1.5">
+            <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder={t('swarm.triggerName')} className="w-full rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none focus:border-indigo-400/50" />
+            <div className="flex gap-1.5">
+              <select value={form.kind} onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value as 'cron' | 'webhook' }))} className="rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none">
+                <option value="cron">cron</option>
+                <option value="webhook">webhook</option>
+              </select>
+              {form.kind === 'cron' ? (
+                <input value={form.cron} onChange={(e) => setForm((f) => ({ ...f, cron: e.target.value }))} placeholder="0 8 * * 1" className="flex-1 rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] font-mono outline-none focus:border-indigo-400/50" />
+              ) : (
+                <span className="flex-1 text-[10px] opacity-45 self-center">{t('swarm.webhookHint')}</span>
+              )}
+              <select value={form.mode} onChange={(e) => setForm((f) => ({ ...f, mode: e.target.value as Trigger['mode'] }))} className="rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none">
+                <option value="standard">{t('swarm.mode.standard')}</option>
+                <option value="roles">{t('swarm.mode.roles')}</option>
+                <option value="debate">{t('swarm.mode.debate')}</option>
+                <option value="vote">{t('swarm.mode.vote')}</option>
+              </select>
+            </div>
+            <textarea value={form.goal} onChange={(e) => setForm((f) => ({ ...f, goal: e.target.value }))} rows={2} placeholder={t('swarm.triggerGoal')} className="w-full rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none focus:border-indigo-400/50 resize-none" />
+            <button onClick={() => void add()} disabled={!form.name.trim() || !form.goal.trim()} className="btn-primary rounded-lg px-3 py-1.5 text-[10.5px] disabled:opacity-40 flex items-center gap-1">
+              <PlusIcon /> {t('swarm.addTrigger')}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================= pipeline-skabeloner + selvforbedrende orkestrator (idé 16 + 20) ================= */
+
+function TemplatesPanel({ services }: { services: Record<string, AiServiceInfo> | null }) {
+  const [templates, setTemplates] = useState<PipelineTemplate[]>([]);
+  const [open, setOpen] = useState(false);
+  const [goal, setGoal] = useState('');
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggested, setSuggested] = useState<PipelineTemplate['jobs'] | null>(null);
+  const [suggestName, setSuggestName] = useState('');
+
+  const reload = () => void fetchTemplates().then(setTemplates);
+  useEffect(reload, []);
+
+  const run = (tpl: PipelineTemplate) => {
+    void fireOrchestrate({ goal: `${tpl.name}: ${tpl.description ?? tpl.jobs.map((j) => j.title).join(' → ')}`, jobs: tpl.jobs });
+  };
+
+  const suggest = async () => {
+    if (!goal.trim()) return;
+    setSuggesting(true);
+    const r = await suggestTemplate(goal.trim());
+    setSuggesting(false);
+    if (r.ok && r.jobs) setSuggested(r.jobs);
+  };
+
+  const saveSuggested = async () => {
+    if (!suggested || !suggestName.trim()) return;
+    await saveTemplate({ name: suggestName.trim(), description: goal.trim().slice(0, 140), jobs: suggested });
+    setSuggested(null);
+    setSuggestName('');
+    setGoal('');
+    reload();
+  };
+
+  return (
+    <div className="rounded-2xl border border-white/10 glass-panel p-3">
+      <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center gap-2 text-left">
+        <LayoutTemplate size={13} className="opacity-60" />
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider opacity-60 flex-1">{t('swarm.templates')}</h3>
+        <span className="text-[10px] opacity-40">{templates.length}</span>
+      </button>
+      {open && (
+        <div className="mt-2.5 space-y-2">
+          {templates.map((tpl) => (
+            <div key={tpl.id} className="rounded-xl border border-white/10 bg-black/10 dark:bg-white/[0.03] p-2.5">
+              <div className="flex items-center gap-2">
+                <span className="text-[11.5px] font-medium flex-1 truncate">{tpl.name}</span>
+                {tpl.builtin && <span className="text-[8.5px] px-1.5 py-0.5 rounded-full border border-white/10 opacity-40">built-in</span>}
+                {!tpl.builtin && (
+                  <button onClick={() => { void deleteTemplate(tpl.id).then(reload); }} className="opacity-40 hover:opacity-100 hover:text-rose-400 transition"><Trash2 size={12} /></button>
+                )}
+                <button onClick={() => run(tpl)} className="btn-primary rounded-lg px-2.5 py-1 text-[10px] flex items-center gap-1">
+                  <Play size={10} /> {t('swarm.runTemplate')}
+                </button>
+              </div>
+              <p className="text-[10px] opacity-50 mt-0.5 line-clamp-2">{tpl.description || tpl.jobs.map((j) => j.title).join(' → ')}</p>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {tpl.jobs.slice(0, 8).map((j, i) => (
+                  <span key={i} className="text-[8.5px] px-1.5 py-0.5 rounded-md bg-white/[0.06] flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: hex(serviceColor(services, j.serviceId)) }} />
+                    {j.title}
+                  </span>
+                ))}
+                {tpl.jobs.length > 8 && <span className="text-[8.5px] opacity-40">+{tpl.jobs.length - 8}</span>}
+              </div>
+            </div>
+          ))}
+          {/* Selvforbedrende orkestrator: beskriv en pipeline, lad AI'en designe den */}
+          <div className="rounded-xl border border-dashed border-violet-400/30 p-2.5 space-y-1.5">
+            <p className="text-[10px] font-semibold text-violet-300 flex items-center gap-1"><Sparkles size={11} /> {t('swarm.suggestTitle')}</p>
+            <textarea value={goal} onChange={(e) => setGoal(e.target.value)} rows={2} placeholder={t('swarm.suggestPlaceholder')} className="w-full rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none focus:border-violet-400/50 resize-none" />
+            <button onClick={() => void suggest()} disabled={suggesting || !goal.trim()} className="rounded-lg border border-violet-400/40 text-violet-300 px-3 py-1.5 text-[10.5px] hover:bg-violet-400/10 transition disabled:opacity-40 flex items-center gap-1">
+              {suggesting ? <Clock size={10} className="animate-spin" /> : <Sparkles size={10} />} {t('swarm.suggestAction')}
+            </button>
+            {suggested && (
+              <div className="rounded-lg bg-black/25 p-2 space-y-1">
+                {suggested.map((j, i) => (
+                  <div key={i} className="text-[10px] flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: hex(serviceColor(services, j.serviceId)) }} />
+                    <span className="truncate opacity-80">{j.title}</span>
+                    <span className="opacity-35 shrink-0">{serviceName(services, j.serviceId)}</span>
+                  </div>
+                ))}
+                <div className="flex gap-1.5 pt-1">
+                  <input value={suggestName} onChange={(e) => setSuggestName(e.target.value)} placeholder={t('swarm.templateName')} className="flex-1 rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[10.5px] outline-none focus:border-violet-400/50" />
+                  <button onClick={() => void saveSuggested()} disabled={!suggestName.trim()} className="rounded-lg bg-violet-500/20 border border-violet-400/40 text-violet-200 px-2.5 py-1 text-[10px] flex items-center gap-1 disabled:opacity-40">
+                    <Save size={10} /> {t('swarm.saveTemplate')}
+                  </button>
+                  <button onClick={() => run({ id: 'draft', name: suggestName || 'Kladde', jobs: suggested })} className="rounded-lg border border-white/15 px-2.5 py-1 text-[10px] hover:bg-white/5 transition flex items-center gap-1">
+                    <Play size={10} /> {t('swarm.runNow')}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================= omkostningsregnskab (idé 8) ================= */
+
+function CostsPanel() {
+  const [costs, setCosts] = useState<CostSummary | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => { if (open) void fetchCosts().then(setCosts); }, [open]);
+  return (
+    <div className="rounded-2xl border border-white/10 glass-panel p-3">
+      <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center gap-2 text-left">
+        <Coins size={13} className="opacity-60" />
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider opacity-60 flex-1">{t('swarm.costs')}</h3>
+      </button>
+      {open && (
+        <div className="mt-2.5">
+          {!costs ? (
+            <p className="text-[10.5px] opacity-45">{t('swarm.costsEmpty')}</p>
+          ) : (
+            <>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10.5px] mb-2">
+                <span className="opacity-60">{t('swarm.costRuns')}: <b>{costs.totalRuns}</b></span>
+                <span className="opacity-60">{t('swarm.costJobs')}: <b>{costs.totalJobs}</b></span>
+                <span className="text-emerald-400">{t('swarm.costEst')}: <b>{costs.estKr.toFixed(2)} kr</b></span>
+              </div>
+              <div className="space-y-1">
+                {costs.byService.map((u) => (
+                  <div key={u.id} className="flex items-center gap-2 text-[10.5px]">
+                    <span className="flex-1 truncate">{u.name}</span>
+                    <span className="opacity-50 tabular-nums">{u.jobs} {t('swarm.costJobsShort')}</span>
+                    <span className={cn('text-[9px] px-1.5 py-0.5 rounded-full border', u.subscriptionCovered ? 'border-emerald-400/30 text-emerald-300' : 'border-amber-400/30 text-amber-300')}>
+                      {u.subscriptionCovered ? t('swarm.covered') : `${u.estKr.toFixed(2)} kr`}
+                    </span>
+                  </div>
+                ))}
+                {costs.byService.length === 0 && <p className="text-[10px] opacity-40">{t('swarm.costsEmpty')}</p>}
+              </div>
+              <p className="text-[9px] opacity-35 mt-2">{t('swarm.costsHint')}</p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 /* ================= hovedvisning ================= */
 
-interface RunSummary { file: string; runId: string; goal: string; finishedAt?: string; results?: { title: string }[]; }
+interface RunSummary {
+  file: string;
+  runId: string;
+  goal: string;
+  finishedAt?: string;
+  results?: { jobId: string; title: string; text?: string; artifacts?: SwarmJob['artifacts'] }[];
+  jobs?: unknown[];
+  orchestratorId?: string | null;
+  mode?: string;
+  events?: SwarmEvent[];
+}
+
+interface ReplayState {
+  base: SwarmRun;
+  events: SwarmEvent[];
+  t0: number;
+  t1: number;
+  cursor: number;
+  playing: boolean;
+  speed: number;
+}
+
+const MODE_KEYS: Record<string, string> = {
+  roles: 'swarm.mode.roles',
+  debate: 'swarm.mode.debate',
+  vote: 'swarm.mode.vote',
+};
 
 export function AiSwarmView() {
   useLang();
   const connected = useSwarm((s) => s.connected);
   const run = useSwarm((s) => s.run);
   const services = useSwarm((s) => s.services);
+  const approval = useSwarm((s) => s.approval);
   const [history, setHistory] = useState<RunSummary[]>([]);
   const [archived, setArchived] = useState<SwarmRun | null>(null);
+  const [replay, setReplay] = useState<ReplayState | null>(null);
   const [, tick] = useReducer((x: number) => x + 1, 0);
 
   useEffect(() => {
@@ -580,12 +1036,25 @@ export function AiSwarmView() {
     return () => clearInterval(id);
   }, []);
 
+  // Replay-takt: cursor rykker speed x realtid.
   useEffect(() => {
-    fetch(`${BASE_URL}/api/ai/runs`).then((r) => r.json()).then((j) => setHistory((j?.runs ?? []).slice(0, 6))).catch(() => undefined);
+    if (!replay?.playing) return;
+    const id = setInterval(() => {
+      setReplay((r) => {
+        if (!r) return r;
+        const cursor = Math.min(r.t1, r.cursor + 200 * r.speed);
+        return { ...r, cursor, playing: cursor < r.t1 };
+      });
+    }, 200);
+    return () => clearInterval(id);
+  }, [replay?.playing]);
+
+  useEffect(() => {
+    fetch('http://127.0.0.1:4310/api/ai/runs').then((r) => r.json()).then((j) => setHistory((j?.runs ?? []).slice(0, 6))).catch(() => undefined);
   }, [run?.status]);
 
-  const shown = archived ?? run;
-  const active = !archived && shown?.status === 'running';
+  const shown = replay ? replayEvents(replay.base, replay.events, replay.cursor) : (archived ?? run);
+  const active = !archived && !replay && shown?.status === 'running';
   const jobs = shown?.jobs ?? [];
   const doneCount = jobs.filter((j) => j.status === 'done').length;
   const runCount = jobs.filter((j) => j.status === 'running').length;
@@ -600,26 +1069,35 @@ export function AiSwarmView() {
     return { phase: p, total: inPhase.length, done: inPhase.filter((j) => j.status === 'done').length };
   }), [jobs]);
 
-  const openArchived = (r: RunSummary & { jobs?: unknown[]; orchestratorId?: string | null }) => {
-    const results = new Map((r as { results?: { jobId: string; text: string; artifacts?: SwarmJob['artifacts'] }[] }).results?.map((x) => [x.jobId, x]) ?? []);
-    setArchived({
+  const openArchived = (r: RunSummary) => {
+    setReplay(null);
+    const results = new Map((r.results ?? []).map((x) => [x.jobId, x]));
+    const finishedAt = Date.parse(r.finishedAt ?? '') || null;
+    const base: SwarmRun = {
       runId: r.runId,
       goal: r.goal,
-      startedAt: Date.parse(r.finishedAt ?? '') - 60_000,
+      mode: r.mode ?? 'standard',
+      startedAt: finishedAt ? finishedAt - 60_000 : Date.now(),
       orchestratorId: r.orchestratorId ?? null,
-      mode: null,
       status: 'done',
       notes: [],
-      finishedAt: Date.parse(r.finishedAt ?? '') || null,
+      finishedAt,
       jobs: ((r.jobs ?? []) as SwarmJob[]).map((j) => {
         const res = results.get(j.id);
-        return { ...j, status: res ? 'done' : 'queued', liveText: '', notes: [], deltaCount: 0, lastDeltaAt: null, startedAt: null, finishedAt: null, text: res?.text ?? '', artifacts: res?.artifacts ?? [], error: null };
+        return { ...j, status: res ? 'done' as const : 'queued' as const, liveText: '', notes: [], deltaCount: 0, lastDeltaAt: null, startedAt: null, finishedAt: null, text: res?.text ?? '', artifacts: res?.artifacts ?? [], error: null };
       }),
-    });
+    };
+    setArchived(base);
+    if ((r.events?.length ?? 0) > 1) {
+      const events = [...(r.events ?? [])].sort((a, b) => a.at - b.at);
+      setReplay({ base: { ...base, startedAt: events[0].at, jobs: [], finishedAt: null }, events, t0: events[0].at, t1: events[events.length - 1].at, cursor: events[0].at, playing: false, speed: 8 });
+    }
   };
 
+  const modeKey = shown?.mode ? MODE_KEYS[shown.mode] : null;
+
   return (
-    <div className="flex flex-col h-full gap-3 p-4 md:p-6 max-w-[1500px] mx-auto w-full">
+    <div className="flex flex-col h-full gap-3 p-3 md:p-6 max-w-[1500px] mx-auto w-full">
       {/* header */}
       <div className="flex flex-wrap items-center gap-3">
         <div>
@@ -631,12 +1109,17 @@ export function AiSwarmView() {
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" /> {t('swarm.live')}
               </span>
             )}
+            {replay && (
+              <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-violet-400/15 border border-violet-400/40 text-violet-300">
+                <FastForward size={10} /> {t('swarm.replaying')}
+              </span>
+            )}
           </h1>
           <p className="text-[11px] opacity-50">{t('swarm.subtitle')}</p>
         </div>
         <div className="flex-1" />
-        {archived && (
-          <button onClick={() => setArchived(null)} className="btn-primary rounded-xl px-3 py-1.5 text-[11px] flex items-center gap-1.5">
+        {(archived || replay) && (
+          <button onClick={() => { setArchived(null); setReplay(null); }} className="btn-primary rounded-xl px-3 py-1.5 text-[11px] flex items-center gap-1.5">
             <Zap size={12} /> {t('swarm.backToLive')}
           </button>
         )}
@@ -649,7 +1132,7 @@ export function AiSwarmView() {
 
       {!shown ? (
         <div className="flex-1 rounded-2xl border border-white/10 glass-panel flex flex-col items-center justify-center text-center gap-3 p-8">
-          <div className="h-[300px] w-full max-w-2xl"><SwarmCanvas run={null} services={services} active={false} /></div>
+          <div className="h-[300px] md:h-[340px] w-full max-w-2xl"><SwarmCanvas run={null} services={services} active={false} /></div>
           <h2 className="text-lg font-bold flex items-center gap-2"><Cpu size={17} /> {t('swarm.idle')}</h2>
           <p className="text-[12.5px] opacity-55 max-w-md leading-relaxed">{t('swarm.idleHint')}</p>
         </div>
@@ -659,9 +1142,12 @@ export function AiSwarmView() {
           <div className="rounded-2xl border border-white/10 glass-panel p-3.5 space-y-2.5">
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[12px]">
               <span className="font-medium max-w-[46%] truncate" title={shown.goal}>{shown.goal}</span>
+              {modeKey && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded-full border border-violet-400/40 text-violet-300">{t(modeKey)}</span>
+              )}
               <span className="flex items-center gap-1.5 opacity-70"><Clock size={12} /> {t('swarm.elapsed')}: <b>{fmtDur(elapsed)}</b></span>
-              <span className="flex items-center gap-1.5 opacity-70"><Cpu size={12} /> {t('swarm.orchestrator')}: <b>{serviceName(services, shown.orchestratorId)}</b> <span className="opacity-50">({shown.mode === 'llm' ? 'LLM' : t('chat.ruleBased')})</span></span>
-              {eta !== null && remaining > 0 && (
+              <span className="flex items-center gap-1.5 opacity-70"><Cpu size={12} /> {t('swarm.orchestrator')}: <b>{serviceName(services, shown.orchestratorId)}</b></span>
+              {eta !== null && remaining > 0 && !replay && (
                 <span className="flex items-center gap-1.5 text-amber-300"><Zap size={12} /> {t('swarm.eta')}: <b>{fmtDur(eta)}</b> <span className="opacity-50 text-[10px]">({t('swarm.etaHint')})</span></span>
               )}
               <span className="flex-1" />
@@ -697,9 +1183,50 @@ export function AiSwarmView() {
             </div>
           </div>
 
+          {/* besked til orkestratoren mens der køres */}
+          {active && run && <RunControls run={run} />}
+
+          {/* replay-bjælke (idé 19) */}
+          {replay && (
+            <div className="rounded-2xl border border-violet-400/25 bg-violet-500/[0.06] p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setReplay((r) => r ? { ...r, playing: !r.playing } : r)}
+                  className="rounded-xl bg-violet-500/20 border border-violet-400/40 text-violet-200 px-3 py-1.5 text-[11px] flex items-center gap-1.5 hover:bg-violet-500/30 transition"
+                >
+                  {replay.playing ? <Pause size={12} /> : <Play size={12} />} {replay.playing ? t('swarm.pause') : t('swarm.replay')}
+                </button>
+                <input
+                  type="range"
+                  min={replay.t0}
+                  max={replay.t1}
+                  step={1000}
+                  value={replay.cursor}
+                  onChange={(e) => setReplay((r) => r ? { ...r, cursor: Number(e.target.value), playing: false } : r)}
+                  className="flex-1 accent-violet-500"
+                />
+                <select
+                  value={replay.speed}
+                  onChange={(e) => setReplay((r) => r ? { ...r, speed: Number(e.target.value) } : r)}
+                  className="rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[10.5px] outline-none"
+                >
+                  <option value={2}>2×</option>
+                  <option value={8}>8×</option>
+                  <option value={30}>30×</option>
+                  <option value={120}>120×</option>
+                </select>
+                <span className="text-[10px] opacity-50 tabular-nums whitespace-nowrap">
+                  {new Date(replay.cursor).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+                <button onClick={() => setReplay(null)} className="rounded-lg p-1.5 opacity-50 hover:opacity-100 transition"><Ban size={13} /></button>
+              </div>
+              <p className="text-[9.5px] opacity-45">{t('swarm.replayHint')}</p>
+            </div>
+          )}
+
           {/* canvas-sværmen */}
-          <div className="rounded-2xl border border-white/10 bg-black/10 dark:bg-black/25 overflow-hidden relative h-[380px]">
-            <SwarmCanvas run={shown} services={services} active={active} />
+          <div className="rounded-2xl border border-white/10 bg-black/10 dark:bg-black/25 overflow-hidden relative h-[300px] sm:h-[380px]">
+            <SwarmCanvas run={shown} services={services} active={active || Boolean(replay?.playing)} />
             {(shown.notes?.length ?? 0) > 0 && (
               <div className="absolute left-3 bottom-2 right-3 text-[10px] opacity-45 truncate">
                 {shown.notes[shown.notes.length - 1]}
@@ -708,18 +1235,33 @@ export function AiSwarmView() {
           </div>
 
           {/* tidslinje: præcis hvem arbejdede hvornår, inkl. underagenter */}
-          <RunTimeline run={shown} services={services} active={active} />
+          <RunTimeline run={shown} services={services} active={active || Boolean(replay?.playing)} />
 
           {/* agent-kort */}
           {jobs.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
               {[...jobs]
                 .sort((a, b) => (a.status === 'running' ? -1 : b.status === 'running' ? 1 : a.status === 'error' ? -1 : b.status === 'error' ? 1 : 0))
-                .map((j) => <JobCard key={j.id} j={j} services={services} runActive={active} />)}
+                .map((j) => (
+                  <JobCard
+                    key={j.id}
+                    j={j}
+                    services={services}
+                    runActive={active}
+                    onSkip={active && run ? (jobId) => void skipRunJob(run.runId, jobId) : undefined}
+                  />
+                ))}
             </div>
           )}
         </>
       )}
+
+      {/* styringspaneler */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+        <TriggersPanel />
+        <TemplatesPanel services={services} />
+        <CostsPanel />
+      </div>
 
       {/* historik */}
       {history.length > 0 && (
@@ -729,16 +1271,23 @@ export function AiSwarmView() {
             {history.map((h) => (
               <button
                 key={h.file}
-                onClick={() => openArchived(h as RunSummary & { jobs?: unknown[] })}
+                onClick={() => openArchived(h)}
                 className="rounded-xl border border-white/10 bg-black/10 dark:bg-white/5 px-2.5 py-1.5 text-left hover:border-indigo-400/40 transition max-w-[240px]"
               >
                 <div className="text-[11px] truncate font-medium">{h.goal || h.runId}</div>
-                <div className="text-[9.5px] opacity-45">{h.finishedAt ? new Date(h.finishedAt).toLocaleString('da-DK', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'} · {(h.results?.length ?? 0)} {t('swarm.delivered')}</div>
+                <div className="text-[9.5px] opacity-45">
+                  {h.finishedAt ? new Date(h.finishedAt).toLocaleString('da-DK', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
+                  {' '}· {(h.results?.length ?? 0)} {t('swarm.delivered')}
+                  {(h.events?.length ?? 0) > 1 ? ` · ▶ ${t('swarm.replay')}` : ''}
+                </div>
               </button>
             ))}
           </div>
         </div>
       )}
+
+      {/* godkendelsesmodal til plan-pause */}
+      {approval && <ApprovalModal services={services} onClose={() => undefined} />}
     </div>
   );
 }
