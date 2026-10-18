@@ -3,7 +3,7 @@
 import { nanoid } from 'nanoid';
 import { useStore } from '../store/useStore';
 import type { SyncSnapshotPayload } from './companion';
-import { syncPull, syncPush, getSyncToken } from './companion';
+import { syncPull, syncPush, getSyncToken, companionBase } from './companion';
 import type { ActivityEntry, Label, Project, Sprint, Task, User } from './types';
 
 const CLIENT_KEY = 'orbit-client-id';
@@ -20,7 +20,7 @@ export function getClientId(): string {
 }
 
 export function getSyncUrl(): string {
-  return localStorage.getItem(SYNC_URL_KEY) ?? 'http://127.0.0.1:4310';
+  return localStorage.getItem(SYNC_URL_KEY) ?? companionBase();
 }
 
 export function setSyncUrl(url: string) {

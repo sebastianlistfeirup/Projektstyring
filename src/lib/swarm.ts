@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { fetchAiServices, type AiServiceInfo } from './aiApi';
+import { companionBase, companionWsUrl } from './companion';
 
 /* ---------- typer ---------- */
 
@@ -245,8 +246,8 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
 
 /* ---------- WebSocket-forbindelse ---------- */
 
-const WS_URL = 'ws://127.0.0.1:4310/ws';
-const API = 'http://127.0.0.1:4310';
+const WS_URL = companionWsUrl();
+const API = companionBase();
 let ws: WebSocket | null = null;
 let retry = 0;
 let started = false;

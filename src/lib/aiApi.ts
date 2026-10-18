@@ -1,7 +1,8 @@
 // Klient til Orbit Companions AI-motor (server/ai-engine.mjs).
 import type { AiAttachment, AiMessage } from './types';
+import { companionBase } from './companion';
 
-const BASE = 'http://127.0.0.1:4310';
+const BASE = companionBase();
 
 export interface AiServiceInfo {
   id: string;

@@ -1,6 +1,28 @@
-// Klient-API til Orbit Companion (lokal server på 127.0.0.1:4310)
+// Klient-API til Orbit Companion (lokal server, standard 127.0.0.1:4310).
+// Værten udledes af hvor app'en åbnes fra: åbnes den på telefonen via PC'ens
+// LAN-IP, peger alle kald på samme vært, så companion også kan nås fra telefonen.
 // Token bruges også mod selvhostede sync-servere (server/sync-server.mjs).
-const BASE = 'http://127.0.0.1:4310';
+
+/** Vært til companion: LAN-IP'en når app'en åbnes fra telefonen, ellers 127.0.0.1. */
+export function companionHost(): string {
+  if (typeof window === 'undefined') return '127.0.0.1';
+  const h = window.location.hostname;
+  if (h === 'localhost' || h === '127.0.0.1') return '127.0.0.1';
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(':')) return h; // LAN-IP (IPv4/IPv6)
+  return '127.0.0.1';
+}
+
+/** Companion-base-URL (http) baseret på den vært, app'en blev åbnet fra. */
+export function companionBase(): string {
+  return `http://${companionHost()}:4310`;
+}
+
+/** Companion WebSocket-URL baseret på den vært, app'en blev åbnet fra. */
+export function companionWsUrl(): string {
+  return `ws://${companionHost()}:4310/ws`;
+}
+
+const BASE = companionBase();
 
 export function getSyncToken(): string {
   return localStorage.getItem('orbit-sync-token') ?? '';
@@ -334,7 +356,7 @@ export async function createBackup(): Promise<{ ok: boolean; path?: string; coun
 export async function listBackups(): Promise<{ ok: boolean; files?: BackupFile[]; reason?: string }> {
   try {
     const res = await fetch(`${BASE}/api/backup/list`, { headers: authHeaders(), signal: AbortSignal.timeout(4000) });
-    return (await res.json()) as { ok: boolean; files?: BackupFile[]; reason?: string };
+    return (await res.json()) as { ok: boolean; files?: BackupFile[] };
   } catch {
     return { ok: false };
   }
