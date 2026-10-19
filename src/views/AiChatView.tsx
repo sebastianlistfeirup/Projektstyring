@@ -656,7 +656,7 @@ export function AiChatView() {
                   ))}
                   {Object.values(services ?? {}).some((s) => !s.available) && (
                     <optgroup label={t('chat.unavailable')}>
-                      {Object.values(services ?? {}).filter((s) => !s.available).map((s) => (
+                      {Object.values(services ?? []).filter((s) => !s.available).map((s) => (
                         <option key={s.id} value={s.id} disabled>{s.name} — {s.reason ?? 'offline'}</option>
                       ))}
                     </optgroup>
