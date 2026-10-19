@@ -298,7 +298,7 @@ export async function sendRunMessage(runId: string, text: string): Promise<boole
 
 export async function skipRunJob(runId: string, jobId: string): Promise<boolean> {
   try {
-    const r = await fetch(`${BASE}/api/ai/runs/${jobId ? `${runId}/skip` : ''}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId }) });
+    const r = await fetch(`${BASE}/api/ai/runs/${runId}/skip`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId }) });
     return r.ok;
   } catch {
     return false;
