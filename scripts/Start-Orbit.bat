@@ -8,7 +8,9 @@ rem  i standardbrowseren på http://localhost:5173
 rem ============================================================
 cd /d "%~dp0.."
 
-netstat -ano | findstr :5173 >nul
+rem Bemærk: kun "LISTENING" tæller - TIME_WAIT-rester fra en lige
+rem lukket server må ikke forhindre opstart.
+netstat -ano | findstr /R ":5173 .*LISTENING" >nul
 if errorlevel 1 (
   echo Starter Orbit dev-server ^(port 5173^)...
   start "" /min cmd /c "npm run dev:app"
@@ -16,7 +18,7 @@ if errorlevel 1 (
   echo Dev-serveren kører allerede ^(port 5173^).
 )
 
-netstat -ano | findstr :4310 >nul
+netstat -ano | findstr /R ":4310 .*LISTENING" >nul
 if errorlevel 1 (
   echo Starter Orbit companion-server ^(port 4310^)...
   start "" /min cmd /c "node server\companion.mjs"
