@@ -13,12 +13,12 @@ echo.
 echo === Henter nyeste version fra GitHub... ===
 git fetch origin
 if errorlevel 1 (
-  echo FEJL: git kunne ikke hente noget. Tjek internetforbindelsen.
-  pause
-  exit /b 1
+  echo ADVARSEL: Kunne ikke hente fra GitHub ^(måske offline?^).
+  echo Fortsætter med den version, der allerede ligger på computeren...
+) else (
+  git checkout feature/mine-opgaver-aarshjul-ai-vaerksted
+  git pull origin feature/mine-opgaver-aarshjul-ai-vaerksted
 )
-git checkout feature/mine-opgaver-aarshjul-ai-vaerksted
-git pull origin feature/mine-opgaver-aarshjul-ai-vaerksted
 
 echo.
 echo === Installerer afhængigheder... ===
