@@ -212,6 +212,7 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
   const [open, setOpen] = useState(false);
   const [key, setKey] = useState('');
   const [model, setModel] = useState(s.model ?? '');
+  const [baseUrl, setBaseUrl] = useState('');
   const needsKey = s.kind === 'sub-api' || s.kind === 'paid-api';
   return (
     <div className="rounded-xl border border-white/10 bg-black/10 dark:bg-white/5 overflow-hidden">
@@ -268,6 +269,41 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
             <div className="text-[10px] opacity-60">
               {t('chat.cliDetected')}: <code className="font-mono">{s.cmd}</code>
             </div>
+          )}
+          {s.kind === 'local' && (
+            <>
+              <div className="flex gap-1.5">
+                <input
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  placeholder="http://127.0.0.1:11434"
+                  className="flex-1 min-w-0 rounded-lg bg-black/20 dark:bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none focus:border-indigo-400/60 font-mono"
+                />
+                <button
+                  onClick={async () => { if (baseUrl.trim()) { await saveService(s.id, { baseUrl: baseUrl.trim() }); setBaseUrl(''); } onChanged(); }}
+                  className="rounded-lg bg-indigo-500/80 hover:bg-indigo-500 px-2 py-1 text-[11px] text-white transition"
+                >
+                  {t('chat.save')}
+                </button>
+              </div>
+              <input
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={t('chat.model')}
+                className="w-full rounded-lg bg-black/20 dark:bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none focus:border-indigo-400/60"
+              />
+              <button
+                onClick={async () => { await saveService(s.id, { model: model || undefined }); onChanged(); }}
+                className="rounded-lg bg-white/10 hover:bg-white/15 px-2 py-1 text-[10px] transition"
+              >
+                {t('chat.save')} · {t('chat.model')}
+              </button>
+              {s.models && s.models.length > 0 && (
+                <div className="text-[10px] opacity-60 leading-snug">
+                  Ollama-modeller: <code className="font-mono">{s.models.join(', ')}</code>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -656,7 +692,7 @@ export function AiChatView() {
                   ))}
                   {Object.values(services ?? {}).some((s) => !s.available) && (
                     <optgroup label={t('chat.unavailable')}>
-                      {Object.values(services ?? []).filter((s) => !s.available).map((s) => (
+                      {Object.values(services ?? {}).filter((s) => !s.available).map((s) => (
                         <option key={s.id} value={s.id} disabled>{s.name} — {s.reason ?? 'offline'}</option>
                       ))}
                     </optgroup>
@@ -666,7 +702,7 @@ export function AiChatView() {
                   <button onClick={() => abortRef.current?.abort()} className="p-2.5 rounded-xl bg-rose-500/80 hover:bg-rose-500 text-white transition shrink-0" title={t('chat.stop')}>
                     <Square size={15} />
                   </button>
-                ) : (
+                ) (
                   <button
                     onClick={send}
                     disabled={(!text.trim() && pending.length === 0) || (service !== 'auto' && !services?.[service]?.available)}

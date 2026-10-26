@@ -15,6 +15,7 @@ export interface AiServiceInfo {
   hasKey: boolean;
   keyMask: string | null;
   model: string | null;
+  models?: string[] | null;
   cmd: string | null;
   subscriptionCovered: boolean;
 }
@@ -242,7 +243,7 @@ export async function fetchTemplates(): Promise<PipelineTemplate[]> {
   }
 }
 
-export async function saveTemplate(body: { name: string; description?: string; jobs: unknown[] }): Promise<boolean> {
+export async function saveTemplate(body: { name: string; description: string; jobs: unknown[] }): Promise<boolean> {
   try {
     const r = await fetch(`${BASE}/api/ai/templates`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     return r.ok;
