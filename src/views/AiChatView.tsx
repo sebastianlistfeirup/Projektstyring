@@ -702,7 +702,7 @@ export function AiChatView() {
                   <button onClick={() => abortRef.current?.abort()} className="p-2.5 rounded-xl bg-rose-500/80 hover:bg-rose-500 text-white transition shrink-0" title={t('chat.stop')}>
                     <Square size={15} />
                   </button>
-                ) (
+                ) : (
                   <button
                     onClick={send}
                     disabled={(!text.trim() && pending.length === 0) || (service !== 'auto' && !services?.[service]?.available)}
