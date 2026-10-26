@@ -11,6 +11,9 @@ rem  3) Åbner først browseren, når appen rent faktisk svarer.
 rem ============================================================
 cd /d "%~dp0.."
 
+rem ---- Selvhelende genvej: sikr at skrivebordets Orbit.lnk findes og peger her ----
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Ensure-Shortcut.ps1" -BatPath "%~f0" >nul 2>nul
+
 rem ---- Sanity: findes node? ----
 where node >nul 2>nul
 if errorlevel 1 (
