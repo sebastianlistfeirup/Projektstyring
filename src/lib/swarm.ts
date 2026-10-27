@@ -136,6 +136,8 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
   },
   apply: (evt) => {
     const cur = get().run;
+    // En gammel kørsels hændelser må aldrig ændre den nyere kørsel på skærmen.
+    if (evt.type !== 'run_start' && cur && evt.runId && String(evt.runId) !== cur.runId) return;
     switch (evt.type) {
       case 'run_start':
         requestNotifyPermission();
@@ -316,8 +318,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
           run: {
             ...cur,
             jobs: cur.jobs.map((j) =>
-              j.id === id
-                ? { ...j, score: typeof evt.score === 'number' ? (evt.score as number) : null, judgeNote: String(evt.note ?? '') }
+              j.id === id ? { ...j, score: typeof evt.score === 'number' ? (evt.score as number) : null, judgeNote: String(evt.note ?? '') }
                 : j,
             ),
           },
