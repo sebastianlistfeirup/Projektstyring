@@ -545,8 +545,11 @@ async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, jsonl,
       clearTimeout(timer);
       signal?.removeEventListener('abort', kill);
       if (signal?.aborted) reject(new Error('Afbrudt'));
-      else if (code === 0 || out.trim()) resolve(out);
-      else reject(new Error(`'${cmd}' afsluttede med kode ${code} uden output`));
+      else if (code === 0) resolve(out);
+      else {
+        const detail = out.trim().slice(-1200);
+        reject(new Error(`'${cmd}' afsluttede med kode ${code}${detail ? `: ${detail}` : ' uden output'}`));
+      }
     });
   });
 }
@@ -601,6 +604,9 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
       ? cliAccessDirectories(messages) : [];
     const extraArgs = [];
     if (serviceId === 'codex' && useDefaultTemplate) {
+      // Orbit bruger ikke Codex' valgfrie app-/connector-integration. Slå den
+      // fra pr. kørsel, så dens eksterne MCP-opstart ikke forstyrrer lokale jobs.
+      extraArgs.push('--disable', 'apps');
       // Orkestratorens planfase må læse projektet, men aldrig udføre ændringer.
       extraArgs.push('--sandbox', readOnly ? 'read-only' : 'workspace-write');
       for (const dir of accessDirs) extraArgs.push('--add-dir', dir);
