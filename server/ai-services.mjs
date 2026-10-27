@@ -5,7 +5,7 @@
 
 import { spawn, execFile, execFileSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, appendFileSync, chmodSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
 
@@ -93,15 +93,31 @@ function mask(key) {
 }
 
 // CLI-detektion med cache (gør status-endpointen hurtig).
+// Gem den faktiske sti: på Windows kan `where claude` finde claude.cmd, mens
+// spawn('claude') alligevel giver ENOENT, fordi .cmd ikke er et selvstændigt program.
+export function chooseCliCandidate(output, platform = process.platform) {
+  const paths = String(output ?? '').split(/\r?\n/).map((p) => p.trim()).filter(Boolean);
+  if (platform !== 'win32') return paths[0] ?? null;
+  return paths.find((p) => /\.exe$/i.test(p))
+    ?? paths.find((p) => /\.(?:cmd|bat)$/i.test(p))
+    ?? null;
+}
+
+async function resolveCliCommand(cmd) {
+  if (!cmd) return null;
+  if (/[\\/]/.test(cmd) && existsSync(cmd)) return cmd;
+  try {
+    const r = await execFileP(process.platform === 'win32' ? 'where' : 'which', [cmd], { timeout: 3000 });
+    return chooseCliCandidate(r.stdout);
+  } catch { return null; }
+}
+
 let cliCache = { at: 0, found: {} };
-async function detectClis() {
+async function detectClis(providers) {
   if (Date.now() - cliCache.at < 30_000) return cliCache.found;
   const found = {};
   await Promise.all(AI_SERVICES.filter((s) => s.kind === 'cli').map(async (s) => {
-    try {
-      const r = await execFileP(process.platform === 'win32' ? 'where' : 'which', [s.cmd], { timeout: 3000 });
-      found[s.id] = Boolean(r.stdout.trim());
-    } catch { found[s.id] = false; }
+    found[s.id] = await resolveCliCommand(providers[s.id]?.cmd ?? s.cmd);
   }));
   cliCache = { at: Date.now(), found };
   return found;
@@ -134,15 +150,15 @@ function pickOllamaModel(models, wanted) {
 // Må tjenesten bruges nu? Cost-gate: paid-api kræver allowPaidApis.
 export async function serviceAvailability(cfg) {
   const { providers, prefs } = aiCfg(cfg);
-  const clis = await detectClis();
+  const clis = await detectClis(providers);
   const out = {};
   for (const s of AI_SERVICES) {
     const p = providers[s.id] ?? {};
     let available = false, reason = null;
     let models = null, resolvedModel = null;
     if (s.kind === 'cli') {
-      available = clis[s.id] && p.enabled !== false;
-      reason = clis[s.id] ? null : `CLI '${s.cmd}' ikke fundet`;
+      available = Boolean(clis[s.id]) && p.enabled !== false;
+      reason = clis[s.id] ? null : `CLI '${p.cmd ?? s.cmd}' ikke fundet`;
     } else if (s.kind === 'local') {
       const baseUrl = p.baseUrl ?? s.baseUrl;
       const up = await ollamaUp(baseUrl);
@@ -317,12 +333,36 @@ async function chatOllama({ baseUrl, model, messages, onDelta, signal }) {
   }
 }
 
+// Npm's Windows-shims kan ikke startes direkte uden en shell. Find shim'ens
+// faktiske Node- eller EXE-mål, så prompten fortsat sendes som ét sikkert argument.
+function windowsShimTarget(cmdPath) {
+  try {
+    const shim = readFileSync(cmdPath, 'utf8');
+    const m = shim.match(/"(%~?dp0%[^"\r\n]+?\.(?:[cm]?js|exe))"/i);
+    if (!m) return null;
+    const relative = m[1].replace(/^%~?dp0%[\\/]?/i, '');
+    const target = join(dirname(cmdPath), ...relative.split(/[\\/]+/).filter(Boolean));
+    return existsSync(target) ? target : null;
+  } catch { return null; }
+}
+
+export function cliSpawnSpec(cmd, args, platform = process.platform) {
+  if (platform !== 'win32' || !/\.(?:cmd|bat)$/i.test(cmd)) return { cmd, args };
+  const target = windowsShimTarget(cmd);
+  if (!target) throw new Error(`Windows-shim'en '${cmd}' kunne ikke opløses til et Node- eller EXE-mål`);
+  if (/\.exe$/i.test(target)) return { cmd: target, args };
+  return { cmd: process.execPath, args: [target, ...args] };
+}
+
 // CLI: prompt som argument ud fra skabelon; stdout streames linjevis.
 // jsonl: stdout parses som Claude stream-json (én JSON pr. linje) → onEvent i stedet for rå delta.
-function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, jsonl, signal }) {
+async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, jsonl, signal }) {
+  const resolvedCmd = await resolveCliCommand(cmd);
+  if (!resolvedCmd) throw new Error(`Kunne ikke starte '${cmd}': CLI'en blev ikke fundet`);
+  const parts = (cliTemplate || '-p {prompt}').split(' ').map((t) => (t === '{prompt}' ? prompt : t));
+  const launch = cliSpawnSpec(resolvedCmd, parts);
   return new Promise((resolve, reject) => {
-    const parts = (cliTemplate || '-p {prompt}').split(' ').map((t) => (t === '{prompt}' ? prompt : t));
-    const child = spawn(cmd, parts, { cwd: cwd ?? process.cwd(), env: { ...process.env, NO_COLOR: '1' } });
+    const child = spawn(launch.cmd, launch.args, { cwd: cwd ?? process.cwd(), env: { ...process.env, NO_COLOR: '1' } });
     const kill = () => { try { child.kill('SIGTERM'); } catch { /* */ } };
     signal?.addEventListener('abort', kill);
     const timer = setTimeout(kill, 15 * 60 * 1000);
@@ -371,7 +411,7 @@ function watchClaudeStreamJson({ onText, onSubagent }) {
         }
       }
     } else if (ev.type === 'user' && Array.isArray(ev.message?.content)) {
-      for (const b of ev.message?.content) {
+      for (const b of ev.message.content) {
         if (b.type === 'tool_result' && byTool.has(b.tool_use_id)) {
           const txt = typeof b.content === 'string'
             ? b.content
