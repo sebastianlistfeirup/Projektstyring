@@ -287,6 +287,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       name: String(name).slice(0, 60),
       kind: kind === 'webhook' ? 'webhook' : 'cron',
       cron: kind === 'webhook' ? undefined : String(cron ?? '* * * * *'),
+      token: randomUUID().replace(/-/g, '').slice(0, 24),
       goal: String(goal).slice(0, 500),
       bible: String(bible ?? ''),
       mode: ['standard', 'roles', 'debate', 'vote', 'race'].includes(mode) ? mode : 'standard',
@@ -382,7 +383,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
 
   app.post('/api/ai/prompts', (req, res) => {
     const { name, project, text } = req.body ?? {};
-    if (!name || !project || !text) return res.status(400).json({ ok: false, reason: 'name, project og text kræves' });
+    if (!name || !text) return res.status(400).json({ ok: false, reason: 'name og text kræves' });
     const cfg = loadConfig();
     cfg.aiPrompts = cfg.aiPrompts ?? [];
     const item = { id: `prm-${randomUUID().slice(0, 8)}`, name: String(name).slice(0, 80), project: String(project ?? ''), text: String(text).slice(0, 4000), createdAt: new Date().toISOString() };
@@ -470,7 +471,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       if (errorTitles.length) insights.push(`Hyppigste fejlende jobtype: "${errorTitles[0].title}" (${errorTitles[0].count}×). Overvej en skabelon med et ekstra review-job foran.`);
       const worst = services.find((s) => s.errorRate >= 25 && s.jobs >= 3);
       if (worst) insights.push(`"${worst.name}" fejler i ${worst.errorRate}% af jobbene — overvej at skifte tjeneste eller give jobbene mere kontekst.`);
-      if (timed > 3) insights.push(`Gennemsnitlig jobtid: ${Math.round(totalMs / timed)}s. Langsomme jobs med dommer-score under 6 kan med fordel races mod en anden tjeneste.`);
+      if (timed > 3) insights.push(`Gennemsnitlig jobtid: ${Math.round(totalMs / timed / 1000)}s. Langsomme jobs med dommer-score under 6 kan med fordel races mod en anden tjeneste.`);
       res.json({ ok: true, runs, errors, avgJobMs: timed ? Math.round(totalMs / timed) : 0, errorTitles, services, insights });
     } catch (e) {
       res.status(500).json({ ok: false, reason: e.message });
