@@ -342,6 +342,21 @@ function ConnectionPanel({ services, prefs, onChanged }: {
 }) {
   const list = useMemo(() => (services ? Object.values(services) : []), [services]);
   const cliIds = list.filter((s) => (s.kind === 'cli' || s.kind === 'local') && s.available).map((s) => s.id);
+  const [savingPaid, setSavingPaid] = useState(false);
+  const [paidFeedback, setPaidFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const savePaidPreference = async (allowPaidApis: boolean) => {
+    if (savingPaid) return;
+    setSavingPaid(true);
+    setPaidFeedback(null);
+    const result = await saveAiPrefs({ allowPaidApis });
+    if (result.ok && result.prefs?.allowPaidApis === allowPaidApis) {
+      setPaidFeedback({ ok: true, text: allowPaidApis ? 'Betalte API’er er tilladt og bekræftet.' : 'Betalte API’er er slået fra.' });
+    } else {
+      setPaidFeedback({ ok: false, text: result.reason ?? 'Indstillingen blev ikke gemt. Prøv igen.' });
+    }
+    setSavingPaid(false);
+    onChanged();
+  };
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between px-1">
@@ -354,11 +369,17 @@ function ConnectionPanel({ services, prefs, onChanged }: {
             <input
               type="checkbox"
               checked={prefs.allowPaidApis}
-              onChange={async (e) => { await saveAiPrefs({ allowPaidApis: e.target.checked }); onChanged(); }}
+              disabled={savingPaid}
+              onChange={(e) => savePaidPreference(e.target.checked)}
               className="accent-amber-500"
             />
-            <span className="text-amber-300">{t('chat.allowPaid')}</span>
+            <span className="text-amber-300">{savingPaid ? 'Gemmer betalingsindstilling…' : t('chat.allowPaid')}</span>
           </label>
+          {paidFeedback && (
+            <div className={cn('text-[10px] leading-snug', paidFeedback.ok ? 'text-emerald-300' : 'text-rose-300')} role="status">
+              {paidFeedback.text}
+            </div>
+          )}
           <p className="text-[10px] opacity-50 leading-snug">{t('chat.allowPaidHint')}</p>
           <div className="flex items-center gap-1.5 text-[11px]">
             <span className="opacity-60 shrink-0">{t('chat.orchestrator')}:</span>
@@ -716,7 +737,7 @@ export function AiChatView() {
                   ))}
                   {Object.values(services ?? {}).some((s) => !s.available) && (
                     <optgroup label={t('chat.unavailable')}>
-                      {Object.values(services ?? []).filter((s) => !s.available).map((s) => (
+                      {Object.values(services ?? {}).filter((s) => !s.available).map((s) => (
                         <option key={s.id} value={s.id} disabled>{s.name} — {s.reason ?? 'offline'}</option>
                       ))}
                     </optgroup>
