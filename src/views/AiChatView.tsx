@@ -213,7 +213,25 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
   const [key, setKey] = useState('');
   const [model, setModel] = useState(s.model ?? '');
   const [baseUrl, setBaseUrl] = useState('');
+  const [savingKey, setSavingKey] = useState(false);
+  const [keyFeedback, setKeyFeedback] = useState<{ ok: boolean; text: string } | null>(null);
   const needsKey = s.kind === 'sub-api' || s.kind === 'paid-api';
+  const saveApiKey = async () => {
+    const value = key.trim();
+    if (!value || savingKey) return;
+    setSavingKey(true);
+    setKeyFeedback(null);
+    const result = await saveService(s.id, { apiKey: value, model: model || undefined });
+    if (result.ok && result.hasKey) {
+      setKey('');
+      setKeyFeedback({ ok: true, text: 'API-nøglen er gemt og bekræftet.' });
+    } else {
+      // Behold nøglen i feltet ved fejl, så brugeren ikke skal indtaste den igen.
+      setKeyFeedback({ ok: false, text: result.reason ?? 'Nøglen blev ikke gemt. Prøv igen.' });
+    }
+    setSavingKey(false);
+    onChanged();
+  };
   return (
     <div className="rounded-xl border border-white/10 bg-black/10 dark:bg-white/5 overflow-hidden">
       <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center gap-2 px-2.5 py-2 text-left hover:bg-white/5 transition">
@@ -251,12 +269,18 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
                   className="flex-1 min-w-0 rounded-lg bg-black/20 dark:bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none focus:border-indigo-400/60"
                 />
                 <button
-                  onClick={async () => { if (key.trim()) { await saveService(s.id, { apiKey: key.trim(), model: model || undefined }); setKey(''); } onChanged(); }}
-                  className="rounded-lg bg-indigo-500/80 hover:bg-indigo-500 px-2 py-1 text-[11px] text-white transition"
+                  onClick={saveApiKey}
+                  disabled={savingKey || !key.trim()}
+                  className="rounded-lg bg-indigo-500/80 hover:bg-indigo-500 disabled:opacity-50 px-2 py-1 text-[11px] text-white transition"
                 >
-                  {t('chat.save')}
+                  {savingKey ? 'Gemmer…' : t('chat.save')}
                 </button>
               </div>
+              {keyFeedback && (
+                <div className={cn('text-[10px] leading-snug', keyFeedback.ok ? 'text-emerald-300' : 'text-rose-300')} role="status">
+                  {keyFeedback.text}
+                </div>
+              )}
               <input
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
@@ -634,7 +658,7 @@ export function AiChatView() {
                           setSuggestingBible(false);
                         }
                       }}
-                      className="rounded-lg border border-indigo-400/40 text-indigo-300 px-2.5 py-1 text-[10.5px] hover:bg-indigo-400/10 transition disabled:opacity-40 flex items-center gap-1"
+                      className="rounded-lg border border-indigo-400/40 text-indigo-300 px-2 py-1 text-[10.5px] hover:bg-indigo-400/10 transition disabled:opacity-40 flex items-center gap-1"
                     >
                       {suggestingBible ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
                       {suggestingBible ? t('chat.suggestingBible') : t('chat.suggestBible')}
@@ -692,7 +716,7 @@ export function AiChatView() {
                   ))}
                   {Object.values(services ?? {}).some((s) => !s.available) && (
                     <optgroup label={t('chat.unavailable')}>
-                      {Object.values(services ?? {}).filter((s) => !s.available).map((s) => (
+                      {Object.values(services ?? []).filter((s) => !s.available).map((s) => (
                         <option key={s.id} value={s.id} disabled>{s.name} — {s.reason ?? 'offline'}</option>
                       ))}
                     </optgroup>
