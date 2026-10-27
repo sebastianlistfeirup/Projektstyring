@@ -4,7 +4,7 @@
 // og 'paid-api' (betalt pr. brug — kræver eksplicit tilladelse i aiPrefs.allowPaidApis).
 
 import { spawn, execFile } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, appendFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, appendFileSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
@@ -33,10 +33,40 @@ export const AI_SERVICES = [
 
 const serviceById = (id) => AI_SERVICES.find((s) => s.id === id);
 
+// ---- Hemmelig nøgleboks ------------------------------------------------------
+// API-nøgler gemmes KUN i <APP_DIR>/ai-keys.json — aldrig i companion.json,
+// aldrig i repo'et, aldrig i logs. UI'en viser kun maskeret sidste-4 tegn,
+// og nøglen sendes aldrig tilbage til browseren i klartekst.
+let secretsDir = null; // sættes af registerAiRoutes
+const secretsPath = () => join(secretsDir ?? process.cwd(), 'ai-keys.json');
+function loadKeySecrets() {
+  try { return JSON.parse(readFileSync(secretsPath(), 'utf8')); } catch { return {}; }
+}
+function saveKeySecrets(secrets) {
+  try {
+    const p = secretsPath();
+    writeFileSync(p, JSON.stringify(secrets, null, 2));
+    try { chmodSync(p, 0o600); } catch { /* Windows har ikke chmod */ }
+    if (process.platform === 'win32') {
+      // Afgræns filen, så kun din egen Windows-bruger kan læse den.
+      execFile('icacls', [p, '/inheritance:r', '/grant:r', `${process.env.USERNAME ?? '%USERNAME%'}:R`], { timeout: 5000 }, () => {});
+    }
+  } catch { /* ignorer */ }
+}
+
 // ---- Konfiguration --------------------------------------------------------
 function aiCfg(cfg) {
+  // Nøgler fra den hemmelige nøgleboks overtrumler altid (og fjernes aldrig
+  // fra companion.json, hvor gamle nøgler kan have ligget — de migreres væk).
+  const providers = { ...(cfg.aiProviders ?? {}) };
+  const secrets = loadKeySecrets();
+  for (const [id, entry] of Object.entries(secrets)) {
+    if (entry && typeof entry.apiKey === 'string' && entry.apiKey) {
+      providers[id] = { ...(providers[id] ?? {}), apiKey: entry.apiKey };
+    }
+  }
   return {
-    providers: cfg.aiProviders ?? {},
+    providers,
     prefs: { allowPaidApis: false, orchestrator: 'claude', selfHeal: true, ...(cfg.aiPrefs ?? {}) },
   };
 }
@@ -68,6 +98,23 @@ async function ollamaUp(baseUrl) {
   } catch { return false; }
 }
 
+// Hent listen af hentede modeller fra Ollama (tom liste ved fejl).
+async function ollamaModels(baseUrl) {
+  try {
+    const r = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(1500) });
+    if (!r.ok) return [];
+    const data = await r.json();
+    return (data.models ?? []).map((m) => m.name).filter(Boolean);
+  } catch { return []; }
+}
+
+// Vælg den model, der faktisk findes: foretrukken → første qwen* → første model.
+function pickOllamaModel(models, wanted) {
+  if (!models.length) return wanted;
+  if (wanted && models.includes(wanted)) return wanted;
+  return models.find((n) => /qwen/i.test(n)) ?? models[0];
+}
+
 // Må tjenesten bruges nu? Cost-gate: paid-api kræver allowPaidApis.
 export async function serviceAvailability(cfg) {
   const { providers, prefs } = aiCfg(cfg);
@@ -76,13 +123,24 @@ export async function serviceAvailability(cfg) {
   for (const s of AI_SERVICES) {
     const p = providers[s.id] ?? {};
     let available = false, reason = null;
+    let models = null, resolvedModel = null;
     if (s.kind === 'cli') {
       available = clis[s.id] && p.enabled !== false;
       reason = clis[s.id] ? null : `CLI '${s.cmd}' ikke fundet`;
     } else if (s.kind === 'local') {
-      const up = await ollamaUp(p.baseUrl ?? s.baseUrl);
-      available = up && p.enabled !== false;
-      reason = up ? null : 'Ollama kører ikke (127.0.0.1:11434)';
+      const baseUrl = p.baseUrl ?? s.baseUrl;
+      const up = await ollamaUp(baseUrl);
+      models = up ? await ollamaModels(baseUrl) : [];
+      const wanted = p.model ?? s.model;
+      resolvedModel = pickOllamaModel(models, wanted);
+      available = up && models.length > 0 && p.enabled !== false;
+      if (!up) {
+        reason = `Ollama kører ikke (${baseUrl}) – tjek at Docker-containeren er startet, og at port 11434 er mappet til værten`;
+      } else if (models.length === 0) {
+        reason = 'Ollama kører, men der er ikke hentet nogen modeller endnu';
+      } else if (wanted && !models.includes(wanted)) {
+        reason = `Modellen '${wanted}' findes ikke – bruger i stedet '${resolvedModel}'`;
+      }
     } else if (s.kind === 'sub-api') {
       available = Boolean(p.apiKey) && p.enabled !== false;
       reason = p.apiKey ? null : 'API-nøgle mangler';
@@ -96,7 +154,8 @@ export async function serviceAvailability(cfg) {
       id: s.id, name: s.name, kind: s.kind, color: s.color, strengths: s.strengths,
       available, reason, enabled: p.enabled !== false,
       hasKey: Boolean(p.apiKey), keyMask: mask(p.apiKey),
-      model: p.model ?? s.model ?? null, cmd: p.cmd ?? s.cmd ?? null,
+      model: resolvedModel ?? (p.model ?? s.model ?? null),
+      models, cmd: p.cmd ?? s.cmd ?? null,
       subscriptionCovered: s.kind === 'sub-api',
     };
   }
@@ -336,7 +395,9 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
       signal,
     });
   } else if (svc.kind === 'local') {
-    await chatOllama({ baseUrl: p.baseUrl ?? svc.baseUrl, model: p.model ?? svc.model, messages, onDelta: delta, signal });
+    const baseUrl = p.baseUrl ?? svc.baseUrl;
+    const models = await ollamaModels(baseUrl);
+    await chatOllama({ baseUrl, model: pickOllamaModel(models, p.model ?? svc.model), messages, onDelta: delta, signal });
   } else {
     const args = { baseUrl: p.baseUrl ?? svc.baseUrl, apiKey: p.apiKey, model: p.model ?? svc.model, messages, onDelta: delta, signal };
     if (serviceId === 'anthropic') await chatAnthropic(args);
@@ -1161,6 +1222,7 @@ function startTriggerScheduler({ loadConfig, dirs, broadcast }) {
 
 // ---- HTTP-ruter --------------------------------------------------------------
 export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, EXPORT_DIR }) {
+  secretsDir = APP_DIR; // nøgleboksen bor ved siden af companion.json i ~/.orbit
   const dirs = {
     uploads: join(APP_DIR, 'ai-uploads'),
     artifacts: join(APP_DIR, 'ai-artifacts'),
@@ -1209,11 +1271,21 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     cfg.aiProviders = cfg.aiProviders ?? {};
     const cur = cfg.aiProviders[svc.id] ?? {};
     const { enabled, apiKey, model, cmd, cliTemplate, baseUrl, avatarId, voiceId } = req.body ?? {};
+
+    // Nøglehåndtering: nye nøgler gemmes i den hemmelige nøgleboks, og en
+    // evt. gammel nøgle i companion.json migreres straks derover og slettes.
+    const secrets = loadKeySecrets();
+    if (apiKey) {
+      secrets[svc.id] = { ...(secrets[svc.id] ?? {}), apiKey: String(apiKey) };
+    } else if (apiKey === '') {
+      delete secrets[svc.id];
+    }
+    if (cur.apiKey) delete cur.apiKey;
+    if (apiKey !== undefined) saveKeySecrets(secrets);
+
     cfg.aiProviders[svc.id] = {
       ...cur,
       ...(enabled !== undefined ? { enabled } : {}),
-      ...(apiKey ? { apiKey } : {}),
-      ...(apiKey === '' ? { apiKey: undefined } : {}),
       ...(model !== undefined ? { model } : {}),
       ...(cmd ? { cmd } : {}),
       ...(cliTemplate ? { cliTemplate } : {}),
