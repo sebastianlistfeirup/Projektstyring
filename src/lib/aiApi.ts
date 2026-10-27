@@ -44,12 +44,27 @@ export async function saveAiPrefs(prefs: Partial<{ allowPaidApis: boolean; orche
   }
 }
 
-export async function saveService(id: string, patch: Record<string, unknown>): Promise<boolean> {
+export interface SaveServiceResult {
+  ok: boolean;
+  hasKey?: boolean;
+  reason?: string;
+}
+
+export async function saveService(id: string, patch: Record<string, unknown>): Promise<SaveServiceResult> {
   try {
     const r = await fetch(`${BASE}/api/ai/services/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
-    return r.ok;
-  } catch {
-    return false;
+    const text = await r.text();
+    let data: { ok?: boolean; hasKey?: boolean; reason?: string } = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { /* HTML/fejlside håndteres nedenfor */ }
+    const needsConfirmation = typeof patch.apiKey === 'string' && patch.apiKey.length > 0;
+    const confirmed = !needsConfirmation || data.hasKey === true;
+    return {
+      ok: r.ok && data.ok === true && confirmed,
+      hasKey: data.hasKey,
+      reason: data.reason ?? (!r.ok ? `Companion svarede ${r.status}` : !confirmed ? 'Companion bekræftede ikke, at nøglen blev gemt. Genstart companion-serveren.' : undefined),
+    };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : 'Kunne ikke kontakte companion-serveren.' };
   }
 }
 
@@ -243,7 +258,7 @@ export async function fetchTemplates(): Promise<PipelineTemplate[]> {
   }
 }
 
-export async function saveTemplate(body: { name: string; description: string; jobs: unknown[] }): Promise<boolean> {
+export async function saveTemplate(body: { name: string; description?: string; jobs: unknown[] }): Promise<boolean> {
   try {
     const r = await fetch(`${BASE}/api/ai/templates`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     return r.ok;
