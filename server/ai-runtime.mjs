@@ -132,11 +132,11 @@ const PLAN_SCHEMA = `Svar KUN med JSON (intet andet): {"jobs":[{"title":string,"
 // CLI-svar kan indeholde korte præ/eftertekster eller mere end ét JSON-objekt.
 // Find det første komplette objekt med respekt for strenge og escapes i stedet
 // for en grådig regex, der fejler med "non-whitespace character after JSON".
-export function parseJsonObject(raw) {
+export function parseJsonObject(raw, accept = () => true) {
   const text = String(raw ?? '').trim();
   try {
     const direct = JSON.parse(text);
-    if (direct && typeof direct === 'object' && !Array.isArray(direct)) return direct;
+    if (direct && typeof direct === 'object' && !Array.isArray(direct) && accept(direct)) return direct;
   } catch { /* søg efter et indlejret objekt nedenfor */ }
   for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
     let depth = 0, inString = false, escaped = false;
@@ -155,7 +155,7 @@ export function parseJsonObject(raw) {
         if (depth === 0) {
           try {
             const value = JSON.parse(text.slice(start, i + 1));
-            if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+            if (value && typeof value === 'object' && !Array.isArray(value) && accept(value)) return value;
           } catch { /* prøv næste objektstart */ }
           break;
         }
@@ -176,16 +176,17 @@ function attachmentContext(attachments) {
   };
 }
 
-export async function planWithLLM({ orchestratorId, goal, bible, attachments = [], cfg, dirs, availability, extra }) {
+export async function planWithLLM({ orchestratorId, goal, bible, attachments = [], cfg, dirs, availability, extra, signal }) {
   const roster = AI_SERVICES.map((s) => {
     const a = availability[s.id];
     return `- ${s.id} (${s.name}): stærke sider: ${s.strengths.join(', ')} — ${a?.available ? 'TILGÆNGELIG' : 'ikke tilgængelig'}`;
   }).join('\n');
   const runMem = runsMemoryTail(dirs);
-  const prompt = `Du er orkestrator for et AI-drevet projekt. Mål: ${goal}\n\n${bible ? `Projektets bibel (roller/stil): ${bible.slice(0, 6000)}\n\n` : ''}${runMem ? `Tidligere kørsler (kontekst — undgå at gentage fejl):\n${runMem}\n\n` : ''}Roster:\n${roster}\n\nFordel arbejdet til de TILGÆNGELIGE tjenester efter deres stærke sider. Brug færrest mulige jobs (typisk 1-4, højst 10) med afhængigheder (dependsOn = indeks i listen, tidligere jobs). Respektér målets præcise scope og tilføj aldrig nye faser. Medieproduktion og release må kun planlægges, når målet udtrykkeligt beder om det. ${extra ?? ''} ${PLAN_SCHEMA}`;
-  const raw = await runChat({ serviceId: orchestratorId, messages: [attachmentContext(attachments), { role: 'user', text: prompt }].filter(Boolean), cfg, dirs });
-  const plan = parseJsonObject(raw);
-  if (!Array.isArray(plan.jobs)) throw new Error('Planen manglede jobs');
+  const prompt = `PLANLÆGNINGSFASE — du må IKKE udføre målet, køre tests, ændre filer eller producere en slutrapport. Returnér kun en jobplan; selve arbejdet udføres først af de efterfølgende Auto-jobs.\n\nDu er orkestrator for et AI-drevet projekt. Mål, som du KUN skal planlægge: ${goal}\n\n${bible ? `Projektets bibel (roller/stil): ${bible.slice(0, 6000)}\n\n` : ''}${runMem ? `Tidligere kørsler (kontekst — undgå at gentage fejl):\n${runMem}\n\n` : ''}Roster:\n${roster}\n\nFordel arbejdet til de TILGÆNGELIGE tjenester efter deres stærke sider. Brug færrest mulige jobs (typisk 1-4, højst 10) med afhængigheder (dependsOn = indeks i listen, tidligere jobs). Respektér målets præcise scope og tilføj aldrig nye faser. Medieproduktion og release må kun planlægges, når målet udtrykkeligt beder om det. ${extra ?? ''}\n\nStop efter planen. Ingen værktøjskald, ingen kodeændringer, ingen tests og ingen forklaring. ${PLAN_SCHEMA}`;
+  const raw = await runChat({ serviceId: orchestratorId, messages: [attachmentContext(attachments), { role: 'user', text: prompt }].filter(Boolean), cfg, dirs, signal, readOnly: true });
+  // CLI-loggen kan indeholde test-JSON før selve planen. Vælg objektet med jobs,
+  // ikke blot det første tilfældige JSON-objekt i svaret.
+  const plan = parseJsonObject(raw, (value) => Array.isArray(value.jobs));
   return plan.jobs.map((j, i) => ({
     id: `job-${i}`,
     title: String(j.title ?? `Job ${i + 1}`),
@@ -332,9 +333,9 @@ function buildRolesPlan({ goal, availability, bible }) {
 // ---- Kvalitets-dommer (auto-judge): scorer hver leverance mod opgaven ----
 const JUDGE_SCHEMA = `Svar KUN med JSON (intet andet): {"score":number(0-10),"note":string}`;
 
-async function judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs }) {
+async function judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs, signal }) {
   const prompt = `Du er kvalitets-dommer for et AI-projekt.\nProjektmål: ${String(goal).slice(0, 800)}\n${bible ? `Bibel (stil/krav): ${String(bible).slice(0, 1200)}\n` : ''}Job: ${job.title}\nOpgavebeskrivelse: ${String(job.description ?? '').slice(0, 1200)}\n\nLeverancen:\n${String(text).slice(0, 6000)}\n\nBedøm leverancen mod opgavebeskrivelsen: 0-10, hvor 6 er "accepterbar" og 8+ er "rigtig god". Giv én kort, konkret begrundelse på dansk. ${JUDGE_SCHEMA}`;
-  const raw = await runChat({ serviceId: judgeId, messages: [{ role: 'user', text: prompt }], cfg, dirs });
+  const raw = await runChat({ serviceId: judgeId, messages: [{ role: 'user', text: prompt }], cfg, dirs, signal, readOnly: true });
   const m = raw.match(/\{[\s\S]*\}/);
   if (!m) throw new Error('Dommeren returnerede ikke JSON');
   const j = JSON.parse(m[0]);
@@ -456,7 +457,7 @@ async function runTeamJob({ job, handle, goal, bible, attachments, cfg, dirs, av
   let subJobs;
   if (orchestratorId) {
     try {
-      subJobs = (await planWithLLM({ orchestratorId, goal: `${goal} — DELMÅL: ${subGoal}`, bible, attachments, cfg, dirs, availability, extra: 'Lav 2-4 SMÅ jobs til netop dette delmål.' })).slice(0, 4);
+      subJobs = (await planWithLLM({ orchestratorId, goal: `${goal} — DELMÅL: ${subGoal}`, bible, attachments, cfg, dirs, availability, extra: 'Lav 2-4 SMÅ jobs til netop dette delmål.', signal: handle.abort.signal })).slice(0, 4);
     } catch { subJobs = null; }
   }
   if (!subJobs || !subJobs.length) {
@@ -479,7 +480,7 @@ async function runTeamJob({ job, handle, goal, bible, attachments, cfg, dirs, av
     try {
       let acc = '';
       const text = await runChat({
-        serviceId: sj.serviceId, messages: ctx, cfg, dirs, cwd: handle.runDir,
+        serviceId: sj.serviceId, messages: ctx, cfg, dirs, cwd: handle.runDir, signal: handle.abort.signal,
         onDelta: (d) => { acc = (acc + d).slice(-300); track({ type: 'subagent_delta', jobId: job.id, subId, delta: d }); },
         onSubagent: (sub) => track({ type: sub.phase === 'start' ? 'subagent_start' : 'subagent_done', jobId: job.id, ...sub }),
       });
@@ -520,7 +521,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     instructions: [],
     finishedAt: null,
   };
-  const handle = { run, instructions: run.instructions, skip: new Set(), runDir: join(dirs.runs, 'work', runId), cancelled: false };
+  const handle = { run, instructions: run.instructions, skip: new Set(), runDir: join(dirs.runs, 'work', runId), cancelled: false, abort: new AbortController() };
   activeRuns.set(runId, handle);
   initRunWorkdir(handle.runDir, goal);
   swarmState.active = run;
@@ -552,7 +553,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       ?? planByRules({ goal, availability });
     if (!jobs.some((j) => j.title.startsWith('Dommer'))) track({ type: 'job_note', jobId: null, note: 'For få gratis motorer til race (kræver 3) — bruger standardplan.' });
   } else if (orchestratorId) {
-    try { jobs = await planWithLLM({ orchestratorId, goal, bible, attachments: run.attachments, cfg, dirs, availability }); }
+    try { jobs = await planWithLLM({ orchestratorId, goal, bible, attachments: run.attachments, cfg, dirs, availability, signal: handle.abort.signal }); }
     catch (e) { track({ type: 'job_note', jobId: null, note: `Orkestrator-plan fejlede (${e.message}) — bruger regelbaseret plan.` }); jobs = planByRules({ goal, availability }); }
   } else {
     jobs = planByRules({ goal, availability });
@@ -626,7 +627,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       const text = job.team
         ? await runTeamJob({ job, run, handle, goal, bible, attachments: run.attachments, cfg, dirs, availability, orchestratorId, emit, track })
         : await runChat({
-            serviceId: job.serviceId, messages: [...baseCtx, ...extra], cfg, dirs, cwd: handle.runDir,
+            serviceId: job.serviceId, messages: [...baseCtx, ...extra], cfg, dirs, cwd: handle.runDir, signal: handle.abort.signal,
             onDelta: (d) => track({ type: 'job_delta', jobId: job.id, delta: d }),
             onSubagent: (sub) => track({ type: sub.phase === 'start' ? 'subagent_start' : 'subagent_done', jobId: job.id, ...sub }),
           });
@@ -657,7 +658,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
         const judgeId = ['claude', 'kimi', 'gemini', 'codex'].find((id) => id !== job.serviceId && availability[id]?.available);
         if (judgeId) {
           try {
-            const judged = await judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs });
+            const judged = await judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs, signal: handle.abort.signal });
             score = judged.score;
             judgeNote = judged.note;
             track({ type: 'job_judged', jobId: job.id, score, note: judgeNote, judge: judgeId });
@@ -665,7 +666,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
               track({ type: 'job_note', jobId: job.id, note: `Dommer: ${judged.score}/10 — forbedrer leverancen.` });
               const improved = await attempt([{ role: 'user', text: `Kvalitets-dommeren gav kun ${judged.score}/10 med begrundelsen: "${judged.note}". Ret og forbedr leverancen, så den fortjener mindst 8/10.` }]);
               try {
-                const rej = await judgeDeliverable({ judgeId, job, text: improved, goal, bible, cfg, dirs });
+                const rej = await judgeDeliverable({ judgeId, job, text: improved, goal, bible, cfg, dirs, signal: handle.abort.signal });
                 if (rej.score >= score) {
                   text = improved;
                   score = rej.score;
@@ -716,7 +717,8 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
   writeFileSync(join(dirs.runs, `${runId}.json`), JSON.stringify({ runId, goal, mode, orchestratorId, attachments: run.attachments, jobs: run.jobs, results, usage: run.usage, events: run.events, finishedAt: new Date().toISOString() }, null, 2));
   appendRunMemory(dirs, run);
   gitCommit(handle.runDir, 'Kørsel afsluttet');
-  track({ type: 'done', summary: results.map((r) => ({ title: r.title, serviceId: r.serviceId })) });
+  if (handle.cancelled) track({ type: 'error', error: 'Kørslen blev stoppet af brugeren.' });
+  else track({ type: 'done', summary: results.map((r) => ({ title: r.title, serviceId: r.serviceId })) });
   } finally {
     activeRuns.delete(runId);
     if (swarmState.active === run) {
