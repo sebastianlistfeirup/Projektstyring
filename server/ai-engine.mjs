@@ -175,6 +175,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     if (!h) return res.status(409).json({ ok: false, reason: 'Ingen aktiv kørsel.' });
     h.cancelled = true;
     h.skip.add('*');
+    h.abort?.abort();
     if (h.resolveApproval) h.resolveApproval([]);
     h.run.notes = [...(h.run.notes ?? []).slice(-4), 'Kørslen aflyses — afventer igangværende job.'];
     res.json({ ok: true });
@@ -496,6 +497,9 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
 
   // Orkestrering: POST {goal, bible?, attachments?, jobs?, mode?, pauseAfterPlan?} → SSE hændelser
   app.post('/api/ai/orchestrate', async (req, res) => {
+    // Én aktiv Auto-kørsel ad gangen: ellers kan gamle events og kørselsstatus
+    // overskrive den nye kørsel i Swarm, og to agenter kan ændre samme projekt.
+    if (swarmState.active) return res.status(409).json({ ok: false, reason: 'En Auto-kørsel er allerede aktiv. Stop den, og vent til den er afsluttet, før du starter en ny.' });
     const emit = sse(res);
     const { goal, bible, attachments, jobs, mode, pauseAfterPlan } = req.body ?? {};
     const runId = randomUUID().slice(0, 12);
@@ -505,7 +509,11 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       ac.abort();
       // Ved afbrydelse: aflys evt. afventende godkendelse, så kørslen ikke hænger.
       const h = activeRuns.get(runId);
-      if (h) { h.cancelled = true; if (h.resolveApproval) h.resolveApproval(h.jobsSnapshot ?? []); }
+      if (h) {
+        h.cancelled = true;
+        h.abort?.abort();
+        if (h.resolveApproval) h.resolveApproval(h.jobsSnapshot ?? []);
+      }
     });
     try {
       if (ac.signal.aborted) return;
@@ -520,7 +528,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
         pauseAfterPlan: Boolean(pauseAfterPlan),
       });
     } catch (e) {
-      emit({ type: 'error', error: e.message });
+      emit({ type: 'error', runId, error: e.message });
     }
     res.end();
   });
