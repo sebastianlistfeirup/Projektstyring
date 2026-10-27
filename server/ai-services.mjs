@@ -4,7 +4,7 @@
 // og 'paid-api' (betalt pr. brug — kræver eksplicit tilladelse i aiPrefs.allowPaidApis).
 
 import { spawn, execFile, execFileSync } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, appendFileSync, chmodSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, appendFileSync, chmodSync, statSync } from 'fs';
 import { dirname, join } from 'path';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
@@ -112,14 +112,16 @@ async function resolveCliCommand(cmd) {
   } catch { return null; }
 }
 
-let cliCache = { at: 0, found: {} };
+let cliCache = { at: 0, signature: '', found: {} };
 async function detectClis(providers) {
-  if (Date.now() - cliCache.at < 30_000) return cliCache.found;
+  const cliServices = AI_SERVICES.filter((s) => s.kind === 'cli');
+  const signature = JSON.stringify(cliServices.map((s) => [s.id, providers[s.id]?.cmd ?? s.cmd]));
+  if (Date.now() - cliCache.at < 30_000 && signature === cliCache.signature) return cliCache.found;
   const found = {};
-  await Promise.all(AI_SERVICES.filter((s) => s.kind === 'cli').map(async (s) => {
+  await Promise.all(cliServices.map(async (s) => {
     found[s.id] = await resolveCliCommand(providers[s.id]?.cmd ?? s.cmd);
   }));
-  cliCache = { at: Date.now(), found };
+  cliCache = { at: Date.now(), signature, found };
   return found;
 }
 
@@ -157,8 +159,15 @@ export async function serviceAvailability(cfg) {
     let available = false, reason = null;
     let models = null, resolvedModel = null;
     if (s.kind === 'cli') {
-      available = Boolean(clis[s.id]) && p.enabled !== false;
-      reason = clis[s.id] ? null : `CLI '${p.cmd ?? s.cmd}' ikke fundet`;
+      let launchError = null;
+      if (clis[s.id]) {
+        try { cliSpawnSpec(clis[s.id], []); }
+        catch (e) { launchError = e.message; }
+      }
+      available = Boolean(clis[s.id]) && !launchError && p.enabled !== false;
+      reason = !clis[s.id] ? `CLI '${p.cmd ?? s.cmd}' ikke fundet`
+        : launchError ? `CLI kan ikke startes: ${launchError}`
+        : p.enabled === false ? 'Deaktiveret' : null;
     } else if (s.kind === 'local') {
       const baseUrl = p.baseUrl ?? s.baseUrl;
       const up = await ollamaUp(baseUrl);
@@ -335,14 +344,48 @@ async function chatOllama({ baseUrl, model, messages, onDelta, signal }) {
 
 // Npm's Windows-shims kan ikke startes direkte uden en shell. Find shim'ens
 // faktiske Node- eller EXE-mål, så prompten fortsat sendes som ét sikkert argument.
+// Nyere shims kan bruge uden citationstegn eller pege på en flyttet native pakke.
 function windowsShimTarget(cmdPath) {
   try {
+    const npmDir = dirname(cmdPath);
     const shim = readFileSync(cmdPath, 'utf8');
-    const m = shim.match(/"(%~?dp0%[^"\r\n]+?\.(?:[cm]?js|exe))"/i);
-    if (!m) return null;
-    const relative = m[1].replace(/^%~?dp0%[\\/]?/i, '');
-    const target = join(dirname(cmdPath), ...relative.split(/[\\/]+/).filter(Boolean));
-    return existsSync(target) ? target : null;
+    const candidates = [];
+    for (const m of shim.matchAll(/["']?(%~?dp0%[^"'\r\n]+?\.(?:[cm]?js|exe))["']?/gi)) {
+      const relative = m[1].replace(/^%~?dp0%[\\/]?/i, '');
+      if (!/(?:^|[\\/])node\.exe$/i.test(relative)) candidates.push(join(npmDir, ...relative.split(/[\\/]+/).filter(Boolean)));
+    }
+    // Nogle installationer skriver en absolut sti direkte i shim'en. node.exe er
+    // kun launcher og må aldrig vælges som selve CLI-programmet.
+    for (const m of shim.matchAll(/["']?([A-Za-z]:[\\/][^"'\r\n]+?\.(?:[cm]?js|exe))["']?/g)) {
+      if (!/(?:^|[\\/])node\.exe$/i.test(m[1])) candidates.push(m[1]);
+    }
+    const isCodex = /(?:^|[\\/])codex\.(?:cmd|bat)$/i.test(cmdPath);
+    if (isCodex) {
+      candidates.push(join(npmDir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js'));
+      const existing = candidates.find((p) => existsSync(p));
+      if (existing) return existing;
+
+      // Codex' native EXE kan ligge i en platformspakke ved siden af hovedpakken.
+      // Søg kun i @openai/codex*-mapperne og med en lille, fast dybdegrænse.
+      const scopeDir = join(npmDir, 'node_modules', '@openai');
+      const roots = [];
+      for (const entry of readdirSync(scopeDir, { withFileTypes: true })) {
+        if (entry.isDirectory() && /^codex(?:-|$)/i.test(entry.name)) roots.push(join(scopeDir, entry.name));
+      }
+      let jsTarget = null;
+      const queue = roots.map((dir) => ({ dir, depth: 0 }));
+      while (queue.length) {
+        const { dir, depth } = queue.shift();
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const p = join(dir, entry.name);
+          if (entry.isDirectory() && depth < 7) queue.push({ dir: p, depth: depth + 1 });
+          else if (entry.isFile() && entry.name.toLowerCase() === 'codex.exe') return p;
+          else if (entry.isFile() && entry.name.toLowerCase() === 'codex.js' && /[\\/]bin$/i.test(dir)) jsTarget ??= p;
+        }
+      }
+      return jsTarget;
+    }
+    return candidates.find((p) => existsSync(p)) ?? null;
   } catch { return null; }
 }
 
@@ -354,15 +397,123 @@ export function cliSpawnSpec(cmd, args, platform = process.platform) {
   return { cmd: process.execPath, args: [target, ...args] };
 }
 
+// Undgå at Claude Code ved et uheld vælger WSL's bash.exe på Windows.
+// Brug en eksisterende Git Bash, ellers Claudes indbyggede PowerShell-værktøj.
+function windowsGitBash(env) {
+  const candidates = [
+    env.CLAUDE_CODE_GIT_BASH_PATH,
+    env.ProgramFiles && join(env.ProgramFiles, 'Git', 'bin', 'bash.exe'),
+    env['ProgramFiles(x86)'] && join(env['ProgramFiles(x86)'], 'Git', 'bin', 'bash.exe'),
+    env.LOCALAPPDATA && join(env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'),
+  ].filter(Boolean);
+  try {
+    const output = execFileSync('where', ['git'], { encoding: 'utf8', timeout: 3000 });
+    for (const git of output.split(/\r?\n/).map((p) => p.trim()).filter(Boolean)) {
+      candidates.push(join(dirname(git), 'bash.exe'), join(dirname(git), '..', 'bin', 'bash.exe'));
+    }
+  } catch { /* standardstierne ovenfor kan stadig bruges */ }
+  return candidates.find((p) => existsSync(p)) ?? null;
+}
+
+export function cliChildEnv(baseEnv = process.env, { platform = process.platform, claude = false } = {}) {
+  const env = { ...baseEnv };
+  if (platform !== 'win32' || !claude) return env;
+  const bash = windowsGitBash(env);
+  if (bash) env.CLAUDE_CODE_GIT_BASH_PATH = bash;
+  else {
+    delete env.CLAUDE_CODE_GIT_BASH_PATH;
+    env.CLAUDE_CODE_USE_POWERSHELL_TOOL = '1';
+  }
+  return env;
+}
+
+const MAX_ACCESS_DIRECTORIES = 12;
+
+function validatedAccessDirectory(value) {
+  try {
+    const candidate = String(value ?? '').trim().replace(/[.,;:!?)\]}]+$/g, '');
+    if (!candidate) return null;
+    const normalized = candidate.replace(/\\/g, '/').replace(/\/+$/g, '');
+    // En roddrive er ikke en projektmappe og gives aldrig som ekstra adgang.
+    if (!normalized || normalized === '/' || /^[A-Za-z]:$/.test(normalized)) return null;
+    return statSync(candidate).isDirectory() ? candidate : null;
+  } catch { return null; }
+}
+
+function existingAccessDirectory(raw) {
+  let candidate = String(raw ?? '').trim();
+  // Hvis en sti står midt i en sætning, afprøves den længste eksisterende
+  // sti først. Der falder aldrig tilbage til en roddrive eller en ikke-eksisterende mappe.
+  for (let i = 0; i < 40 && candidate; i += 1) {
+    const valid = validatedAccessDirectory(candidate);
+    if (valid) return valid;
+    const next = candidate.replace(/\s+\S+$/g, '').replace(/[.,;:!?)\]}]+$/g, '');
+    if (next === candidate) break;
+    candidate = next;
+  }
+  return null;
+}
+
+// Auto kører i en isoleret arbejdsmappe. Giv standard-CLI'erne udtrykkelig
+// adgang til uploadmapper og de projektmapper, brugeren selv har skrevet i målet.
+export function cliAccessDirectories(messages, platform = process.platform) {
+  const dirs = [];
+  const seen = new Set();
+  const add = (candidate) => {
+    if (dirs.length >= MAX_ACCESS_DIRECTORIES) return;
+    const dir = existingAccessDirectory(candidate);
+    if (!dir) return;
+    const key = platform === 'win32' ? dir.replace(/\//g, '\\').toLowerCase() : dir;
+    if (seen.has(key)) return;
+    seen.add(key);
+    dirs.push(dir);
+  };
+  for (const msg of messages ?? []) {
+    for (const attachment of msg?.attachments ?? []) {
+      if (attachment?.path) add(dirname(attachment.path));
+    }
+  }
+  for (const msg of messages ?? []) {
+    const text = String(msg?.text ?? '');
+    for (const line of text.split(/\r?\n/)) {
+      const windowsStarts = [...line.matchAll(/[A-Za-z]:[\\/]/g)].map((m) => m.index);
+      windowsStarts.forEach((start, i) => add(line.slice(start, windowsStarts[i + 1] ?? line.length)));
+      // POSIX-stier bruges også ved lokale kørsler på macOS/Linux. Kræv en
+      // projektmappemarkør på linien, så almindelige URL'er ikke bliver mapper.
+      if (!/\b(projekt(?:mappe|rod)?|project(?:\s+(?:dir|directory|root))?|mappe|directory|folder|root)\b/i.test(line)) continue;
+      // En markør efterfulgt af en sti kan også indeholde mellemrum i mappenavnet.
+      const marked = line.match(/\b(?:projekt(?:mappe|rod)?|project(?:\s+(?:dir|directory|root))?|mappe|directory|folder|root)\b\s*[:=]?\s*["'`]?(\/.*)$/i);
+      if (marked) add(marked[1]);
+      for (const m of line.matchAll(/\/[^\s<>"'`|?*]+/g)) add(m[0]);
+    }
+  }
+  return dirs;
+}
+
 // CLI: prompt som argument ud fra skabelon; stdout streames linjevis.
 // jsonl: stdout parses som Claude stream-json (én JSON pr. linje) → onEvent i stedet for rå delta.
-async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, jsonl, signal }) {
+async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, jsonl, claude = false, extraArgs = [], signal }) {
   const resolvedCmd = await resolveCliCommand(cmd);
   if (!resolvedCmd) throw new Error(`Kunne ikke starte '${cmd}': CLI'en blev ikke fundet`);
-  const parts = (cliTemplate || '-p {prompt}').split(' ').map((t) => (t === '{prompt}' ? prompt : t));
+  const tokens = (cliTemplate || '-p {prompt}').split(' ');
+  const parts = [];
+  let promptInserted = false;
+  for (const token of tokens) {
+    if (token === '{prompt}') {
+      // Indstillinger og mapper skal stå før prompten; array-elementer bevarer
+      // stier med mellemrum som nøjagtigt ét argument uden shell-evaluering.
+      parts.push(...extraArgs, prompt);
+      promptInserted = true;
+    } else parts.push(token);
+  }
+  if (!promptInserted) parts.push(...extraArgs);
   const launch = cliSpawnSpec(resolvedCmd, parts);
   return new Promise((resolve, reject) => {
-    const child = spawn(launch.cmd, launch.args, { cwd: cwd ?? process.cwd(), env: { ...process.env, NO_COLOR: '1' } });
+    const env = cliChildEnv({ ...process.env, NO_COLOR: '1' }, { claude });
+    const child = spawn(launch.cmd, launch.args, { cwd: cwd ?? process.cwd(), env });
+    // Prompten ligger allerede i argv. Luk stdin, så Claude ikke venter på input,
+    // og så headless CLI'er aldrig hænger på en åben datakanal.
+    try { child.stdin.end(); } catch { /* processen kan allerede være afsluttet */ }
     const kill = () => { try { child.kill('SIGTERM'); } catch { /* */ } };
     signal?.addEventListener('abort', kill);
     const timer = setTimeout(kill, 15 * 60 * 1000);
@@ -437,15 +588,30 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
   if (svc.kind === 'cli') {
     const prompt = messages.map(contentToText).join('\n\n---\n\n');
     const template = p.cliTemplate ?? svc.cliTemplate;
+    const useDefaultTemplate = template === svc.cliTemplate;
     // Claude køres med stream-json så Task-underagenter kan spores som egne linjer.
-    // Brugerdefinerede skabeloner respekteres (så går subagent-sporing stille tabt).
-    const useJson = serviceId === 'claude' && template === svc.cliTemplate;
+    // Brugerdefinerede skabeloner respekteres uden ekstra permissions eller mapper.
+    const useJson = serviceId === 'claude' && useDefaultTemplate;
+    const accessDirs = useDefaultTemplate && (serviceId === 'codex' || serviceId === 'claude')
+      ? cliAccessDirectories(messages) : [];
+    const extraArgs = [];
+    if (serviceId === 'codex' && useDefaultTemplate) {
+      extraArgs.push('--sandbox', 'workspace-write');
+      for (const dir of accessDirs) extraArgs.push('--add-dir', dir);
+    } else if (serviceId === 'claude' && useDefaultTemplate) {
+      // Print-mode er ikke-interaktiv. Uden dette afvises selv læsning i --add-dir.
+      extraArgs.push('--permission-mode', 'bypassPermissions');
+      if (accessDirs.length) extraArgs.push('--add-dir', ...accessDirs);
+    }
+    if (useJson) extraArgs.push('--output-format', 'stream-json', '--verbose');
     await chatCli({
       cmd: p.cmd ?? svc.cmd,
-      cliTemplate: useJson ? `${template} --output-format stream-json --verbose` : template,
+      cliTemplate: template,
+      extraArgs,
       prompt,
       cwd: cwd ?? dirs.cwd,
       jsonl: useJson,
+      claude: serviceId === 'claude',
       onDelta: delta,
       onEvent: useJson ? watchClaudeStreamJson({ onText: delta, onSubagent }) : undefined,
       signal,
