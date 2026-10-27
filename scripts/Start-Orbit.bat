@@ -30,7 +30,8 @@ rem ---- Server 1: dev-server (port 5173) ----
 call :ensure_server 5173 "npm run dev:app" "Orbit dev-server"
 
 rem ---- Server 2: companion (port 4310) ----
-call :ensure_server 4310 "node server\companion.mjs" "Orbit companion-server"
+rem Companion genstartes altid, så en opdateret AI-motor ikke erstattes af en gammel proces.
+call :ensure_server 4310 "node server\companion.mjs" "Orbit companion-server" restart
 
 rem ---- Vent på at appen svarer (max 30 sek), åbn så browseren ----
 echo.
@@ -69,6 +70,18 @@ set PORT=%1
 set SRV_CMD=%~2
 set SRV_NAME=%~3
 
+rem Ved restart-parameteren dræbes en eksisterende proces, også selv om den svarer.
+rem Det er nødvendigt for companion, da AI-motorfilen ikke hot-reloades.
+if /i not "%~4"=="restart" goto check_existing
+netstat -ano | findstr /R ":%PORT% .*LISTENING" >nul
+if errorlevel 1 goto check_existing
+echo  [FIX] %SRV_NAME% genstarter med den nyeste kode...
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R ":%PORT% .*LISTENING"') do (
+  taskkill /PID %%P /F >nul 2>nul
+)
+timeout /t 2 /nobreak >nul
+
+:check_existing
 rem 1) Svarer serveren allerede? Så er alt fint.
 curl -s -o nul http://localhost:%PORT%
 if not errorlevel 1 (
