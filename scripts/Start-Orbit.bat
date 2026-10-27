@@ -72,14 +72,14 @@ set SRV_NAME=%~3
 rem 1) Svarer serveren allerede? Så er alt fint.
 curl -s -o nul http://localhost:%PORT%
 if not errorlevel 1 (
-  echo  [OK] %SRV_NAME% kører allerede (port %PORT% svarer).
+  echo  [OK] %SRV_NAME% kører allerede ^(port %PORT% svarer^).
   goto :eof
 )
 
 rem 2) Optager en gammel/hængt proces porten uden at svare? Dræb den.
 netstat -ano | findstr /R ":%PORT% .*LISTENING" >nul
 if not errorlevel 1 (
-  echo  [FIX] %SRV_NAME% hænger (port %PORT% optaget, intet svar) - genstarter...
+  echo  [FIX] %SRV_NAME% hænger ^(port %PORT% optaget, intet svar^) - genstarter...
   for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R ":%PORT% .*LISTENING"') do (
     taskkill /PID %%P /F >nul 2>nul
   )
