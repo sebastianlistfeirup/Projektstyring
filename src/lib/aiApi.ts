@@ -28,19 +28,32 @@ export interface AiServicesResponse {
 
 export async function fetchAiServices(): Promise<AiServicesResponse | null> {
   try {
-    const r = await fetch(`${BASE}/api/ai/services`, { signal: AbortSignal.timeout(2500) });
+    const r = await fetch(`${BASE}/api/ai/services`, { signal: AbortSignal.timeout(8000) });
     return r.ok ? await r.json() : null;
   } catch {
     return null;
   }
 }
 
-export async function saveAiPrefs(prefs: Partial<{ allowPaidApis: boolean; orchestrator: string; autoJudge: boolean; selfHeal: boolean }>): Promise<boolean> {
+export interface SavePrefsResult {
+  ok: boolean;
+  prefs?: AiServicesResponse['prefs'];
+  reason?: string;
+}
+
+export async function saveAiPrefs(prefs: Partial<{ allowPaidApis: boolean; orchestrator: string; autoJudge: boolean; selfHeal: boolean }>): Promise<SavePrefsResult> {
   try {
     const r = await fetch(`${BASE}/api/ai/prefs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(prefs) });
-    return r.ok;
-  } catch {
-    return false;
+    const text = await r.text();
+    let data: { ok?: boolean; prefs?: AiServicesResponse['prefs']; reason?: string } = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { /* HTML/fejlside håndteres nedenfor */ }
+    return {
+      ok: r.ok && data.ok === true && Boolean(data.prefs),
+      prefs: data.prefs,
+      reason: data.reason ?? (!r.ok ? `Companion svarede ${r.status}` : !data.prefs ? 'Companion bekræftede ikke indstillingen. Genstart companion-serveren.' : undefined),
+    };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : 'Kunne ikke kontakte companion-serveren.' };
   }
 }
 
