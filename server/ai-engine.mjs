@@ -44,9 +44,19 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
 
   app.post('/api/ai/prefs', (req, res) => {
     const cfg = loadConfig();
-    cfg.aiPrefs = { allowPaidApis: false, ...(cfg.aiPrefs ?? {}), ...(req.body ?? {}) };
-    saveConfig(cfg);
-    res.json({ ok: true, prefs: cfg.aiPrefs });
+    const patch = req.body ?? {};
+    cfg.aiPrefs = { allowPaidApis: false, ...(cfg.aiPrefs ?? {}), ...patch };
+    try {
+      saveConfig(cfg);
+    } catch (e) {
+      return res.status(500).json({ ok: false, reason: `Kunne ikke gemme AI-indstillingerne: ${e.message}` });
+    }
+    // Bekræft fra disken, så UI aldrig viser en tilladelse som ikke er gemt.
+    const persisted = loadConfig();
+    if (patch.allowPaidApis !== undefined && persisted.aiPrefs?.allowPaidApis !== patch.allowPaidApis) {
+      return res.status(500).json({ ok: false, reason: 'Betalingsindstillingen kunne ikke genlæses fra companion.json. Genstart companion-serveren og prøv igen.' });
+    }
+    res.json({ ok: true, prefs: aiCfg(persisted).prefs });
   });
 
   app.post('/api/ai/services/:id', (req, res) => {
