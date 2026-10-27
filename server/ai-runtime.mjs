@@ -1,0 +1,734 @@
+// Orbit AI-kørsler: planlægning, sværm, hukommelse og triggere.
+import { execFile } from 'child_process';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync } from 'fs';
+import { join } from 'path';
+import { randomUUID } from 'crypto';
+import { AI_SERVICES, serviceById, serviceAvailability, runChat, produceMedia, aiCfg } from './ai-services.mjs';
+
+
+// ---- Langtidshukommelse (idé 4 + 17) ----------------------------------------
+// Per-service hukommelse: hver service husker hvad den tidligere har lavet.
+// Kørsels-hukommelse: tværgående log over afsluttede kørsler der fodres til planlæggeren.
+function serviceMemoryTail(dirs, serviceId) {
+  try {
+    const p = join(dirs.memory, `${serviceId}.md`);
+    if (!existsSync(p)) return '';
+    const txt = readFileSync(p, 'utf8');
+    return txt.slice(-1400);
+  } catch { return ''; }
+}
+
+function appendServiceMemory(dirs, serviceId, line) {
+  try {
+    mkdirSync(dirs.memory, { recursive: true });
+    appendFileSync(join(dirs.memory, `${serviceId}.md`), `${line}\n`);
+  } catch { /* hukommelse er ikke kritisk */ }
+}
+
+function runsMemoryTail(dirs) {
+  try {
+    const p = join(dirs.memory, 'runs.md');
+    if (!existsSync(p)) return '';
+    return readFileSync(p, 'utf8').slice(-1800);
+  } catch { return ''; }
+}
+
+function appendRunMemory(dirs, run) {
+  try {
+    mkdirSync(dirs.memory, { recursive: true });
+    const done = run.jobs.filter((j) => j.status === 'done').length;
+    const errs = run.jobs.filter((j) => j.status === 'error').length;
+    const line = `- ${new Date().toISOString().slice(0, 16).replace('T', ' ')} · "${String(run.goal).slice(0, 90)}" · ${done}/${run.jobs.length} færdige${errs ? ` · ${errs} fejl` : ''} · orkestrator: ${run.orchestratorId ?? 'regler'}`;
+    appendFileSync(join(dirs.memory, 'runs.md'), `${line}\n`);
+  } catch { /* ikke kritisk */ }
+}
+
+// ---- Leverance-mapper + git per kørsel (idé 7 + 13) --------------------------
+// Hver kørsel får sin egen arbejdsmappe med et git-repo; hvert job efterlader
+// en leverance-fil (job-XX.md) som efterfølgende jobs læser direkte ind.
+function slugify(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9æøå]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'job';
+}
+
+function initRunWorkdir(runDir, goal) {
+  try {
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, '00-MÅL.md'), `# Mål\n\n${goal}\n`);
+    execFile('git', ['init', '-q'], { cwd: runDir, timeout: 5000 }, () => {
+      execFile('git', ['add', '-A'], { cwd: runDir, timeout: 5000 }, () => {
+        execFile('git', ['-c', 'user.name=Orbit AI', '-c', 'user.email=orbit@local', 'commit', '-q', '-m', 'Start: mål', '--allow-empty'], { cwd: runDir, timeout: 5000 }, () => {});
+      });
+    });
+  } catch { /* git er bedste forsøg */ }
+}
+
+function gitCommit(runDir, message) {
+  try {
+    execFile('git', ['add', '-A'], { cwd: runDir, timeout: 5000 }, () => {
+      execFile('git', ['-c', 'user.name=Orbit AI', '-c', 'user.email=orbit@local', 'commit', '-q', '-m', message, '--allow-empty'], { cwd: runDir, timeout: 5000 }, () => {});
+    });
+  } catch { /* ikke kritisk */ }
+}
+
+function writeDeliverable(runDir, job, text) {
+  try {
+    const idx = job.id.replace(/\D/g, '').padStart(2, '0') || '00';
+    const fname = `${idx}-${slugify(job.title)}.md`;
+    writeFileSync(join(runDir, fname), `# ${job.title}\n\n**Fase:** ${job.phase} · **Tjeneste:** ${job.serviceId ?? '—'}\n\n${text}\n`);
+    return fname;
+  } catch { return null; }
+}
+
+function readDeliverables(runDir, jobs, dependsOn, doneText) {
+  const out = [];
+  for (const d of dependsOn) {
+    const src = jobs[d];
+    const text = src ? doneText.get(src.id) : null;
+    if (src && typeof text === 'string' && text.trim()) {
+      const idx = src.id.replace(/\D/g, '').padStart(2, '0') || '00';
+      const fname = `${idx}-${slugify(src.title)}.md`;
+      let body = text.slice(0, 2600);
+      try {
+        const p = join(runDir, fname);
+        if (existsSync(p)) body = readFileSync(p, 'utf8').slice(0, 2600);
+      } catch { /* brug tekst i stedet */ }
+      out.push(`--- Leverance fra "${src.title}" (${fname}) ---\n${body}`);
+    }
+  }
+  return out;
+}
+
+// ---- Omkostningsregnskab (idé 8) --------------------------------------------
+// CLI/lokale = abonnement (0 kr). sub-api = abonnement-dækket men tælles.
+// paid-api kan ikke nås uden allowPaidApis, så regnskab viser altid 0 kr for dem.
+function recordUsage(run, serviceId) {
+  const svc = serviceById(serviceId);
+  if (!svc) return;
+  run.usage = run.usage ?? { byService: {}, jobs: 0 };
+  run.usage.jobs += 1;
+  const cur = run.usage.byService[serviceId] ?? { jobs: 0, kind: svc.kind };
+  cur.jobs += 1;
+  run.usage.byService[serviceId] = cur;
+}
+
+export function usageCostKr(usage) {
+  let kr = 0;
+  for (const [id, u] of Object.entries(usage?.byService ?? {})) {
+    if (u.kind === 'paid-api') kr += u.jobs * 0.25; // estimat, når låst op
+  }
+  return Math.round(kr * 100) / 100;
+}
+
+// ---- Orkestrator: planlægning + eksekvering ----------------------------------
+export async function pickOrchestrator(cfg, availability) {
+  const { prefs } = aiCfg(cfg);
+  const order = [prefs.orchestrator, 'claude', 'codex', 'kimi', 'gemini', 'qwen'].filter(Boolean);
+  for (const id of order) if (availability[id]?.available) return id;
+  return null;
+}
+
+const PLAN_SCHEMA = `Svar KUN med JSON (intet andet): {"jobs":[{"title":string,"service":string,"phase":"koncept"|"design"|"prototype"|"produktion"|"test"|"polering"|"release","dependsOn":number[],"description":string}]}`;
+
+export async function planWithLLM({ orchestratorId, goal, bible, cfg, dirs, availability, extra }) {
+  const roster = AI_SERVICES.map((s) => {
+    const a = availability[s.id];
+    return `- ${s.id} (${s.name}): stærke sider: ${s.strengths.join(', ')} — ${a?.available ? 'TILGÆNGELIG' : 'ikke tilgængelig'}`;
+  }).join('\n');
+  const runMem = runsMemoryTail(dirs);
+  const prompt = `Du er orkestrator for et AI-drevet projekt. Mål: ${goal}\n\n${bible ? `Projektets bibel (roller/stil): ${bible.slice(0, 6000)}\n\n` : ''}${runMem ? `Tidligere kørsler (kontekst — undgå at gentage fejl):\n${runMem}\n\n` : ''}Roster:\n${roster}\n\nFordel arbejdet til de TILGÆNGELIGE tjenester efter deres stærke sider. 4-10 jobs med afhængigheder (dependsOn = indeks i listen, tidligere jobs). ${extra ?? ''} ${PLAN_SCHEMA}`;
+  const raw = await runChat({ serviceId: orchestratorId, messages: [{ role: 'user', text: prompt }], cfg, dirs });
+  const m = raw.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('Orkestratoren returnerede ikke en plan');
+  const plan = JSON.parse(m[0]);
+  if (!Array.isArray(plan.jobs)) throw new Error('Planen manglede jobs');
+  return plan.jobs.map((j, i) => ({
+    id: `job-${i}`,
+    title: String(j.title ?? `Job ${i + 1}`),
+    serviceId: availability[j.service]?.available ? j.service : null,
+    phase: j.phase ?? 'produktion',
+    dependsOn: Array.isArray(j.dependsOn) ? j.dependsOn.filter((d) => d < i) : [],
+    description: String(j.description ?? ''),
+  }));
+}
+
+// Regelbaseret fallback (ingen orkestrator tilgængelig): fordel efter styrker.
+function planByRules({ goal, availability }) {
+  const pick = (...ids) => ids.find((id) => availability[id]?.available) ?? null;
+  const steps = [
+    { title: 'Afklar mål og scope', svc: pick('claude', 'kimi', 'gemini', 'qwen'), phase: 'koncept', desc: `Afklar mål, scope og succeskriterier for: ${goal}` },
+    { title: 'Design og struktur', svc: pick('gemini', 'claude', 'kimi'), phase: 'design', desc: 'Lav design, struktur og oversigt over leverancer.' },
+    { title: 'Byg prototype', svc: pick('codex', 'qwen', 'claude'), phase: 'prototype', desc: 'Implementér en første prototype ud fra designet.' },
+    { title: 'Produktion', svc: pick('codex', 'kimi', 'claude'), phase: 'produktion', desc: 'Færdiggør kerneproduktionen.' },
+    { title: 'Medieproduktion', svc: pick('meshy', 'elevenlabs'), phase: 'produktion', desc: 'Lav nødvendige medieaktiver (3D/lyd) hvis relevant.' },
+    { title: 'Test og feedback', svc: pick('gemini', 'claude'), phase: 'test', desc: 'Gennemgå resultatet, find fejl og forbedringer.' },
+    { title: 'Polering', svc: pick('codex', 'claude'), phase: 'polering', desc: 'Ret og polér ud fra feedback.' },
+    { title: 'Release', svc: pick('claude', 'kimi', 'codex'), phase: 'release', desc: 'Lav frigørelsesnoter og sidste tjek.' },
+  ];
+  const jobs = [];
+  steps.forEach((s, i) => {
+    if (!s.svc) return;
+    jobs.push({ id: `job-${i}`, title: s.title, serviceId: s.svc, phase: s.phase, dependsOn: i === 0 ? [] : [i - 1], description: s.desc });
+  });
+  return jobs;
+}
+
+// ---- Specifikke kørselsformer (idé 2 + 12 + 18) -------------------------------
+// Debattilstand: N gratis motorer svarer på samme spørgsmål; dommeren smelter sammen.
+// Afstemning: dommeren vælger det bedste svar og begrunder.
+// Rolle-pipeline: arkitekt → koder → reviewer (anden service!) → tester.
+function buildDebatePlan({ goal, availability, vote }) {
+  const free = ['claude', 'codex', 'kimi', 'gemini', 'qwen'].filter((id) => availability[id]?.available).slice(0, 3);
+  if (free.length < 2) return null;
+  const judge = ['claude', 'kimi', 'gemini', 'codex'].find((id) => availability[id]?.available);
+  if (!judge) return null;
+  const jobs = free.map((id, i) => ({
+    id: `job-${i}`,
+    title: vote ? `Svar fra ${availability[id].name}` : `Indlæg fra ${availability[id].name}`,
+    serviceId: id,
+    phase: 'koncept',
+    dependsOn: [],
+    description: vote
+      ? `Besvar følgende så godt du kan (du deltager i en afstemning — giv dit bedste endelige svar):\n${goal}`
+      : `Giv dit professionelle bud på følgende (du deltager i et panels debat):\n${goal}`,
+  }));
+  jobs.push({
+    id: `job-${free.length}`,
+    title: vote ? 'Dommer: vælg det bedste svar' : 'Dommer: saml debatten',
+    serviceId: judge,
+    phase: 'test',
+    dependsOn: free.map((_, i) => i),
+    description: vote
+      ? `Du er dommer. Ovenstående svar kommer fra forskellige AI-modeller. Vælg det bedste svar, begrund dit valg, og præsentér derefter vinder-svaret som det endelige svar på: ${goal}`
+      : `Du er ordstyrer. Ovenstående indlæg kommer fra forskellige AI-modeller. Sammenfag de bedste pointer fra hvert indlæg til ét samlet, skarpt svar på: ${goal}`,
+  });
+  return jobs;
+}
+
+// Race-tilstand (A/B-race): to forskellige motorer løser samme opgave uafhængigt;
+// en tredje (dommer) kårer vinderen og præsenterer det endelige svar.
+function buildRacePlan({ goal, availability }) {
+  const free = ['claude', 'codex', 'kimi', 'gemini', 'qwen'].filter((id) => availability[id]?.available);
+  if (free.length < 3) return null;
+  const [a, b] = free;
+  const judge = free.find((id) => id !== a && id !== b) ?? free[2];
+  return [
+    {
+      id: 'job-0',
+      title: `Kandidat A: ${availability[a].name}`,
+      serviceId: a,
+      phase: 'produktion',
+      dependsOn: [],
+      description: `Du er KANDIDAT A i et race. Løs opgaven så godt du kan — kun det bedste svar vinder:\n${goal}`,
+    },
+    {
+      id: 'job-1',
+      title: `Kandidat B: ${availability[b].name}`,
+      serviceId: b,
+      phase: 'produktion',
+      dependsOn: [],
+      description: `Du er KANDIDAT B i et race. Løs opgaven så godt du kan — kun det bedste svar vinder:\n${goal}`,
+    },
+    {
+      id: 'job-2',
+      title: 'Dommer: kåring',
+      serviceId: judge,
+      phase: 'test',
+      dependsOn: [0, 1],
+      description: `Du er dommer i et race mellem to AI-modeller. Begge kandidater har løst: ${goal}\n\nBedøm begge svar kritisk (korrekthed, kvalitet, fuldstændighed). Forklar kort forskellene, kår en vinder — og aflever derefter vinderens svar som det ENDELIGE svar på opgaven.`,
+    },
+  ];
+}
+
+function buildRolesPlan({ goal, availability, bible }) {
+  const pick = (...ids) => ids.find((id) => availability[id]?.available) ?? null;
+  const arch = pick('claude', 'kimi', 'gemini');
+  const coder = pick('codex', 'qwen', 'kimi');
+  const reviewer = pick('kimi', 'gemini', 'claude');
+  const tester = pick('gemini', 'claude', 'codex');
+  const jobs = [];
+  if (arch) jobs.push({ id: 'job-0', title: 'Arkitekt: spec', serviceId: arch, phase: 'design', dependsOn: [], description: `Du er ARKITEKT. Skriv en kort, præcis spec (krav, struktur, filer, grænseflader) for: ${goal}.${bible ? ` Respekér projektets bibel.` : ''}` });
+  if (coder) jobs.push({ id: `job-${jobs.length}`, title: 'Koder: implementér', serviceId: coder, phase: 'produktion', dependsOn: jobs.length ? [jobs.length - 1] : [], description: `Du er KODER. Implementér ud fra arkitektens spec. Aflever KØRbar, komplet kode — ingen stedholdere.` });
+  if (reviewer) jobs.push({ id: `job-${jobs.length}`, title: 'Reviewer: gennemgang', serviceId: reviewer, phase: 'test', dependsOn: [jobs.length - 1], description: `Du er REVIEWER (en ANDEN model end koderen). Gennemgå koden kritisk: fejl, sikkerhed, kvalitet, bibel-overholdelse. Returnér en nummereret liste over fund + konkrete rettelser.` });
+  if (tester) jobs.push({ id: `job-${jobs.length}`, title: 'Tester: verificér', serviceId: tester, phase: 'test', dependsOn: [jobs.length - 1], description: `Du er TESTER. Skriv og beskriv tests der verificerer løsningen, kør dem hvis muligt (ellers mentalt), og rapportér pas/fail + eventuelle rettelser.` });
+  return jobs.length >= 2 ? jobs : null;
+}
+
+
+// ---- Kvalitets-dommer (auto-judge): scorer hver leverance mod opgaven ----
+const JUDGE_SCHEMA = `Svar KUN med JSON (intet andet): {"score":number(0-10),"note":string}`;
+
+async function judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs }) {
+  const prompt = `Du er kvalitets-dommer for et AI-projekt.\nProjektmål: ${String(goal).slice(0, 800)}\n${bible ? `Bibel (stil/krav): ${String(bible).slice(0, 1200)}\n` : ''}Job: ${job.title}\nOpgavebeskrivelse: ${String(job.description ?? '').slice(0, 1200)}\n\nLeverancen:\n${String(text).slice(0, 6000)}\n\nBedøm leverancen mod opgavebeskrivelsen: 0-10, hvor 6 er "accepterbar" og 8+ er "rigtig god". Giv én kort, konkret begrundelse på dansk. ${JUDGE_SCHEMA}`;
+  const raw = await runChat({ serviceId: judgeId, messages: [{ role: 'user', text: prompt }], cfg, dirs });
+  const m = raw.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('Dommeren returnerede ikke JSON');
+  const j = JSON.parse(m[0]);
+  return { score: Math.max(0, Math.min(10, Number(j.score) || 0)), note: String(j.note ?? '').slice(0, 300) };
+}
+
+// ---- Begrænset kontekst-grep: læs brugerudpegede filer ind som kontekst ----
+function readContextFiles(runDir, cwd, files) {
+  if (!Array.isArray(files) || !files.length) return [];
+  const out = [];
+  for (const f of files.slice(0, 3)) {
+    const rel = String(f ?? '').trim();
+    if (!rel || rel.includes('..')) continue;
+    for (const base of [runDir, cwd]) {
+      const p = join(base, rel);
+      if (existsSync(p) && p.startsWith(base)) {
+        try {
+          out.push({ role: 'user', text: `Kontekst fra filen "${rel}" (brugeren har udpeget den):\n\`\`\`\n${readFileSync(p, 'utf8').slice(0, 4000)}\n\`\`\`` });
+        } catch { /* fil kunne ikke læses */ }
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+// ---- live swarm-tilstand (deles til alle WS-klienter) ----------------------
+export const swarmState = { active: null, last: null };
+// Aktive kørsler med kontrol-håndtag: beskedindsprøjtning, skip, godkendelse, aflysning.
+export const activeRuns = new Map(); // runId -> { run, instructions: [], skip: Set, resolveApproval, mode }
+
+function updateSwarm(run, obj) {
+  try {
+    if (obj.type === 'orchestrator') {
+      run.orchestratorId = obj.serviceId ?? null;
+      run.mode = obj.mode ?? null;
+    } else if (obj.type === 'plan') {
+      run.jobs = (obj.jobs ?? []).map((j) => ({
+        ...j,
+        status: 'queued',
+        liveText: '',
+        notes: [],
+        deltaCount: 0,
+        startedAt: null,
+        finishedAt: null,
+        text: '',
+        artifacts: [],
+        error: null,
+        subagents: [],
+      }));
+    } else if (obj.type === 'subagent_start') {
+      const j = run.jobs.find((x) => x.id === obj.jobId);
+      if (j) {
+        j.subagents = [
+          ...(j.subagents ?? []).filter((s) => s.subId !== obj.subId),
+          { subId: obj.subId, name: obj.name, status: 'running', startedAt: Date.now(), finishedAt: null, text: '' },
+        ];
+      }
+    } else if (obj.type === 'subagent_delta') {
+      const j = run.jobs.find((x) => x.id === obj.jobId);
+      const s = j?.subagents?.find((x) => x.subId === obj.subId);
+      if (s) s.text = ((s.text ?? '') + String(obj.delta ?? '')).slice(-300);
+    } else if (obj.type === 'subagent_done') {
+      const j = run.jobs.find((x) => x.id === obj.jobId);
+      const s = j?.subagents?.find((x) => x.subId === obj.subId);
+      if (s) { s.status = 'done'; s.text = String(obj.text ?? '').slice(0, 400); s.finishedAt = Date.now(); }
+    } else if (obj.type === 'job_start') {
+      const j = run.jobs.find((x) => x.id === obj.job?.id);
+      if (j) { j.status = 'running'; j.startedAt = Date.now(); }
+    } else if (obj.type === 'job_delta') {
+      const j = run.jobs.find((x) => x.id === obj.jobId);
+      if (j) {
+        j.deltaCount = (j.deltaCount ?? 0) + 1;
+        j.liveText = ((j.liveText ?? '') + String(obj.delta ?? '')).slice(-400);
+        j.lastDeltaAt = Date.now();
+      }
+    } else if (obj.type === 'job_status') {
+      const j = run.jobs.find((x) => x.id === obj.jobId);
+      if (j) j.notes = [...(j.notes ?? []).slice(-3), String(obj.status ?? '')];
+    } else if (obj.type === 'job_note') {
+      if (obj.jobId) {
+        const j = run.jobs.find((x) => x.id === obj.jobId);
+        if (j) j.notes = [...(j.notes ?? []).slice(-3), String(obj.note ?? '')];
+      } else {
+        run.notes = [...(run.notes ?? []).slice(-4), String(obj.note ?? '')];
+      }
+    } else if (obj.type === 'job_skipped') {
+      const j = run.jobs.find((x) => x.id === obj.jobId);
+      if (j) { j.status = 'done'; j.text = '(sprunget over)'; j.finishedAt = Date.now(); }
+    } else if (obj.type === 'job_done') {
+      const r = obj.result ?? {};
+      const j = run.jobs.find((x) => x.id === r.jobId);
+      if (j) {
+        j.status = 'done';
+        j.text = String(r.text ?? '').slice(0, 2000);
+        j.artifacts = r.artifacts ?? [];
+        j.finishedAt = Date.now();
+      }
+    } else if (obj.type === 'job_error') {
+      const j = run.jobs.find((x) => x.id === obj.jobId);
+      if (j) { j.status = 'error'; j.error = String(obj.error ?? ''); j.finishedAt = Date.now(); }
+    } else if (obj.type === 'job_healing') {
+      const j = run.jobs.find((x) => x.id === obj.jobId);
+      if (j) { j.status = 'running'; j.notes = [...(j.notes ?? []).slice(-3), `Selvhealing: forsøger igen (${obj.attempt}. forsøg)`]; }
+    } else if (obj.type === 'job_judged') {
+      const j = run.jobs.find((x) => x.id === obj.jobId);
+      if (j) { j.score = typeof obj.score === 'number' ? obj.score : null; j.judgeNote = String(obj.note ?? ''); }
+    }
+  } catch { /* swarm-tilstand er ikke kritisk */ }
+}
+
+// ---- Hierarkiske teams (idé 1/11) --------------------------------------------
+// Et job markeret med team: true fungerer som holdleder: orkestratoren laver en
+// underplan for delmålet, og holdet kører som en lille under-sværm med egne
+// subagent-linjer (inkl. live-tekst) i sværm-visningen.
+async function runTeamJob({ job, handle, goal, bible, cfg, dirs, availability, orchestratorId, track }) {
+  const subGoal = job.description || job.title;
+  track({ type: 'job_note', jobId: job.id, note: `Holdleder planlægger: ${subGoal.slice(0, 120)}` });
+  let subJobs;
+  if (orchestratorId) {
+    try {
+      subJobs = (await planWithLLM({ orchestratorId, goal: `${goal} — DELMÅL: ${subGoal}`, bible, cfg, dirs, availability, extra: 'Lav 2-4 SMÅ jobs til netop dette delmål.' })).slice(0, 4);
+    } catch { subJobs = null; }
+  }
+  if (!subJobs || !subJobs.length) {
+    subJobs = [
+      { id: 'sub-0', title: `Udfør: ${job.title}`, serviceId: job.serviceId, phase: job.phase, dependsOn: [], description: subGoal },
+      { id: 'sub-1', title: 'Kvalitetstjek', serviceId: orchestratorId ?? job.serviceId, phase: 'test', dependsOn: [0], description: `Gennemgå resultatet af "${job.title}" og ret de vigtigste fejl.` },
+    ];
+  }
+  const texts = [];
+  const pending = new Set(subJobs.map((j) => j.id));
+  const running = new Set();
+  const runSub = async (sj) => {
+    const subId = `${job.id}:${sj.id}`;
+    track({ type: 'subagent_start', jobId: job.id, subId, name: sj.title });
+    const ctx = [
+      bible ? { role: 'system', text: `Projektets bibel:\n${bible.slice(0, 4000)}\n\nOverordnet mål: ${goal}` } : { role: 'user', text: `Overordnet mål: ${goal}` },
+      { role: 'user', text: `Du er en del af holdet "${job.title}". Din opgave: ${sj.description}\n\nLav et konkret, færdigt resultat. Svar på dansk.` },
+    ].filter(Boolean);
+    try {
+      let acc = '';
+      const text = await runChat({
+        serviceId: sj.serviceId, messages: ctx, cfg, dirs, cwd: handle.runDir,
+        onDelta: (d) => { acc = (acc + d).slice(-300); track({ type: 'subagent_delta', jobId: job.id, subId, delta: d }); },
+        onSubagent: (sub) => track({ type: sub.phase === 'start' ? 'subagent_start' : 'subagent_done', jobId: job.id, ...sub }),
+      });
+      texts.push(`## ${sj.title}\n${text}`);
+      track({ type: 'subagent_done', jobId: job.id, subId, text });
+    } catch (e) {
+      track({ type: 'subagent_done', jobId: job.id, subId, text: `Fejl: ${e.message}` });
+    }
+    pending.delete(sj.id);
+  };
+  for (;;) {
+    const ready = subJobs.filter((j) => pending.has(j.id) && !running.has(j.id) && j.dependsOn.every((d) => !pending.has(subJobs[d]?.id)));
+    while (ready.length && running.size < 2) {
+      const sj = ready.shift();
+      running.add(sj.id);
+      runSub(sj).finally(() => running.delete(sj.id));
+    }
+    if (!running.size && !ready.length) break;
+    if (handle.skip.has(job.id)) break;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return texts.join('\n\n');
+}
+
+// ---- Hovedkørsel --------------------------------------------------------------
+export async function executeRun({ runId, goal, bible, predefinedJobs, cfg, dirs, emit, mode = 'standard', pauseAfterPlan = false, resumeDir = null }) {
+  const run = {
+    runId, goal,
+    mode,
+    startedAt: Date.now(),
+    orchestratorId: null,
+    status: 'running',
+    jobs: [],
+    notes: [],
+    events: [],
+    usage: { byService: {}, jobs: 0 },
+    instructions: [],
+    finishedAt: null,
+  };
+  const handle = { run, instructions: run.instructions, skip: new Set(), runDir: join(dirs.runs, 'work', runId), cancelled: false };
+  activeRuns.set(runId, handle);
+  initRunWorkdir(handle.runDir, goal);
+  swarmState.active = run;
+  // Event-log til replay/simulering: alle strukturelle hændelser med tidsstempel.
+  const track = (obj) => {
+    if (!['job_delta', 'delta'].includes(obj.type)) run.events.push({ at: Date.now(), ...obj });
+    else if ((run.events.length === 0 || run.events[run.events.length - 1].type !== 'job_delta')) run.events.push({ at: Date.now(), type: 'job_delta', jobId: obj.jobId });
+    updateSwarm(run, obj);
+    emit({ ...obj, runId, goal });
+  };
+  try {
+  track({ type: 'run_start', runId, goal, startedAt: new Date().toISOString() });
+  const availability = await serviceAvailability(cfg);
+  const orchestratorId = await pickOrchestrator(cfg, availability);
+  track({ type: 'orchestrator', serviceId: orchestratorId, mode: orchestratorId ? 'llm' : 'regler' });
+
+  let jobs;
+  if (Array.isArray(predefinedJobs) && predefinedJobs.length) {
+    jobs = predefinedJobs;
+  } else if (mode === 'debate' || mode === 'vote') {
+    jobs = buildDebatePlan({ goal, availability, vote: mode === 'vote' })
+      ?? planByRules({ goal, availability });
+    if (!jobs.some((j) => j.title.startsWith('Dommer'))) track({ type: 'job_note', jobId: null, note: 'For få gratis motorer til debat — bruger standardplan.' });
+  } else if (mode === 'roles') {
+    jobs = buildRolesPlan({ goal, availability, bible })
+      ?? planByRules({ goal, availability });
+  } else if (mode === 'race') {
+    jobs = buildRacePlan({ goal, availability })
+      ?? planByRules({ goal, availability });
+    if (!jobs.some((j) => j.title.startsWith('Dommer'))) track({ type: 'job_note', jobId: null, note: 'For få gratis motorer til race (kræver 3) — bruger standardplan.' });
+  } else if (orchestratorId) {
+    try { jobs = await planWithLLM({ orchestratorId, goal, bible, cfg, dirs, availability }); }
+    catch (e) { track({ type: 'job_note', jobId: null, note: `Orkestrator-plan fejlede (${e.message}) — bruger regelbaseret plan.` }); jobs = planByRules({ goal, availability }); }
+  } else {
+    jobs = planByRules({ goal, availability });
+  }
+
+  // Godkendelsespause (idé 1/2): planen sendes til klienten og kørslen venter,
+  // indtil brugeren godkender — evt. med redigerede jobs.
+  if (pauseAfterPlan) {
+    const evt = { type: 'plan', jobs: jobs.map(({ id, title, serviceId, phase, dependsOn, description }) => ({ id, title, serviceId, phase, dependsOn, description })) };
+    run.events.push({ at: Date.now(), ...evt });
+    updateSwarm(run, evt);
+    emit({ ...evt, runId, goal, paused: true });
+    jobs = await new Promise((resolve) => {
+      handle.jobsSnapshot = jobs;
+      handle.resolveApproval = resolve;
+      // Auto-godkend efter 10 min, så kørslen aldrig hænger uendeligt.
+      handle.approvalTimer = setTimeout(() => { if (handle.resolveApproval) resolve(handle.jobsSnapshot ?? []); }, 10 * 60 * 1000);
+    });
+    clearTimeout(handle.approvalTimer);
+    handle.resolveApproval = null;
+    jobs = (jobs ?? []).map((j, i) => ({
+      id: j.id ?? `job-${i}`,
+      title: String(j.title ?? `Job ${i + 1}`),
+      serviceId: j.serviceId && availability[j.serviceId]?.available ? j.serviceId : j.serviceId,
+      phase: j.phase ?? 'produktion',
+      dependsOn: Array.isArray(j.dependsOn) ? j.dependsOn : [],
+      description: String(j.description ?? ''),
+    })).filter((j) => j.title.trim());
+    track({ type: 'job_note', jobId: null, note: `Plan godkendt — ${jobs.length} jobs kører nu.` });
+  }
+  if (handle.cancelled) throw new Error('Kørslen er aflyst af brugeren.');
+  track({ type: 'plan', jobs: jobs.map(({ id, title, serviceId, phase, dependsOn, description, team }) => ({ id, title, serviceId, phase, dependsOn, description, team: Boolean(team) })) });
+
+  const doneText = new Map();
+  const results = [];
+  const pending = new Set(jobs.map((j) => j.id));
+  const { prefs } = aiCfg(cfg);
+
+  const runJob = async (job) => {
+    if (handle.skip.has(job.id)) {
+      track({ type: 'job_skipped', jobId: job.id });
+      doneText.set(job.id, '');
+      pending.delete(job.id);
+      return;
+    }
+    if (handle.cancelled) { pending.delete(job.id); return; }
+    track({ type: 'job_start', job });
+
+    const serviceMemory = serviceMemoryTail(dirs, job.serviceId);
+    const userInstructions = run.instructions.length
+      ? [{ role: 'user', text: `INSTRUKTIONER FRA BRUGEREN (gælder for resten af kørslen — følg dem):\n${run.instructions.map((x, i) => `${i + 1}. ${x}`).join('\n')}` }]
+      : [];
+    const deliverables = readDeliverables(resumeDir ?? handle.runDir, jobs, job.dependsOn, doneText);
+    const baseCtx = [
+      bible ? { role: 'system', text: `Projektets bibel:\n${bible.slice(0, 6000)}` } : null,
+      serviceMemory ? { role: 'system', text: `Hvad du tidligere har lavet for denne bruger (din hukommelse):\n${serviceMemory}` } : null,
+      ...userInstructions,
+      { role: 'user', text: `Projektmål: ${goal}\n\nDin opgave (${job.phase}): ${job.title}\n${job.description}\n\nLav et konkret, færdigt resultat. Svar på dansk.` },
+      ...deliverables.map((d) => ({ role: 'user', text: d })),
+      ...readContextFiles(handle.runDir, dirs.cwd, job.context),
+    ].filter(Boolean);
+
+    const attempt = async (extra) => {
+      const text = job.team
+        ? await runTeamJob({ job, run, handle, goal, bible, cfg, dirs, availability, orchestratorId, emit, track })
+        : await runChat({
+            serviceId: job.serviceId, messages: [...baseCtx, ...extra], cfg, dirs, cwd: handle.runDir,
+            onDelta: (d) => track({ type: 'job_delta', jobId: job.id, delta: d }),
+            onSubagent: (sub) => track({ type: sub.phase === 'start' ? 'subagent_start' : 'subagent_done', jobId: job.id, ...sub }),
+          });
+      return text;
+    };
+
+    try {
+      let text;
+      try {
+        text = await attempt([]);
+      } catch (e1) {
+        // Selvhealing (idé 3): ét genforsøg med fejlen som kontekst.
+        if (prefs.selfHeal && !handle.skip.has(job.id) && !handle.cancelled) {
+          track({ type: 'job_healing', jobId: job.id, attempt: 2, error: String(e1.message).slice(0, 300) });
+          track({ type: 'job_note', jobId: job.id, note: 'Forsøger igen med fejlkontekst (selvhealing).' });
+          text = await attempt([{ role: 'user', text: `Dit første forsøg slog fejl med: "${e1.message}". Ret årsagen og leverér resultatet.` }]);
+        } else {
+          throw e1;
+        }
+      }
+      recordUsage(run, job.serviceId);
+      // Kvalitets-dommer (idé: auto-judge): en ANDEN tilgængelig tjeneste scorer
+      // leverancen; under 6/10 udløser ét forbedringsforsøg med dommerens feedback.
+      let score = null;
+      let judgeNote = null;
+      if (prefs.autoJudge !== false && !job.team) {
+        const judgeId = ['claude', 'kimi', 'gemini', 'codex'].find((id) => id !== job.serviceId && availability[id]?.available);
+        if (judgeId) {
+          try {
+            const judged = await judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs });
+            score = judged.score;
+            judgeNote = judged.note;
+            track({ type: 'job_judged', jobId: job.id, score, note: judgeNote, judge: judgeId });
+            if (judged.score < 6 && !handle.skip.has(job.id) && !handle.cancelled) {
+              track({ type: 'job_note', jobId: job.id, note: `Dommer: ${judged.score}/10 — forbedrer leverancen.` });
+              const improved = await attempt([{ role: 'user', text: `Kvalitets-dommeren gav kun ${judged.score}/10 med begrundelsen: "${judged.note}". Ret og forbedr leverancen, så den fortjener mindst 8/10.` }]);
+              try {
+                const rej = await judgeDeliverable({ judgeId, job, text: improved, goal, bible, cfg, dirs });
+                if (rej.score >= score) {
+                  text = improved;
+                  score = rej.score;
+                  judgeNote = rej.note;
+                  track({ type: 'job_judged', jobId: job.id, score, note: judgeNote, judge: judgeId, round: 2 });
+                }
+              } catch { /* behold oprindelige leverance */ }
+            }
+          } catch (e) {
+            track({ type: 'job_note', jobId: job.id, note: `Dommer fejlede: ${String(e.message).slice(0, 100)}` });
+          }
+        }
+      }
+      appendServiceMemory(dirs, job.serviceId, `- ${new Date().toISOString().slice(0, 16).replace('T', ' ')} · "${job.title}" · ${text.length} tegn leveret${score !== null ? ` · dommer ${score}/10` : ''}`);
+      const fname = writeDeliverable(handle.runDir, job, text);
+      if (fname) gitCommit(handle.runDir, `${job.title}`);
+      doneText.set(job.id, text);
+      const artifacts = await produceMedia(job, text, cfg, dirs, track);
+      const res = { jobId: job.id, title: job.title, serviceId: job.serviceId, phase: job.phase, text, artifacts, deliverable: fname, score, judgeNote };
+      results.push(res);
+      track({ type: 'job_done', result: res });
+    } catch (e) {
+      recordUsage(run, job.serviceId);
+      track({ type: 'job_error', jobId: job.id, error: e.message });
+    }
+    pending.delete(job.id);
+  };
+
+  // Kør i topologisk rækkefølge, op til 2 parallelt.
+  const running = new Set();
+  for (;;) {
+    if (handle.cancelled) break;
+    const ready = jobs.filter((j) => pending.has(j.id) && !running.has(j.id) && j.dependsOn.every((d) => !pending.has(jobs[d]?.id)));
+    while (ready.length && running.size < 2) {
+      const job = ready.shift();
+      running.add(job.id);
+      runJob(job).finally(() => running.delete(job.id));
+    }
+    if (!running.size && !ready.length) {
+      const stuck = jobs.filter((j) => pending.has(j.id));
+      if (stuck.length) track({ type: 'job_note', jobId: null, note: `${stuck.length} job(s) sprunget over pga. afhængigheder: ${stuck.map((j) => j.title).join(', ')}` });
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+
+  run.status = handle.cancelled ? 'error' : 'running';
+  writeFileSync(join(dirs.runs, `${runId}.json`), JSON.stringify({ runId, goal, mode, orchestratorId, jobs: run.jobs, results, usage: run.usage, events: run.events, finishedAt: new Date().toISOString() }, null, 2));
+  appendRunMemory(dirs, run);
+  gitCommit(handle.runDir, 'Kørsel afsluttet');
+  track({ type: 'done', summary: results.map((r) => ({ title: r.title, serviceId: r.serviceId })) });
+  } finally {
+    activeRuns.delete(runId);
+    if (swarmState.active === run) {
+      if (run.status === 'running') run.status = handle.cancelled ? 'error' : 'done';
+      run.finishedAt = Date.now();
+      swarmState.last = run;
+      swarmState.active = null;
+    }
+  }
+}
+
+// ---- Pipeline-skabeloner (idé 16) ---------------------------------------------
+const BUILTIN_TEMPLATES = [
+  {
+    id: 'tpl-spilfabrikken', builtin: true, name: 'Spilfabrikken',
+    description: 'Koncept → konceptkunst → 3D-model → kode → lyd → trailer → release-note',
+    jobs: [
+      { id: 'job-0', title: 'Koncept og spildesign', serviceId: 'kimi', phase: 'koncept', dependsOn: [], description: 'Lav et kompakt spilkoncept: kernemekanik, målgruppe, stemning og 3 sælgende bulletpoints.' },
+      { id: 'job-1', title: 'Visuel retning', serviceId: 'gemini', phase: 'design', dependsOn: [0], description: 'Beskriv den visuelle stil, farvepalet og karakterdesign ud fra konceptet.' },
+      { id: 'job-2', title: '3D-hovedkarakter (Meshy)', serviceId: 'meshy', phase: 'produktion', dependsOn: [1], description: 'Generér hovedkarakteren som 3D-model ud fra den visuelle retning.' },
+      { id: 'job-3', title: 'Spilkode-prototype', serviceId: 'codex', phase: 'prototype', dependsOn: [0], description: 'Byg en kørbar prototype af kernemekanikken. Brug beskrivelsen af karakteren som input.' },
+      { id: 'job-4', title: 'Lydlogo og stemning (ElevenLabs)', serviceId: 'elevenlabs', phase: 'produktion', dependsOn: [1], description: 'Skriv en kort åbningstale/voiceover til traileren, ca. 3 sætninger, dramatisk.' },
+      { id: 'job-5', title: 'Trailer-script (HeyGen)', serviceId: 'heygen', phase: 'release', dependsOn: [4], description: 'Lav en præsentationstale til spillet på ca. 4 sætninger der sælger konceptet.' },
+      { id: 'job-6', title: 'Release-note', serviceId: 'claude', phase: 'release', dependsOn: [3, 5], description: 'Skriv en frigørelsesnote der samler koncept, features og medier.' },
+    ],
+  },
+  {
+    id: 'tpl-hurtig-feature', builtin: true, name: 'Hurtig feature',
+    description: 'Spec → kode → review — én feature fra idé til reviewed kode',
+    jobs: [
+      { id: 'job-0', title: 'Skriv spec', serviceId: 'claude', phase: 'koncept', dependsOn: [], description: 'Skriv en kort spec for featuren: formål, grænseflade, edge cases, testkriterier.' },
+      { id: 'job-1', title: 'Implementér', serviceId: 'codex', phase: 'produktion', dependsOn: [0], description: 'Implementér featuren præcist efter spec. Aflever komplet kode.' },
+      { id: 'job-2', title: 'Review', serviceId: 'kimi', phase: 'test', dependsOn: [1], description: 'Review koden som en kritisk seniorudvikler. Find fejl og foreslå konkrete rettelser.' },
+    ],
+  },
+  {
+    id: 'tpl-indholdspakke', builtin: true, name: 'Indholdspakke',
+    description: 'Emne → tekst → lyd → video — færdig indholdspakke til ét emne',
+    jobs: [
+      { id: 'job-0', title: 'Vinkel og disposition', serviceId: 'gemini', phase: 'koncept', dependsOn: [], description: 'Find den skarpeste vinkel og lav en disposition i 5 punkter.' },
+      { id: 'job-1', title: 'Tekst', serviceId: 'kimi', phase: 'produktion', dependsOn: [0], description: 'Skriv den færdige tekst ud fra dispositionen — klar til oplæsning.' },
+      { id: 'job-2', title: 'Oplæsning (ElevenLabs)', serviceId: 'elevenlabs', phase: 'produktion', dependsOn: [1], description: 'Lav en MP3-tale af teksten.' },
+      { id: 'job-3', title: 'Video-tale (HeyGen)', serviceId: 'heygen', phase: 'release', dependsOn: [1], description: 'Lav en avatar-video der præsenterer teksten.' },
+    ],
+  },
+];
+
+export function loadTemplates(dirs) {
+  try {
+    const p = join(dirs.runs, 'ai-templates.json');
+    const user = existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : [];
+    return [...BUILTIN_TEMPLATES, ...(Array.isArray(user) ? user : [])];
+  } catch { return BUILTIN_TEMPLATES; }
+}
+
+export function saveUserTemplates(dirs, list) {
+  try {
+    writeFileSync(join(dirs.runs, 'ai-templates.json'), JSON.stringify(list.filter((t) => !t.builtin), null, 2));
+  } catch { /* ikke kritisk */ }
+}
+
+// ---- Autonome triggere (idé 15) ------------------------------------------------
+// cron: minut-baseret plan (5 felter, * , og */n understøttes) — kører et mål på fast tidspunkt.
+// webhook: POST /api/ai/hook/<token> starter kørslen (fx fra GitHub eller en færdig Meshy-job).
+function cronMatches(expr, date) {
+  const fields = String(expr ?? '').trim().split(/\s+/);
+  if (fields.length !== 5) return false;
+  const vals = [date.getMinutes(), date.getHours(), date.getDate(), date.getMonth() + 1, date.getDay()];
+  return fields.every((f, i) => {
+    if (f === '*') return true;
+    const m = f.match(/^\*\/(\d+)$/);
+    if (m) return vals[i] % Number(m[1]) === 0;
+    return Number(f) === vals[i];
+  });
+}
+
+let triggerTimer = null;
+export function startTriggerScheduler({ loadConfig, dirs, broadcast }) {
+  if (triggerTimer) return;
+  const lastFire = new Map();
+  triggerTimer = setInterval(async () => {
+    try {
+      const cfg = loadConfig();
+      const triggers = cfg.aiTriggers ?? [];
+      if (!triggers.length) return;
+      const now = new Date();
+      const minuteKey = now.toISOString().slice(0, 16);
+      for (const tr of triggers) {
+        if (tr.kind !== 'cron' || !tr.enabled) continue;
+        if (!cronMatches(tr.cron, now)) continue;
+        if (lastFire.get(tr.id) === minuteKey) continue;
+        lastFire.set(tr.id, minuteKey);
+        if (swarmState.active) { broadcast?.({ type: 'toast', level: 'info', text: `Trigger "${tr.name}" sprunget over — en kørsel er allerede aktiv.` }); continue; }
+        const runId = randomUUID().slice(0, 12);
+        broadcast?.({ type: 'toast', level: 'info', text: `Trigger "${tr.name}" starter en kørsel: ${String(tr.goal).slice(0, 80)}` });
+        executeRun({ runId, goal: tr.goal, bible: tr.bible ?? '', cfg, dirs, mode: tr.mode ?? 'standard', emit: (obj) => broadcast?.({ kind: 'ai', ...obj, runId }) }).catch(() => {});
+      }
+    } catch { /* triggerfejl må ikke crashe companion */ }
+  }, 15_000);
+}
