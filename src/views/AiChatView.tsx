@@ -471,7 +471,8 @@ export function AiChatView() {
     const goal = text.trim();
     if (!goal || suggestingPlan) return;
     setSuggestingPlan(true);
-    const r = await suggestTemplate(goal, bible || undefined);
+    const attachments = pending.map(({ dataUrl: _d, ...rest }) => rest);
+    const r = await suggestTemplate(goal, bible || undefined, attachments);
     setSuggestingPlan(false);
     if (r.ok && r.jobs?.length) setPlanDraft(r.jobs.map((j) => ({ ...j, dependsOn: j.dependsOn ?? [] })));
   };
@@ -511,7 +512,7 @@ export function AiChatView() {
       const msgText = () => (useStore.getState().aiChats.find((c) => c.id === chat.id)?.messages ?? []).find((x) => x.id === msg.id)?.text ?? '';
       const jobText: Record<string, string> = {};
       await streamOrchestrate(
-        { goal: body, bible: bible || undefined, mode: runMode, pauseAfterPlan: pausePlan, jobs: planDraft ?? undefined },
+        { goal: body, bible: bible || undefined, mode: runMode, pauseAfterPlan: pausePlan, jobs: planDraft ?? undefined, attachments: atts },
         {
           onEvent: (evt) => {
             let out = msgText();
