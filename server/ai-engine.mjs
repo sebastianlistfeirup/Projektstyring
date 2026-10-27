@@ -69,6 +69,15 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     if (apiKey !== undefined && !saveKeySecrets(secrets)) {
       return res.status(500).json({ ok: false, reason: 'Kunne ikke skrive til ai-keys.json — se companion-loggen.' });
     }
+    // Gemning må ikke rapporteres som vellykket, før nøglen kan genlæses fra disken.
+    // Det fanger både Windows ACL-problemer og en gammel companion-proces uden hot-reload.
+    const persisted = loadKeySecrets();
+    if (apiKey && persisted[svc.id]?.apiKey !== String(apiKey)) {
+      return res.status(500).json({ ok: false, reason: 'Nøglen kunne ikke genlæses fra ai-keys.json. Genstart companion-serveren og prøv igen.' });
+    }
+    if (apiKey === '' && persisted[svc.id]?.apiKey) {
+      return res.status(500).json({ ok: false, reason: 'Den gamle nøgle kunne ikke fjernes fra ai-keys.json.' });
+    }
 
     cfg.aiProviders[svc.id] = {
       ...cur,
@@ -80,8 +89,12 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       ...(avatarId ? { avatarId } : {}),
       ...(voiceId ? { voiceId } : {}),
     };
-    saveConfig(cfg);
-    res.json({ ok: true });
+    try {
+      saveConfig(cfg);
+    } catch (e) {
+      return res.status(500).json({ ok: false, reason: `Kunne ikke gemme companion-konfigurationen: ${e.message}` });
+    }
+    res.json({ ok: true, hasKey: Boolean(loadKeySecrets()[svc.id]?.apiKey) });
   });
 
   // Upload: {name, mime, dataBase64} → gemt på disk; billeder kan indlæses som data-URL.
@@ -254,7 +267,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   app.post('/api/ai/triggers', (req, res) => {
     const { name, kind, cron, goal, bible, mode } = req.body ?? {};
     if (!name || !goal) return res.status(400).json({ ok: false, reason: 'name og goal kræves' });
-    if (kind === 'cron' && !cronMatches(cron, new Date()) && !/^\S+\s+\S+\s+\S+\s+\S+\s+\S+$/.test(String(cron ?? ''))) {
+    if (kind === 'cron' && !cronMatches(cron, new Date()) && !/^\S+\s+\S+\s+\S+\s+\S+$/.test(String(cron ?? ''))) {
       return res.status(400).json({ ok: false, reason: 'cron skal have 5 felter, fx "0 8 * * 1"' });
     }
     const cfg = loadConfig();
