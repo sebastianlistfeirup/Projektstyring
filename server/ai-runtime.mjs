@@ -135,7 +135,7 @@ export async function planWithLLM({ orchestratorId, goal, bible, cfg, dirs, avai
     return `- ${s.id} (${s.name}): stærke sider: ${s.strengths.join(', ')} — ${a?.available ? 'TILGÆNGELIG' : 'ikke tilgængelig'}`;
   }).join('\n');
   const runMem = runsMemoryTail(dirs);
-  const prompt = `Du er orkestrator for et AI-drevet projekt. Mål: ${goal}\n\n${bible ? `Projektets bibel (roller/stil): ${bible.slice(0, 6000)}\n\n` : ''}${runMem ? `Tidligere kørsler (kontekst — undgå at gentage fejl):\n${runMem}\n\n` : ''}Roster:\n${roster}\n\nFordel arbejdet til de TILGÆNGELIGE tjenester efter deres stærke sider. 4-10 jobs med afhængigheder (dependsOn = indeks i listen, tidligere jobs). ${extra ?? ''} ${PLAN_SCHEMA}`;
+  const prompt = `Du er orkestrator for et AI-drevet projekt. Mål: ${goal}\n\n${bible ? `Projektets bibel (roller/stil): ${bible.slice(0, 6000)}\n\n` : ''}${runMem ? `Tidligere kørsler (kontekst — undgå at gentage fejl):\n${runMem}\n\n` : ''}Roster:\n${roster}\n\nFordel arbejdet til de TILGÆNGELIGE tjenester efter deres stærke sider. Brug færrest mulige jobs (typisk 1-4, højst 10) med afhængigheder (dependsOn = indeks i listen, tidligere jobs). Respektér målets præcise scope og tilføj aldrig nye faser. Medieproduktion og release må kun planlægges, når målet udtrykkeligt beder om det. ${extra ?? ''} ${PLAN_SCHEMA}`;
   const raw = await runChat({ serviceId: orchestratorId, messages: [{ role: 'user', text: prompt }], cfg, dirs });
   const m = raw.match(/\{[\s\S]*\}/);
   if (!m) throw new Error('Orkestratoren returnerede ikke en plan');
@@ -151,24 +151,54 @@ export async function planWithLLM({ orchestratorId, goal, bible, cfg, dirs, avai
   }));
 }
 
-// Regelbaseret fallback (ingen orkestrator tilgængelig): fordel efter styrker.
-function planByRules({ goal, availability }) {
+// En afgrænset Phase A/EI-A1+EI-A2-kørsel må ikke blive til en generisk pipeline.
+// Returnér en forklaring, når planen bryder målets eksplicitte scope.
+export function planScopeIssue(jobs, goal) {
+  if (!/\b(afgrænset|phase\s+a|ei-a1|ei-a2)\b/i.test(goal)) return null;
+  if (!jobs.length) return 'Planen indeholder ingen jobs.';
+  if (jobs.length > 3) return `Planen indeholder ${jobs.length} jobs; en afgrænset kørsel må højst have 3.`;
+  const forbidden = jobs.find((j) => j.phase === 'release'
+    || ['meshy', 'elevenlabs', 'heygen'].includes(j.serviceId)
+    || /\b(medieproduktion|release)\b/i.test(j.title));
+  if (forbidden) return `Jobbet “${forbidden.title}” ligger uden for den afgrænsede kørsel.`;
+  if (/\bei-a1\b/i.test(goal) && /\bei-a2\b/i.test(goal)) {
+    const text = jobs.map((j) => `${j.title}\n${j.description}`).join('\n');
+    if (!/\b(ei-a1|baseline)\b/i.test(text) || !/\b(ei-a2|ok-coach)\b/i.test(text)) {
+      return 'Planen dækker ikke både EI-A1-baseline og EI-A2 OK-coach-kontrol.';
+    }
+  }
+  return null;
+}
+
+// Sikker fallback: bevar målet ordret i stedet for at opfinde en generisk pipeline.
+export function planByRules({ goal, availability }) {
   const pick = (...ids) => ids.find((id) => availability[id]?.available) ?? null;
   const steps = [
-    { title: 'Afklar mål og scope', svc: pick('claude', 'kimi', 'gemini', 'qwen'), phase: 'koncept', desc: `Afklar mål, scope og succeskriterier for: ${goal}` },
-    { title: 'Design og struktur', svc: pick('gemini', 'claude', 'kimi'), phase: 'design', desc: 'Lav design, struktur og oversigt over leverancer.' },
-    { title: 'Byg prototype', svc: pick('codex', 'qwen', 'claude'), phase: 'prototype', desc: 'Implementér en første prototype ud fra designet.' },
-    { title: 'Produktion', svc: pick('codex', 'kimi', 'claude'), phase: 'produktion', desc: 'Færdiggør kerneproduktionen.' },
-    { title: 'Medieproduktion', svc: pick('meshy', 'elevenlabs'), phase: 'produktion', desc: 'Lav nødvendige medieaktiver (3D/lyd) hvis relevant.' },
-    { title: 'Test og feedback', svc: pick('gemini', 'claude'), phase: 'test', desc: 'Gennemgå resultatet, find fejl og forbedringer.' },
-    { title: 'Polering', svc: pick('codex', 'claude'), phase: 'polering', desc: 'Ret og polér ud fra feedback.' },
-    { title: 'Release', svc: pick('claude', 'kimi', 'codex'), phase: 'release', desc: 'Lav frigørelsesnoter og sidste tjek.' },
+    {
+      title: 'Udfør målet uden scope-udvidelse',
+      svc: pick('codex', 'claude', 'kimi', 'qwen', 'gemini'),
+      phase: 'produktion',
+      desc: `Arbejd kun på dette mål. Tilføj ingen faser, assets, medieproduktion eller release:\n${goal}`,
+    },
+    {
+      title: 'Verificér tests og rapportér faktiske resultater',
+      svc: pick('claude', 'codex', 'kimi', 'gemini', 'qwen'),
+      phase: 'test',
+      desc: `Kør præcis de kontroller og tests, målet kræver. Rapportér faktiske kommandoer, resultater, ændrede filer og restfejl. Opfind ingen PASS-resultater:\n${goal}`,
+    },
   ];
   const jobs = [];
-  steps.forEach((s, i) => {
-    if (!s.svc) return;
-    jobs.push({ id: `job-${i}`, title: s.title, serviceId: s.svc, phase: s.phase, dependsOn: i === 0 ? [] : [i - 1], description: s.desc });
-  });
+  for (const s of steps) {
+    if (!s.svc) continue;
+    jobs.push({
+      id: `job-${jobs.length}`,
+      title: s.title,
+      serviceId: s.svc,
+      phase: s.phase,
+      dependsOn: jobs.length ? [jobs.length - 1] : [],
+      description: s.desc,
+    });
+  }
   return jobs;
 }
 
@@ -397,7 +427,7 @@ async function runTeamJob({ job, handle, goal, bible, cfg, dirs, availability, o
     const subId = `${job.id}:${sj.id}`;
     track({ type: 'subagent_start', jobId: job.id, subId, name: sj.title });
     const ctx = [
-      bible ? { role: 'system', text: `Projektets bibel:\n${bible.slice(0, 4000)}\n\nOverordnet mål: ${goal}` } : { role: 'user', text: `Overordnet mål: ${goal}` },
+      bible ? { role: 'system', text: `${bible.slice(0, 4000)}\n\nOverordnet mål: ${goal}` } : { role: 'user', text: `Overordnet mål: ${goal}` },
       { role: 'user', text: `Du er en del af holdet "${job.title}". Din opgave: ${sj.description}\n\nLav et konkret, færdigt resultat. Svar på dansk.` },
     ].filter(Boolean);
     try {
@@ -481,6 +511,12 @@ export async function executeRun({ runId, goal, bible, predefinedJobs, cfg, dirs
     jobs = planByRules({ goal, availability });
   }
 
+  const scopeIssue = planScopeIssue(jobs, goal);
+  if (scopeIssue) {
+    track({ type: 'job_note', jobId: null, note: `${scopeIssue} Bruger i stedet den sikre, målstyrede to-job-plan.` });
+    jobs = planByRules({ goal, availability });
+  }
+
   // Godkendelsespause (idé 1/2): planen sendes til klienten og kørslen venter,
   // indtil brugeren godkender — evt. med redigerede jobs.
   if (pauseAfterPlan) {
@@ -554,8 +590,9 @@ export async function executeRun({ runId, goal, bible, predefinedJobs, cfg, dirs
       try {
         text = await attempt([]);
       } catch (e1) {
-        // Selvhealing (idé 3): ét genforsøg med fejlen som kontekst.
-        if (prefs.selfHeal && !handle.skip.has(job.id) && !handle.cancelled) {
+        // Selvhealing kan ikke rette en manglende/ugyldig CLI-sti; undgå et spildt genforsøg.
+        const startupFailure = /ENOENT|Kunne ikke starte|Windows-shim/i.test(String(e1.message));
+        if (prefs.selfHeal && !startupFailure && !handle.skip.has(job.id) && !handle.cancelled) {
           track({ type: 'job_healing', jobId: job.id, attempt: 2, error: String(e1.message).slice(0, 300) });
           track({ type: 'job_note', jobId: job.id, note: 'Forsøger igen med fejlkontekst (selvhealing).' });
           text = await attempt([{ role: 'user', text: `Dit første forsøg slog fejl med: "${e1.message}". Ret årsagen og leverér resultatet.` }]);
