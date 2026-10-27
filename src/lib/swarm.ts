@@ -318,7 +318,8 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
           run: {
             ...cur,
             jobs: cur.jobs.map((j) =>
-              j.id === id ? { ...j, score: typeof evt.score === 'number' ? (evt.score as number) : null, judgeNote: String(evt.note ?? '') }
+              j.id === id
+                ? { ...j, score: typeof evt.score === 'number' ? (evt.score as number) : null, judgeNote: String(evt.note ?? '') }
                 : j,
             ),
           },
