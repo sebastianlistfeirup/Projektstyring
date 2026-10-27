@@ -536,9 +536,14 @@ async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, jsonl,
     };
     child.stdout.on('data', (d) => feed(d.toString()));
     child.stderr.on('data', (d) => { const s = d.toString(); if (!s.startsWith('∆')) feed(s); });
-    child.on('error', (e) => { clearTimeout(timer); reject(new Error(`Kunne ikke starte '${cmd}': ${e.message}`)); });
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', kill);
+      reject(new Error(`Kunne ikke starte '${cmd}': ${e.message}`));
+    });
     child.on('close', (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', kill);
       if (signal?.aborted) reject(new Error('Afbrudt'));
       else if (code === 0 || out.trim()) resolve(out);
       else reject(new Error(`'${cmd}' afsluttede med kode ${code} uden output`));
@@ -577,7 +582,7 @@ function watchClaudeStreamJson({ onText, onSubagent }) {
 
 // Samlet chat-dispatcher. Returnerer samlet tekst.
 // onSubagent: kun for CLI'er der streamer strukturerede events (Claude stream-json).
-export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubagent, signal, cwd }) {
+export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubagent, signal, cwd, readOnly = false }) {
   const svc = serviceById(serviceId);
   if (!svc) throw new Error(`Ukendt tjeneste: ${serviceId}`);
   assertUsable(svc, cfg);
@@ -596,11 +601,12 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
       ? cliAccessDirectories(messages) : [];
     const extraArgs = [];
     if (serviceId === 'codex' && useDefaultTemplate) {
-      extraArgs.push('--sandbox', 'workspace-write');
+      // Orkestratorens planfase må læse projektet, men aldrig udføre ændringer.
+      extraArgs.push('--sandbox', readOnly ? 'read-only' : 'workspace-write');
       for (const dir of accessDirs) extraArgs.push('--add-dir', dir);
     } else if (serviceId === 'claude' && useDefaultTemplate) {
-      // Print-mode er ikke-interaktiv. Uden dette afvises selv læsning i --add-dir.
-      extraArgs.push('--permission-mode', 'bypassPermissions');
+      // Print-mode er ikke-interaktiv. Planfasen er læse-only; job må skrive.
+      extraArgs.push('--permission-mode', readOnly ? 'plan' : 'bypassPermissions');
       if (accessDirs.length) extraArgs.push('--add-dir', ...accessDirs);
     }
     if (useJson) extraArgs.push('--output-format', 'stream-json', '--verbose');
