@@ -10,9 +10,10 @@ rem     serveren genstartes.
 rem  3) Åbner først browseren, når appen rent faktisk svarer.
 rem ============================================================
 cd /d "%~dp0.."
+echo  Orbit starter - et oejeblik ...
 
-rem ---- Selvhelende genvej: sikr at skrivebordets Orbit.lnk findes og peger her ----
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Ensure-Shortcut.ps1" -BatPath "%~f0" >nul 2>nul
+rem ---- Selvhelende genvej: kører i BAGGRUNDEN, så den aldrig kan blokere opstarten ----
+start "Orbit-genvej" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Ensure-Shortcut.ps1" -BatPath "%~f0" >nul 2>nul
 
 rem ---- Sanity: findes node? ----
 where node >nul 2>nul
