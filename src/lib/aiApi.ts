@@ -162,6 +162,15 @@ export async function streamChat(
 
 export type OrchestrateMode = 'standard' | 'roles' | 'debate' | 'vote' | 'race';
 
+export interface OrchestrateInput {
+  goal: string;
+  bible?: string;
+  jobs?: unknown[];
+  mode?: OrchestrateMode;
+  pauseAfterPlan?: boolean;
+  attachments?: AiAttachment[];
+}
+
 export interface OrchestrateHandlers {
   onEvent: (evt: Record<string, unknown>) => void;
   onError: (msg: string) => void;
@@ -169,7 +178,7 @@ export interface OrchestrateHandlers {
 
 /** Start en orkestreret kørsel (plan + eksekvering). */
 export async function streamOrchestrate(
-  input: { goal: string; bible?: string; jobs?: unknown[]; mode?: OrchestrateMode; pauseAfterPlan?: boolean },
+  input: OrchestrateInput,
   handlers: OrchestrateHandlers,
   signal: AbortSignal,
 ): Promise<void> {
@@ -187,13 +196,7 @@ export async function streamOrchestrate(
  * Start en kørsel uden at lytte på hændelserne selv — sværmen opdateres via WebSocket.
  * Strømmen konsumeres dog til ende, så serveren ikke afbryder kørslen ved 'close'.
  */
-export async function fireOrchestrate(input: {
-  goal: string;
-  bible?: string;
-  jobs?: unknown[];
-  mode?: OrchestrateMode;
-  pauseAfterPlan?: boolean;
-}): Promise<{ ok: boolean; reason?: string }> {
+export async function fireOrchestrate(input: OrchestrateInput): Promise<{ ok: boolean; reason?: string }> {
   try {
     const r = await fetch(`${BASE}/api/ai/orchestrate`, {
       method: 'POST',
@@ -289,9 +292,9 @@ export async function deleteTemplate(id: string): Promise<boolean> {
   }
 }
 
-export async function suggestTemplate(goal: string, bible?: string): Promise<{ ok: boolean; jobs?: PipelineTemplate['jobs']; reason?: string }> {
+export async function suggestTemplate(goal: string, bible?: string, attachments?: AiAttachment[]): Promise<{ ok: boolean; jobs?: PipelineTemplate['jobs']; reason?: string }> {
   try {
-    const r = await fetch(`${BASE}/api/ai/templates/suggest`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal, bible }) });
+    const r = await fetch(`${BASE}/api/ai/templates/suggest`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal, bible, attachments }) });
     const j = await r.json();
     return j?.ok ? { ok: true, jobs: j.jobs } : { ok: false, reason: j?.reason };
   } catch (e) {
