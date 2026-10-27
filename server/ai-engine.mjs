@@ -194,7 +194,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
         estKr += usageCostKr(run.usage);
         for (const [id, u] of Object.entries(run.usage.byService ?? {})) {
           const cur = byService[id] ?? { id, jobs: 0, kind: u.kind };
-          cur.jobs += u.jobs;
+          cur.jobs += 1;
           byService[id] = cur;
         }
       }
@@ -234,14 +234,14 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
 
   // Selvforbedrende orkestrator (idé 20): foreslå en pipeline ud fra én sætning.
   app.post('/api/ai/templates/suggest', async (req, res) => {
-    const { goal, bible } = req.body ?? {};
+    const { goal, bible, attachments } = req.body ?? {};
     if (!goal) return res.status(400).json({ ok: false, reason: 'goal kræves' });
     const cfg = loadConfig();
     try {
       const availability = await serviceAvailability(cfg);
       const orchestratorId = await pickOrchestrator(cfg, availability);
       if (!orchestratorId) return res.status(409).json({ ok: false, reason: 'Ingen orkestrator tilgængelig (installér et CLI).' });
-      const jobs = await planWithLLM({ orchestratorId, goal: String(goal), bible: String(bible ?? ''), cfg, dirs, availability });
+      const jobs = await planWithLLM({ orchestratorId, goal: String(goal), bible: String(bible ?? ''), attachments, cfg, dirs, availability });
       res.json({ ok: true, jobs, orchestratorId });
     } catch (e) {
       res.status(500).json({ ok: false, reason: e.message });
@@ -301,7 +301,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
 
   app.delete('/api/ai/triggers/:id', (req, res) => {
     const cfg = loadConfig();
-    cfg.aiTriggers = (cfg.aiTriggers ?? []).filter((t) => t.id !== req.params.id);
+    cfg.aiTriggers = (cfg.aiTriggers ?? []).filter((tr) => tr.id !== req.params.id);
     saveConfig(cfg);
     res.json({ ok: true });
   });
@@ -309,7 +309,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   // Webhook-endpoint: POST starter kørslen i baggrunden.
   app.post('/api/ai/hook/:token', (req, res) => {
     const cfg = loadConfig();
-    const trigger = (cfg.aiTriggers ?? []).find((t) => t.kind === 'webhook' && t.token === req.params.token);
+    const trigger = (cfg.aiTriggers ?? []).find((tr) => tr.kind === 'webhook' && tr.token === req.params.token);
     if (!trigger) return res.status(404).json({ ok: false, reason: 'Ukendt webhook-token' });
     if (swarmState.active) return res.status(409).json({ ok: false, reason: 'En kørsel er allerede aktiv.' });
     const runId = randomUUID().slice(0, 12);
@@ -341,6 +341,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
         runId,
         goal: prev.goal ?? '',
         bible: '',
+        attachments: prev.attachments ?? [],
         predefinedJobs: jobs,
         cfg: loadConfig(),
         dirs,
@@ -471,7 +472,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       const worst = services.find((s) => s.errorRate >= 25 && s.jobs >= 3);
       if (worst) insights.push(`"${worst.name}" fejler i ${worst.errorRate}% af jobbene — overvej at skifte tjeneste eller give jobbene mere kontekst.`);
       if (timed > 3) insights.push(`Gennemsnitlig jobtid: ${Math.round(totalMs / timed / 1000)}s. Langsomme jobs med dommer-score under 6 kan med fordel races mod en anden tjeneste.`);
-      res.json({ ok: true, runs, errors, avgJobMs: timed ? Math.round(totalMs / timed) : 0, errorTitles, services, insights });
+      res.json({ ok: true, runs, errors, avgJobMs: timed ? Math.round(totalMs / timed / 1000) : 0, errorTitles, services, insights });
     } catch (e) {
       res.status(500).json({ ok: false, reason: e.message });
     }
@@ -493,10 +494,10 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     res.end();
   });
 
-  // Orkestrering: POST {goal, bible?, jobs?, mode?, pauseAfterPlan?} → SSE hændelser
+  // Orkestrering: POST {goal, bible?, attachments?, jobs?, mode?, pauseAfterPlan?} → SSE hændelser
   app.post('/api/ai/orchestrate', async (req, res) => {
     const emit = sse(res);
-    const { goal, bible, jobs, mode, pauseAfterPlan } = req.body ?? {};
+    const { goal, bible, attachments, jobs, mode, pauseAfterPlan } = req.body ?? {};
     const runId = randomUUID().slice(0, 12);
     const cfg = loadConfig();
     const ac = new AbortController();
@@ -512,6 +513,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
         runId,
         goal: String(goal ?? ''),
         bible: String(bible ?? ''),
+        attachments,
         predefinedJobs: jobs,
         cfg, dirs, emit,
         mode: ['standard', 'roles', 'debate', 'vote', 'race'].includes(mode) ? mode : 'standard',
