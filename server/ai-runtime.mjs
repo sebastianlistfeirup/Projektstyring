@@ -129,6 +129,42 @@ export async function pickOrchestrator(cfg, availability) {
 
 const PLAN_SCHEMA = `Svar KUN med JSON (intet andet): {"jobs":[{"title":string,"service":string,"phase":"koncept"|"design"|"prototype"|"produktion"|"test"|"polering"|"release","dependsOn":number[],"description":string}]}`;
 
+// CLI-svar kan indeholde korte præ/eftertekster eller mere end ét JSON-objekt.
+// Find det første komplette objekt med respekt for strenge og escapes i stedet
+// for en grådig regex, der fejler med "non-whitespace character after JSON".
+export function parseJsonObject(raw) {
+  const text = String(raw ?? '').trim();
+  try {
+    const direct = JSON.parse(text);
+    if (direct && typeof direct === 'object' && !Array.isArray(direct)) return direct;
+  } catch { /* søg efter et indlejret objekt nedenfor */ }
+  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
+    let depth = 0, inString = false, escaped = false;
+    for (let i = start; i < text.length; i++) {
+      const c = text[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (c === '\\') escaped = true;
+        else if (c === '"') inString = false;
+        continue;
+      }
+      if (c === '"') { inString = true; continue; }
+      if (c === '{') depth += 1;
+      else if (c === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            const value = JSON.parse(text.slice(start, i + 1));
+            if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+          } catch { /* prøv næste objektstart */ }
+          break;
+        }
+      }
+    }
+  }
+  throw new Error('Orkestratoren returnerede ikke gyldig JSON');
+}
+
 // Auto skal give både orkestratoren og alle job adgang til brugerens uploadede filer.
 // CLI-tjenesterne kan læse den absolutte sti; DOCX/PDF skal udtrækkes med lokale værktøjer.
 function attachmentContext(attachments) {
@@ -148,9 +184,7 @@ export async function planWithLLM({ orchestratorId, goal, bible, attachments = [
   const runMem = runsMemoryTail(dirs);
   const prompt = `Du er orkestrator for et AI-drevet projekt. Mål: ${goal}\n\n${bible ? `Projektets bibel (roller/stil): ${bible.slice(0, 6000)}\n\n` : ''}${runMem ? `Tidligere kørsler (kontekst — undgå at gentage fejl):\n${runMem}\n\n` : ''}Roster:\n${roster}\n\nFordel arbejdet til de TILGÆNGELIGE tjenester efter deres stærke sider. Brug færrest mulige jobs (typisk 1-4, højst 10) med afhængigheder (dependsOn = indeks i listen, tidligere jobs). Respektér målets præcise scope og tilføj aldrig nye faser. Medieproduktion og release må kun planlægges, når målet udtrykkeligt beder om det. ${extra ?? ''} ${PLAN_SCHEMA}`;
   const raw = await runChat({ serviceId: orchestratorId, messages: [attachmentContext(attachments), { role: 'user', text: prompt }].filter(Boolean), cfg, dirs });
-  const m = raw.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error('Orkestratoren returnerede ikke en plan');
-  const plan = JSON.parse(m[0]);
+  const plan = parseJsonObject(raw);
   if (!Array.isArray(plan.jobs)) throw new Error('Planen manglede jobs');
   return plan.jobs.map((j, i) => ({
     id: `job-${i}`,
