@@ -574,7 +574,7 @@ export function AiChatView() {
     setRunning(false);
     abortRef.current = null;
     textareaRef.current?.focus();
-  }, [text, pending, running, chat, service, services, bible, aiChats, addAiMessage, updateAiMessage]);
+  }, [text, pending, running, chat, service, services, bible, aiChats, runMode, pausePlan, planDraft, addAiMessage, updateAiMessage, t]);
 
   const availableCount = useMemo(() => (services ? Object.values(services).filter((s) => s.available).length : 0), [services]);
 
@@ -730,7 +730,8 @@ export function AiChatView() {
                 <select
                   value={service}
                   onChange={(e) => setService(e.target.value)}
-                  className="rounded-xl bg-black/20 dark:bg-black/30 border border-white/10 px-2 py-2 text-[12px] outline-none shrink-0 max-w-[130px]"
+                  disabled={running}
+                  className="rounded-xl bg-black/20 dark:bg-black/30 border border-white/10 px-2 py-2 text-[12px] outline-none shrink-0 max-w-[130px] disabled:opacity-60"
                 >
                   <option value="auto">⚡ {t('chat.serviceAuto')}</option>
                   {Object.values(services ?? {}).filter((s) => s.available).map((s) => (
