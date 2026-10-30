@@ -1,8 +1,14 @@
 # Orbit – Projektstyring
 
-Et moderne, dansksproget projektstyringsværktøj til Windows – inspireret af Monday, Microsoft Teams og Azure DevOps, med direkte integration til operativsystemet, Teams, Microsoft 365 og AI. Lokalt, hurtigt og uden abonnement.
+Et moderne, dansksproget projektstyringsværktøj til Windows – inspireret af Monday, Microsoft Teams og Azure DevOps, med direkte integration til operativsystemet, Teams, Microsoft 365 og AI. Orbit kører lokalt. Tilsluttede AI-tjenester kræver deres egne konti og eventuelle abonnementer.
 
 ![Tavle](docs/screenshots/tavle.png)
+
+## AI-udførelse og Realmread-pilot
+
+Chatten kan knytte en arbejdsordre til en isoleret Git-gren, vise agenternes faktiske arbejde og gemme commit, leverance og kontrolresultater. Plan-godkendelse, dependencyfejl, genoptagelse og backup er gjort eksplicitte. PDF/DOCX, billeder, versioneret projektbibel, WIP-grænser og afgrænset versionsscope understøtter arbejdet.
+
+Læs [opsætning, betalingsregler, datagrænser og verifikation](docs/orbit-autonomy.md), [Realmreads første pilotforløb](docs/realmread-onboarding.md) og [det prioriterede restarbejde](docs/orbit-next.md). Krav: Node.js 22.13+ (24 LTS anbefales), Git og `npm ci`. Flere dages autonomi og alle leverandørkonti er endnu ikke verificeret i et rigtigt projekt.
 
 ## Funktioner
 
@@ -65,7 +71,7 @@ Et moderne, dansksproget projektstyringsværktøj til Windows – inspireret af 
 - **Azure DevOps** – to-vejs sync af work items (PAT) – afslut i Orbit, status skrives tilbage
 - **Asynkron standup** – dagens status postes til Teams
 - **Onboarding-tur** ved første start + **?** viser alle genveje
-- **PWA** (offline) + **Tauri Windows-app** (MSI/NSIS fra GitHub Releases)
+- **PWA** (offline app-skal) + **Tauri-desktopskal** (Companion køres separat; se `docs/desktop.md`)
 
 | Team & kapacitet | Integrationer | Outlook & Microsoft 365 |
 |---|---|---|
@@ -101,7 +107,7 @@ npm run tauri build    # Windows-desktopapp (MSI/EXE) – se docs/desktop.md
 
 - **Teams-beskeder**: kanal → ⋯ → Tilføjelser → Indgående webhook → indsæt URL under Integrationer.
 - **Microsoft 365**: opret gratis app-registrering (2 min – guide i appen under Outlook-fanen), indsæt klient-id, tilslut med din konto.
-- **AI**: indsæt API-nøgle under Integrationer → AI-assistent (virker med OpenAI og alle OpenAI-kompatible udbydere).
+- **AI**: tilslut tjenester i Orbit-chatten. Eksternt forbrug kræver bekræftet inkluderet abonnementsadgang uden ekstraforbrug; et API-token eller chatabonnement alene er ikke dokumentation for dette.
 
 ## Teknologi
 

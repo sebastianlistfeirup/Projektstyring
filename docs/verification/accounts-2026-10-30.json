@@ -1,0 +1,70 @@
+{
+  "checkedAt": "2026-10-30T15:12:00.682873+00:00",
+  "scope": "Read-only HeyGen account lookup and one generated clip through the connected HeyGen plugin. Not through the Orbit REST media adapter.",
+  "heygen": {
+    "billingType": "subscription",
+    "observedCreditDifference": 1,
+    "usageBased": null,
+    "delivery": {
+      "status": "downloaded_and_decoded",
+      "durationSeconds": 5.258344,
+      "width": 832,
+      "height": 480,
+      "bytes": 224332,
+      "sha256": "4aaa879e839c0418d6100357b93c7d754696d834ab80bee577d27568d24cc071",
+      "checks": [
+        "Provider returned ready",
+        "HTTPS download completed",
+        "ffprobe inspected container and streams",
+        "ffmpeg decoded full clip with exit 0"
+      ]
+    },
+    "limits": [
+      "One short clip only; no avatar, MCP or Orbit adapter coverage",
+      "Account profile reported subscription billing and no usage_based plan; not an independent invoice audit"
+    ],
+    "quotaEvidence": "Remaining subscription credits and reset time read before/after. Account-specific values are retained only in the private local report."
+  },
+  "notExecuted": [
+    {
+      "service": "ChatGPT / Codex",
+      "reason": "No authenticated user account for this service is available to this execution environment."
+    },
+    {
+      "service": "Claude",
+      "reason": "No authenticated user account for this service is available to this execution environment."
+    },
+    {
+      "service": "Gemini",
+      "reason": "No authenticated user account for this service is available to this execution environment."
+    },
+    {
+      "service": "Grok",
+      "reason": "No authenticated user account for this service is available to this execution environment."
+    },
+    {
+      "service": "Meshy",
+      "reason": "No authenticated user account for this service is available to this execution environment."
+    },
+    {
+      "service": "Kimi",
+      "reason": "No authenticated user account for this service is available to this execution environment."
+    },
+    {
+      "service": "ElevenLabs",
+      "reason": "No authenticated user account for this service is available to this execution environment."
+    },
+    {
+      "service": "Qwen",
+      "reason": "No authenticated user account for this service is available to this execution environment."
+    }
+  ],
+  "windows": {
+    "userInstallation": "not_accessible",
+    "ci": "Browser coverage added for Windows runner; result is recorded separately. Not the user installation."
+  },
+  "realmread": {
+    "status": "awaiting_confirmation",
+    "limits": "An accessible candidate was found, but the current repository, bible and build are not confirmed. Private repository details are retained only in the local report. No build or gameplay test performed."
+  }
+}

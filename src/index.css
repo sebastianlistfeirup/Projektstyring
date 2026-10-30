@@ -123,63 +123,16 @@
    utilities), så overrides nedenfor vinder kaskaden.
    ============================================================ */
 
-/* ---- 1) Levende aurora-baggrund ---- */
+/* Static atmosphere: one gradient layer instead of animated viewport-sized
+   blur filters behind every translucent panel. Motion belongs to live agents. */
 .aurora {
-  position: fixed;
-  inset: 0;
-  z-index: -10;
-  overflow: hidden;
-  pointer-events: none;
+  position: fixed; inset: 0; z-index: -10; pointer-events: none;
+  background:
+    radial-gradient(ellipse at 5% 10%, color-mix(in srgb,var(--acc-500) 20%,transparent),transparent 55%),
+    radial-gradient(ellipse at 95% 45%, color-mix(in srgb,var(--acc-400) 15%,transparent),transparent 55%),
+    radial-gradient(ellipse at 50% 100%, color-mix(in srgb,var(--acc-600) 15%,transparent),transparent 60%);
 }
-
-.aurora-blob {
-  position: absolute;
-  width: 55vw;
-  height: 55vw;
-  border-radius: 9999px;
-  filter: blur(64px);
-  opacity: 0.3;
-  animation-name: aurora-drift;
-  animation-duration: 36s;
-  animation-timing-function: ease-in-out;
-  animation-iteration-count: infinite;
-  animation-direction: alternate;
-  will-change: transform;
-}
-
-.dark .aurora-blob {
-  opacity: 0.5;
-}
-
-/* Forskudte faser og retninger – animation slår kun igennem fra ulagret CSS */
-.aurora-blob:nth-of-type(2) {
-  animation-delay: -12s;
-  animation-direction: alternate-reverse;
-}
-
-.aurora-blob:nth-of-type(3) {
-  animation-delay: -24s;
-}
-
-@keyframes aurora-drift {
-  0% {
-    transform: translate3d(-8%, -6%, 0) scale(1) rotate(0deg);
-  }
-  50% {
-    transform: translate3d(6%, 9%, 0) scale(1.18) rotate(45deg);
-  }
-  100% {
-    transform: translate3d(14%, -5%, 0) scale(0.92) rotate(-30deg);
-  }
-}
-
-.aurora-noise {
-  position: absolute;
-  inset: 0;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  opacity: 0.03;
-  mix-blend-mode: overlay;
-}
+.aurora-blob, .aurora-noise { display: none; }
 
 /* ---- 1b) Accent-temaer: CSS-variabler pr. tema ---- */
 html[data-accent='indigo'] {

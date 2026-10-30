@@ -12,7 +12,11 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test:smoke": "node scripts/smoke-test.mjs",
-    "test:imports": "tsx scripts/test-imports.ts"
+    "test:imports": "tsx scripts/test-imports.ts",
+    "test:ai": "node --test scripts/test-ai-*.mjs scripts/test-workspace-*.mjs",
+    "test:workspace": "tsx --test scripts/test-workspace.ts",
+    "test:browser": "playwright test",
+    "test:cli": "node scripts/verify-ai-cli.mjs"
   },
   "dependencies": {
     "@azure/msal-node": "^7.0.1",
@@ -27,17 +31,22 @@
     "date-fns": "^4.4.0",
     "express": "^5.3.0",
     "lucide-react": "^1.55.0",
+    "mammoth": "^1.13.0",
     "nanoid": "^6.0.2",
+    "pdfjs-dist": "^6.4.299",
     "postcss": "^8.5.29",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.4",
     "recharts": "^3.10.1",
+    "remark-gfm": "^4.0.1",
     "tailwindcss": "^3.4.19",
     "ws": "^8.22.0",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@tauri-apps/cli": "^2.12.2",
     "@types/express": "^5.0.6",
     "@types/node": "^24.13.3",
@@ -50,5 +59,8 @@
     "tsx": "^4.23.15",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

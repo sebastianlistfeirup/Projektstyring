@@ -44,6 +44,7 @@ export default function AppShell() {
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [tvMode, setTvMode] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
+  const [allTools, setAllTools] = useState(false);
 
   // TV-tilstand: TvMode-komponenten dispatcher 'orbit:tv' – skjul app-chrome
   useEffect(() => {
@@ -79,10 +80,9 @@ export default function AppShell() {
   const activeProjects = projects.filter((p) => !p.archived);
   const archivedProjects = projects.filter((p) => p.archived);
 
-  // Enkel tilstand: kun kernevisninger (+ integrationer nederst)
-  const visibleViews = simpleMode
-    ? VIEWS.filter((v) => ['/idag', '/tavle', '/noter', '/min', '/aktivitet', '/integrationer'].includes(v.to))
-    : VIEWS;
+  // Keep daily navigation small; all existing views remain discoverable.
+  const coreRoutes = ['/idag', '/chat', '/tavle', '/noter', '/integrationer'];
+  const visibleViews = allTools && !simpleMode ? VIEWS : VIEWS.filter(v => coreRoutes.includes(v.to) || location.pathname === v.to);
 
   // Enkel tilstand: projekter grupperes i Arbejde / Privat
   const workProjects = activeProjects.filter((p) => !p.privateZone);
@@ -178,6 +178,7 @@ export default function AppShell() {
             <view.icon className="h-5 w-5" />
           </NavLink>
         ))}
+        {!simpleMode && <button onClick={() => setAllTools(v => !v)} aria-expanded={allTools} title={allTools ? 'Vis færre værktøjer' : 'Alle værktøjer'} aria-label={allTools ? 'Vis færre værktøjer' : 'Alle værktøjer'} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-zinc-500 hover:bg-indigo-500/10"><ChevronRight className={cn('h-5 w-5', allTools && 'rotate-180')} /></button>}
         <div className="mt-auto flex flex-col items-center gap-2">
           <button
             onClick={toggleTheme}
@@ -193,8 +194,8 @@ export default function AppShell() {
       {/* Workspace-panel */}
       <aside
         className={cn(
-          'flex w-64 shrink-0 flex-col border-r border-zinc-200/80 bg-zinc-50/60 dark:border-white/[0.06] dark:bg-[#1a1b1f]/60',
-          tvMode && 'hidden',
+          'hidden md:flex w-64 shrink-0 flex-col border-r border-zinc-200/80 bg-zinc-50/60 dark:border-white/[0.06] dark:bg-[#1a1b1f]/60',
+          (tvMode || location.pathname.startsWith('/chat')) && '!hidden',
         )}
       >
         <div className="flex items-center gap-2.5 px-4 pb-2 pt-4">
@@ -202,7 +203,7 @@ export default function AppShell() {
             N
           </div>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-zinc-800 dark:text-zinc-100">Nordlys ApS</p>
+            <p className="truncate text-sm font-semibold text-zinc-800 dark:text-zinc-100">Orbit Workspace</p>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t('shell.workspace')}</p>
           </div>
         </div>

@@ -1,0 +1,53 @@
+name: Orbit checks
+on:
+  pull_request:
+  push:
+    branches: [main, feature/mine-opgaver-aarshjul-ai-vaerksted, codex/orbit-reliable-autonomy]
+permissions:
+  contents: read
+concurrency:
+  group: orbit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run lint
+      - run: npm run test:imports
+      - run: npm run test:workspace
+      - run: npm run test:ai
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Browser flows
+        run: npm run test:browser
+      - name: Save performance samples
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-${{ matrix.os }}
+          path: test-results/**/*performance.json
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-results-${{ matrix.os }}
+          path: test-results/
+      - name: Parse Windows launch scripts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/Stop-Orbit.ps1), [ref]$null, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count) { $parseErrors | Format-List; exit 1 }

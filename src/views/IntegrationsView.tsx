@@ -72,7 +72,7 @@ import {
   type IcalEvent,
   type PlannerTaskExt,
 } from '../lib/companion';
-import { applySnapshot, getSyncUrl, isSyncEnabled, restartSync, setSyncEnabled, setSyncUrl } from '../lib/sync';
+import { applySnapshot, getPreviousWorkspace, getSyncUrl, isSyncEnabled, pushNow, restartSync, setSyncEnabled, setSyncUrl } from '../lib/sync';
 import { cn, formatDate, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
 import { Avatar } from '../components/common';
 import { STATUS_META } from '../lib/constants';
@@ -834,6 +834,7 @@ export default function IntegrationsView() {
               disabled={!connected}
               onClick={() =>
                 run('backup-now', async () => {
+                  if (!await pushNow()) return 'Dine seneste ændringer kunne ikke gemmes på Companion. Prøv igen før backup.';
                   const r = await createBackup();
                   if (!r.ok) return r.reason ?? 'Backup mislykkedes.';
                   await refresh();
@@ -846,6 +847,10 @@ export default function IntegrationsView() {
               Opret backup nu
             </button>
           </div>
+          {getPreviousWorkspace() && <button className="btn-ghost text-xs mt-2" onClick={() => {
+            const url = URL.createObjectURL(new Blob([JSON.stringify(getPreviousWorkspace(), null, 2)], { type: 'application/json' }));
+            const link = document.createElement('a'); link.href = url; link.download = 'orbit-browserdata-foer-gendannelse.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+          }}>Hent denne fanes browserdata fra før gendannelsen</button>}
           {backups.length > 0 && (
             <ul className="mt-3 divide-y divide-zinc-200/70 dark:divide-white/[0.05]">
               {backups.slice(0, 5).map((b) => (
@@ -857,10 +862,11 @@ export default function IntegrationsView() {
                     disabled={!connected}
                     onClick={() =>
                       run(`restore-${b.name}`, async () => {
+                        if (!window.confirm('Gendan denne backup? Den erstatter arbejdsområdet og tilhørende AI-filer. Den nuværende servertilstand sikkerhedskopieres først.')) return 'Gendannelse annulleret.';
                         const r = await restoreBackup(b.name);
                         if (!r.ok || !r.snapshot) return r.reason ?? 'Kunne ikke læse backup.';
                         applySnapshot(r.snapshot);
-                        return `Backup gendannet (${(r.snapshot.tasks ?? []).length} opgaver flettet ind).`;
+                        return `Backup gendannet (${(r.snapshot.tasks ?? []).length} opgaver gendannet).${r.warning ? ` ${r.warning}` : ''}`;
                       }, 'error')
                     }
                     className="btn-ghost shrink-0 px-2 py-1 text-xs text-indigo-600 dark:text-indigo-300"
@@ -1256,7 +1262,9 @@ export default function IntegrationsView() {
               disabled={!connected}
               onClick={() =>
                 run('git-save', async () => {
-                  await saveGitConfig({ provider: gitProvider, token: gitToken, owner: gitOwner, repo: gitRepo });
+                  const result = await saveGitConfig({ provider: gitProvider, token: gitToken, owner: gitOwner, repo: gitRepo, projectId: activeProjectId ?? undefined });
+                  if (!result.ok) return 'Repository-indstillingerne kunne ikke gemmes.';
+                  setGitToken('');
                   return 'Git-konfiguration gemt.';
                 })
               }
@@ -1268,11 +1276,11 @@ export default function IntegrationsView() {
               disabled={!connected}
               onClick={() =>
                 run('git-fetch', async () => {
-                  const r = await fetchGitIssues();
+                  const r = await fetchGitIssues(activeProjectId ?? undefined);
                   if (!r.ok || !r.items) return r.reason ?? 'Kunne ikke hente issues.';
                   setGitItems(r.items);
                   setGitSelected(new Set(r.items.map((i) => i.id)));
-                  return `${r.items.length} åbne issues fundet.`;
+                  return `${r.items.length} åbne issues fundet.${r.truncated ? ' Listen er begrænset til de første 10.000 poster.' : ''}`;
                 }, 'error')
               }
               className="btn-outline py-1.5 text-xs"
@@ -1313,12 +1321,16 @@ export default function IntegrationsView() {
                       const projectId = activeProjectId ?? projects[0]?.id;
                       if (!projectId || !gitItems) return;
                       const chosen = gitItems.filter((i) => gitSelected.has(i.id));
+                      let imported = 0;
                       for (const item of chosen) {
-                        const t = useStore.getState().addTask({ title: item.title, projectId });
-                        setTaskExtIds(t.id, { gitProvider, gitIssue: item.id });
+                        const exists = useStore.getState().tasks.some(t => t.projectId === projectId && t.extIds?.gitIssue === item.id && t.extIds.gitProvider === item.provider && t.extIds.gitOwner === item.owner && t.extIds.gitRepo === item.repo);
+                        if (exists) continue;
+                        const t = useStore.getState().addTask({ title: item.title, description: [item.description, item.labels?.length ? `Labels: ${item.labels.join(', ')}` : '', item.url ? `Kilde: ${item.url}` : ''].filter(Boolean).join('\n\n'), projectId, status: 'backlog' });
+                        setTaskExtIds(t.id, { gitProvider: item.provider, gitIssue: item.id, gitOwner: item.owner, gitRepo: item.repo, gitUrl: item.url });
+                        imported++;
                       }
                       setGitItems(null);
-                      say(`${chosen.length} issues importeret – afslut dem i Orbit, og de lukkes i ${gitProvider === 'gitlab' ? 'GitLab' : 'GitHub'}.`);
+                      say(`${imported} issues importeret i backlog. ${chosen.length - imported} eksisterende issues sprunget over. Kilden er gemt på hver opgave.`);
                     }}
                     className="btn-primary py-1 text-xs"
                   >

@@ -3,8 +3,8 @@ chcp 65001 >nul
 setlocal EnableExtensions EnableDelayedExpansion
 rem ============================================================
 rem  Orbit – Start
-rem  Starter altid friske servere, saa foraeldede eller doede
-rem  processer aldrig genbruges. Browseren aabnes foerst naar
+rem  Genbruger sunde servere, saa aktive AI-koersler fortsaetter.
+rem  Browseren aabnes foerst naar
 rem  bade appen og companion-serveren faktisk svarer paa HTTP.
 rem ============================================================
 cd /d "%~dp0.."
@@ -24,16 +24,24 @@ if errorlevel 1 (
   exit /b 1
 )
 
+node -e "const v=process.versions.node.split('.').map(Number); process.exit(v[0]>22||(v[0]===22&&v[1]>=13)?0:1)"
+if errorlevel 1 (
+  echo [FEJL] Orbit kraever Node.js 22.13+; installer gerne Node.js 24 LTS.
+  pause
+  exit /b 1
+)
+
 rem Ét automatisk nyt forsøg beskytter mod en proces, der dør under opstarten.
 set /a START_ATTEMPT=0
 :start_servers
 set /a START_ATTEMPT+=1
 if !START_ATTEMPT! gtr 1 echo  [FIX] Serverne svarede ikke stabilt - proever igen...
 
-rem Begge servere genstartes. Det forhindrer en gammel dev-server i at blive
-rem genbrugt og do efter den foerste vellykkede HTTP-kontrol.
-call :restart_server 5173 "npm run dev:app" "Orbit dev-server"
-call :restart_server 4310 "node server\companion.mjs" "Orbit companion-server"
+rem Aabning af appen maa aldrig draebe en igangvaerende AI-koersel.
+call :ensure_server 5173 "npm run dev:app" "Orbit dev-server" "/@vite/client"
+if errorlevel 1 goto start_failed
+call :ensure_server 4310 "node server\companion.mjs" "Orbit companion-server" "/api/ping"
+if errorlevel 1 goto start_failed
 
 rem ---- Vent på begge servere (max 45 sek. pr. forsøg) ----
 echo.
@@ -42,7 +50,7 @@ set /a WAITED=0
 :wait_ready
 curl -s -o nul --connect-timeout 1 --max-time 2 http://127.0.0.1:5173/
 if errorlevel 1 goto wait_more
-curl -s -o nul --connect-timeout 1 --max-time 2 http://127.0.0.1:4310/
+curl -f -s -o nul --connect-timeout 1 --max-time 2 http://127.0.0.1:4310/api/ping
 if not errorlevel 1 goto orbit_ready
 :wait_more
 set /a WAITED+=1
@@ -75,37 +83,23 @@ exit /b 0
 
 
 rem ============================================================
-rem  :restart_server  PORT  "KOMMANDO"  "NAVN"
-rem  Stopper processen på porten og starter en frisk server.
+rem  Genbrug en sund server. Stop aldrig en ukendt eller aktiv proces.
 rem ============================================================
-:restart_server
-set "PORT=%~1"
-set "SRV_CMD=%~2"
-set "SRV_NAME=%~3"
-call :stop_port "%PORT%"
-echo  [START] %SRV_NAME% (port %PORT%)...
-start "%SRV_NAME%" /min cmd /d /k "%SRV_CMD%"
-exit /b 0
-
-
-rem ============================================================
-rem  :stop_port  PORT
-rem  Dræber hele procestræet og venter kort på, at porten frigives.
-rem ============================================================
-:stop_port
-set "STOP_PORT=%~1"
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%STOP_PORT% .*LISTENING"') do (
-  echo  [FIX] Stopper gammel proces paa port %STOP_PORT%...
-  taskkill /PID %%P /T /F >nul 2>nul
-)
-set /a PORT_WAIT=0
-:wait_port_free
-netstat -ano | findstr /R /C:":%STOP_PORT% .*LISTENING" >nul
-if errorlevel 1 exit /b 0
-set /a PORT_WAIT+=1
-if !PORT_WAIT! geq 10 (
-  echo  [ADVARSEL] Port %STOP_PORT% er stadig optaget. Opstarten fortsaetter alligevel.
+:ensure_server
+set "ORBIT_SERVER_PORT=%~1"
+set "ORBIT_SERVER_CMD=%~2"
+set "ORBIT_SERVER_NAME=%~3"
+curl -f -s -o nul --connect-timeout 1 --max-time 2 "http://127.0.0.1:%ORBIT_SERVER_PORT%%~4"
+if not errorlevel 1 (
+  echo  [OK] %ORBIT_SERVER_NAME% koerer allerede og genbruges.
   exit /b 0
 )
-powershell -NoProfile -NonInteractive -Command "Start-Sleep -Milliseconds 500" >nul 2>nul
-goto wait_port_free
+netstat -ano | findstr /R /C:":%ORBIT_SERVER_PORT% .*LISTENING" >nul
+if not errorlevel 1 (
+  echo  [FEJL] Port %ORBIT_SERVER_PORT% er optaget, men serveren svarer ikke korrekt.
+  echo  Kontrollér servervinduet. Ingen proces er blevet stoppet.
+  exit /b 1
+)
+echo  [START] %ORBIT_SERVER_NAME% ^(port %ORBIT_SERVER_PORT%^) ...
+start "%ORBIT_SERVER_NAME%" /min cmd /d /k "%ORBIT_SERVER_CMD%"
+exit /b 0

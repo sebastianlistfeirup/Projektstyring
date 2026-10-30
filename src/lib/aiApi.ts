@@ -4,6 +4,10 @@ import type { AiAttachment, AiMessage } from './types';
 const BASE = 'http://127.0.0.1:4310';
 
 export interface AiServiceInfo {
+  capabilities?: { text: boolean; repository: boolean; nativeMcp: boolean; structuredEvents: boolean; produces: string | null };
+  customTemplate?: boolean;
+  cliTemplate?: string | null;
+  installation?: { version: string; checkedAt: string; login: string; note: string } | null;
   id: string;
   name: string;
   kind: 'cli' | 'local' | 'sub-api' | 'paid-api' | 'manual';
@@ -18,12 +22,15 @@ export interface AiServiceInfo {
   models?: string[] | null;
   cmd: string | null;
   subscriptionCovered: boolean;
+  avatarId?: string | null;
+  voiceId?: string | null;
+  billing?: { allowed: boolean; mode: string; source: string; reason: string | null };
 }
 
 export interface AiServicesResponse {
   ok: boolean;
   services: Record<string, AiServiceInfo>;
-  prefs: { allowPaidApis: boolean; orchestrator: string; autoJudge?: boolean; selfHeal?: boolean };
+  prefs: { allowPaidApis: boolean; orchestrator: string; autoJudge?: boolean; selfHeal?: boolean; minimumReviewScore?: number };
 }
 
 export async function fetchAiServices(): Promise<AiServicesResponse | null> {
@@ -41,7 +48,7 @@ export interface SavePrefsResult {
   reason?: string;
 }
 
-export async function saveAiPrefs(prefs: Partial<{ allowPaidApis: boolean; orchestrator: string; autoJudge: boolean; selfHeal: boolean }>): Promise<SavePrefsResult> {
+export async function saveAiPrefs(prefs: Partial<{ allowPaidApis: boolean; orchestrator: string; autoJudge: boolean; selfHeal: boolean; minimumReviewScore: number }>): Promise<SavePrefsResult> {
   try {
     const r = await fetch(`${BASE}/api/ai/prefs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(prefs) });
     const text = await r.text();
@@ -82,7 +89,9 @@ export async function saveService(id: string, patch: Record<string, unknown>): P
 }
 
 export async function uploadAiFile(file: File): Promise<AiAttachment | null> {
-  const buf = await file.arrayBuffer();
+  if (file.size > 25 * 1024 * 1024) return null;
+  let buf: ArrayBuffer;
+  try { buf = await file.arrayBuffer(); } catch { return null; }
   if (buf.byteLength > 25 * 1024 * 1024) return null;
   let binary = '';
   const bytes = new Uint8Array(buf);
@@ -108,27 +117,33 @@ async function readSse(url: string, body: unknown, onEvent: (e: Record<string, u
     body: JSON.stringify(body),
     signal,
   });
-  if (!r.ok || !r.body) throw new Error(`Companion svarede ${r.status}`);
+  if (!r.ok || !r.body) {
+    const data = await r.json().catch(() => ({}));
+    throw new Error(data.reason ?? `Companion svarede ${r.status}`);
+  }
   const reader = r.body.getReader();
   const dec = new TextDecoder();
   let buf = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop() ?? '';
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      try {
-        const evt = JSON.parse(line.slice(6));
-        onEvent(evt);
-        if (evt.type === 'done' || evt.type === 'error') return;
-      } catch {
-        /* ufuldstændig JSON */
+  const handleLine = (line: string): boolean => {
+    if (!line.startsWith('data:')) return false;
+    const data = line.slice(5).trim();
+    if (!data) return false;
+    const evt = JSON.parse(data) as Record<string, unknown>;
+    onEvent(evt);
+    return evt.type === 'done' || evt.type === 'error';
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      buf += done ? dec.decode() : dec.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop() ?? '';
+      for (const line of lines) if (handleLine(line)) return;
+      if (done) {
+        if (buf && handleLine(buf)) return;
+        throw new Error('Forbindelsen sluttede uden en slutstatus. En Auto-kørsel kan fortsætte; se Orbit Live før du starter igen.');
       }
     }
-  }
+  } finally { reader.releaseLock(); }
 }
 
 /** Stream en chat-besked fra en tjeneste. */
@@ -137,12 +152,13 @@ export async function streamChat(
   messages: Pick<AiMessage, 'role' | 'text' | 'attachments'>[],
   handlers: { onDelta: (delta: string, full: string) => void; onDone: (full: string) => void; onError: (msg: string) => void },
   signal: AbortSignal,
+  bible?: string,
 ): Promise<void> {
   let full = '';
   try {
     await readSse(
       `${BASE}/api/ai/chat`,
-      { service, messages: messages.map((m) => ({ role: m.role, text: m.text, attachments: m.attachments })) },
+      { service, bible, messages: messages.map((m) => ({ role: m.role, text: m.text, attachments: m.attachments })) },
       (evt) => {
         if (evt.type === 'delta') {
           full += String(evt.delta ?? '');
@@ -163,6 +179,10 @@ export async function streamChat(
 export type OrchestrateMode = 'standard' | 'roles' | 'debate' | 'vote' | 'race';
 
 export interface OrchestrateInput {
+  projectId?: string;
+  taskId?: string;
+  repositoryPath?: string;
+  checks?: { name: string; command: string; args: string[] }[];
   goal: string;
   bible?: string;
   jobs?: unknown[];
@@ -216,6 +236,8 @@ export async function fireOrchestrate(input: OrchestrateInput): Promise<{ ok: bo
 }
 
 export interface Trigger {
+  projectId?: string;
+  taskId?: string;
   id: string;
   name: string;
   kind: 'cron' | 'webhook';
@@ -261,7 +283,7 @@ export interface PipelineTemplate {
   name: string;
   description?: string;
   builtin?: boolean;
-  jobs: { id: string; title: string; serviceId: string | null; phase: string; dependsOn: number[]; description: string; team?: boolean }[];
+  jobs: { id: string; title: string; serviceId: string | null; phase: string; dependsOn: number[]; description: string; team?: boolean; readOnly?: boolean }[];
 }
 
 export async function fetchTemplates(): Promise<PipelineTemplate[]> {
@@ -292,9 +314,9 @@ export async function deleteTemplate(id: string): Promise<boolean> {
   }
 }
 
-export async function suggestTemplate(goal: string, bible?: string, attachments?: AiAttachment[]): Promise<{ ok: boolean; jobs?: PipelineTemplate['jobs']; reason?: string }> {
+export async function suggestTemplate(goal: string, bible?: string, attachments?: AiAttachment[], projectId?: string | null): Promise<{ ok: boolean; jobs?: PipelineTemplate['jobs']; reason?: string }> {
   try {
-    const r = await fetch(`${BASE}/api/ai/templates/suggest`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal, bible, attachments }) });
+    const r = await fetch(`${BASE}/api/ai/templates/suggest`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal, bible, attachments, projectId }) });
     const j = await r.json();
     return j?.ok ? { ok: true, jobs: j.jobs } : { ok: false, reason: j?.reason };
   } catch (e) {
@@ -303,10 +325,11 @@ export async function suggestTemplate(goal: string, bible?: string, attachments?
 }
 
 export interface CostSummary {
+  windowRuns?: number; totalAvailable?: number; unreadable?: number;
   totalRuns: number;
   totalJobs: number;
-  estKr: number;
-  byService: { id: string; name: string; kind: string; jobs: number; subscriptionCovered: boolean; estKr: number }[];
+  estKr: number | null;
+  byService: { id: string; name: string; kind: string; jobs: number; subscriptionCovered: boolean; estKr: number | null }[];
 }
 
 export async function fetchCosts(): Promise<CostSummary | null> {
@@ -319,9 +342,9 @@ export async function fetchCosts(): Promise<CostSummary | null> {
   }
 }
 
-export async function sendRunMessage(runId: string, text: string): Promise<boolean> {
+export async function sendRunMessage(runId: string, text: string, attachments: AiAttachment[] = []): Promise<boolean> {
   try {
-    const r = await fetch(`${BASE}/api/ai/runs/${runId}/message`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+    const r = await fetch(`${BASE}/api/ai/runs/${runId}/message`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, attachments }) });
     return r.ok;
   } catch {
     return false;
@@ -346,13 +369,15 @@ export async function cancelRun(runId: string): Promise<boolean> {
   }
 }
 
-export async function approvePlan(runId: string, jobs: unknown[]): Promise<boolean> {
+export async function approvePlanResult(runId: string, jobs: unknown[]): Promise<{ ok: boolean; reason?: string }> {
   try {
-    const r = await fetch(`${BASE}/api/ai/runs/${runId}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobs }) });
-    return r.ok;
-  } catch {
-    return false;
-  }
+    const response = await fetch(`${BASE}/api/ai/runs/${encodeURIComponent(runId)}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobs }) });
+    const result = await response.json();
+    return { ok: response.ok && result.ok === true, reason: result.reason };
+  } catch { return { ok: false, reason: 'Godkendelsen kunne ikke bekræftes. Kontrollér kørselsstatus før et nyt forsøg.' }; }
+}
+export async function approvePlan(runId: string, jobs: unknown[]): Promise<boolean> {
+  return (await approvePlanResult(runId, jobs)).ok;
 }
 
 /* ---------- nye funktioner (30-ideer-pakken) ---------- */
@@ -465,6 +490,7 @@ export async function prioritizeTasks(tasks: { ref: string; title: string; dueDa
 }
 
 export interface AiAnalysis {
+  windowRuns?: number; totalAvailable?: number; unreadable?: number;
   runs: number;
   errors: number;
   avgJobMs: number;
@@ -487,7 +513,11 @@ export interface RunHistoryItem {
   file: string;
   runId: string;
   goal: string;
-  finishedAt?: string;
+  finishedAt?: string | number;
+  startedAt?: number;
+  status?: string;
+  eventCount?: number;
+  goalTruncated?: boolean;
   results?: { jobId: string; title: string; text?: string; artifacts?: unknown[]; score?: number | null }[];
   jobs?: { id: string; title: string; serviceId: string | null; phase: string; dependsOn: number[]; description: string; team?: boolean; startedAt?: number | null; finishedAt?: number | null; status?: string }[];
   orchestratorId?: string | null;
@@ -497,10 +527,35 @@ export interface RunHistoryItem {
 
 export async function fetchRunHistory(limit = 20): Promise<RunHistoryItem[]> {
   try {
-    const r = await fetch(`${BASE}/api/ai/runs`);
+    const r = await fetch(`${BASE}/api/ai/runs?limit=${Math.max(1, Math.min(100, limit))}`);
     const j = await r.json();
     return j?.ok ? (j.runs ?? []).slice(0, limit) : [];
   } catch {
     return [];
   }
+}
+
+export interface AiQueueEntry {
+  id: string; name: string; source: string; status: string; createdAt: number; startedAt?: number; finishedAt?: number; runId?: string; reason?: string;
+  input: { goal: string; projectId?: string | null; taskId?: string | null };
+}
+export interface AiQueueState { paused: boolean; reason: string; entries: AiQueueEntry[]; storageError?: string; updatedAt: number }
+export async function fetchAiQueue(): Promise<AiQueueState | null> {
+  try { const response = await fetch(`${BASE}/api/ai/queue`); const result = await response.json(); return result.ok ? result.queue : null; } catch { return null; }
+}
+export async function enqueueAiTask(input: { goal: string; projectId: string; taskId: string }): Promise<{ ok: boolean; reason?: string; duplicate?: boolean; entry?: AiQueueEntry }> {
+  try { return await (await fetch(`${BASE}/api/ai/queue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).json(); }
+  catch { return { ok: false, reason: 'Køens svar kunne ikke hentes. Kontrollér arbejdskøen før et nyt forsøg.' }; }
+}
+export async function controlAiQueue(action: 'pause' | 'resume' | 'cancel', id?: string): Promise<{ ok: boolean; reason?: string }> {
+  try { return await (await fetch(`${BASE}/api/ai/queue/${action === 'cancel' ? encodeURIComponent(id ?? '') : 'control'}`, { method: action === 'cancel' ? 'DELETE' : 'POST', headers: { 'Content-Type': 'application/json' }, ...(action === 'cancel' ? {} : { body: JSON.stringify({ action }) }) })).json(); }
+  catch { return { ok: false, reason: 'Handlingen kunne ikke bekræftes. Kontrollér forbindelsen.' }; }
+}
+
+
+export async function fetchAttachmentText(attachment: AiAttachment): Promise<{ ok: boolean; text?: string; reason?: string }> {
+  const name = attachment.url?.match(/^\/api\/ai\/file\/([^/]+)$/)?.[1];
+  if (!name) return { ok: false, reason: 'Filen er ikke gemt i Orbit.' };
+  try { return await (await fetch(`${BASE}/api/ai/attachment-text/${encodeURIComponent(name)}`)).json(); }
+  catch { return { ok: false, reason: 'Dokumentteksten kunne ikke hentes. Kontrollér forbindelsen.' }; }
 }

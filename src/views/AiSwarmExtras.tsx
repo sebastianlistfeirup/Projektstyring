@@ -122,6 +122,8 @@ export function AnalysisPanel() {
                 <span className="opacity-60">{t('swarm.analysisAvg')}: <b>{fmtDur(analysis.avgJobMs)}</b></span>
                 <span className={analysis.errors > 0 ? 'text-rose-400' : 'text-emerald-400'}>{t('swarm.analysisErrors')}: <b>{analysis.errors}</b></span>
               </div>
+              <p className="text-xs opacity-65">Seneste {analysis.windowRuns ?? analysis.runs} af {analysis.totalAvailable ?? analysis.runs} gemte kørsler. Fejlprocenten gælder påbegyndte jobs; ventende og blokerede jobs tæller ikke som forsøg.</p>
+              {!!analysis.unreadable && <p className="text-xs text-amber-500">{analysis.unreadable} historikfiler kunne ikke læses.</p>}
               {analysis.services.slice(0, 6).map((s) => (
                 <div key={String(s.id)} className="flex items-center gap-2 text-[10.5px]">
                   <span className="flex-1 truncate">{s.name}</span>

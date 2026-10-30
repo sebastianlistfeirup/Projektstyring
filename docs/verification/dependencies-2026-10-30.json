@@ -1,0 +1,51 @@
+{
+  "checkedAt": "2026-10-30T13:56:43.229920+00:00",
+  "command": "npm audit --omit=dev --json",
+  "scope": "Registry advisory check of production dependencies; not a source/security audit or real Microsoft login test.",
+  "before": {
+    "info": 0,
+    "low": 0,
+    "moderate": 2,
+    "high": 2,
+    "critical": 0,
+    "total": 4
+  },
+  "after": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "updates": [
+    {
+      "name": "@azure/msal-node",
+      "version": "7.1.2",
+      "advisories": [
+        "https://github.com/advisories/GHSA-xcx6-jx8p-x3h5"
+      ]
+    },
+    {
+      "name": "body-parser",
+      "version": "2.4.0",
+      "advisories": [
+        "https://github.com/advisories/GHSA-27r3-jxmh-p828"
+      ]
+    },
+    {
+      "name": "postcss-selector-parser",
+      "version": "6.1.5",
+      "advisories": [
+        "https://github.com/advisories/GHSA-rj75-hqrm-r3gf"
+      ]
+    },
+    {
+      "name": "qs",
+      "version": "6.17.1",
+      "advisories": [
+        "https://github.com/advisories/GHSA-6pq8-jhm2-2vcw"
+      ]
+    }
+  ]
+}

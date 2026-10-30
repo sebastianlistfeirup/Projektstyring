@@ -1,0 +1,97 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, basename } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { createRunWorktree, inspectRepository, verifyRepository, repositoryEvidence } from '../server/ai-repository.mjs';
+const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+
+test('isolated worktree preserves source checkout and records actual checks and commit', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-repo-'));
+  git(root, 'init', '-q');
+  writeFileSync(join(root, 'game.txt'), 'original');
+  git(root, 'add', '.');
+  git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'base');
+  const source = await inspectRepository(root);
+  const workDir = join(root, '..', `${basename(root)}-work`);
+  const repo = await createRunWorktree(root, workDir, 'test');
+  writeFileSync(join(workDir, 'game.txt'), 'fixed');
+  assert.equal(readFileSync(join(root, 'game.txt'), 'utf8'), 'original');
+  assert.equal(git(root, 'rev-parse', 'HEAD'), source.baseCommit);
+  const checks = await verifyRepository(workDir, [
+    { name: 'actual assertion', command: process.execPath, args: ['-e', "if(require('fs').readFileSync('game.txt','utf8')!=='fixed') process.exit(1)"] },
+    { name: 'failure', command: process.execPath, args: ['-e', 'process.exit(7)'] },
+    { name: 'must not run', command: process.execPath, args: ['-e', "require('fs').writeFileSync('should-not-exist','bad')"] },
+  ]);
+  assert.deepEqual(checks.map(c => c.exitCode), [0, 7]);
+  assert.equal(existsSync(join(workDir, 'should-not-exist')), false);
+  git(workDir, 'add', '.'); git(workDir, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'fixed');
+  const evidence = await repositoryEvidence(workDir, repo.baseCommit);
+  assert.deepEqual(evidence.changedFiles, ['game.txt']);
+  assert.notEqual(evidence.commit, source.baseCommit);
+});
+
+test('uncommitted source changes are never silently omitted', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-dirty-'));
+  git(root, 'init', '-q'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'base');
+  writeFileSync(join(root, 'unsaved'), 'work');
+  await assert.rejects(createRunWorktree(root, join(root, 'work'), 'test'), /lokale ændringer/);
+});
+
+test('successive worktrees carry verified commits and reject divergent source changes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-chain-')), source = join(root, 'source');
+  const { mkdirSync } = await import('node:fs'); mkdirSync(source);
+  git(source, 'init', '-q'); git(source, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'base');
+  const sourceHead = git(source, 'rev-parse', 'HEAD');
+  const first = await createRunWorktree(source, join(root, 'first'), 'first');
+  writeFileSync(join(first.workDir, 'first.txt'), 'First delivery'); git(first.workDir, 'add', '.');
+  git(first.workDir, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'first');
+  const firstCommit = git(first.workDir, 'rev-parse', 'HEAD');
+  const second = await createRunWorktree(source, join(root, 'second'), 'second', firstCommit);
+  assert.equal(readFileSync(join(second.workDir, 'first.txt'), 'utf8'), 'First delivery');
+  assert.equal(second.baseCommit, firstCommit); assert.equal(second.sourceCommit, sourceHead);
+  assert.equal(git(source, 'rev-parse', 'HEAD'), sourceHead); assert.equal(existsSync(join(source, 'first.txt')), false);
+  writeFileSync(join(source, 'separate.txt'), 'User work'); git(source, 'add', '.');
+  git(source, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'diverged');
+  await assert.rejects(createRunWorktree(source, join(root, 'third'), 'third', firstCommit), /forskellige ændringer/);
+  git(source, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'merge', '--no-edit', firstCommit);
+  const integrated = await createRunWorktree(source, join(root, 'integrated'), 'integrated', firstCommit);
+  assert.equal(readFileSync(join(integrated.workDir, 'separate.txt'), 'utf8'), 'User work');
+  assert.equal(readFileSync(join(integrated.workDir, 'first.txt'), 'utf8'), 'First delivery');
+  assert.equal(integrated.baseCommit, git(source, 'rev-parse', 'HEAD'));
+});
+
+test('check progress and process identity are observable before completion, cancellation stops children', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-check-cancel-')), marker = join(root, 'child-pulse');
+  const controller = new AbortController(), progress = [], processes = [];
+  const childScript = `const fs=require('fs'); process.on('SIGTERM',()=>{}); setInterval(()=>fs.writeFileSync(${JSON.stringify(marker)},String(Date.now())),20);`;
+  const parentScript = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(childScript)}],{stdio:'ignore'}); setInterval(()=>{},1000);`;
+  const pending = verifyRepository(root, [
+    { command: process.execPath, args: ['-e', 'console.log("first finished")'], name: 'first' },
+    { command: process.execPath, args: ['-e', parentScript], name: 'second' },
+    { command: process.execPath, args: ['-e', 'process.exit(99)'], name: 'never' },
+  ], controller.signal, { onProgress: value => progress.push(value), onProcess: value => processes.push(value) });
+  try {
+    for (let i = 0; i < 200 && !existsSync(marker); i++) await new Promise(resolve => setTimeout(resolve, 25));
+    assert.ok(existsSync(marker), 'child process started');
+    assert.deepEqual(progress.at(-1).map(item => item.status), ['passed', 'running']);
+    assert.ok(processes.some(item => item.checkName === 'second' && !item.finished && item.pid > 0));
+  } finally { controller.abort(); }
+  const results = await pending;
+  assert.deepEqual(results.map(item => item.status), ['passed', 'cancelled']);
+  assert.equal(results[1].exitCode, null);
+  assert.equal(processes.filter(item => !item.finished).length, processes.filter(item => item.finished).length);
+  const pulse = readFileSync(marker, 'utf8');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(readFileSync(marker, 'utf8'), pulse, 'child cannot keep writing after cancellation');
+});
+
+test('check timeout and output limits cannot look like successful exits', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-check-limit-'));
+  const timed = await verifyRepository(root, [{ command: process.execPath, args: ['-e', 'setInterval(()=>{},1000)'] }], undefined, { timeoutMs: 100 });
+  assert.equal(timed[0].status, 'failed'); assert.equal(timed[0].exitCode, null); assert.match(timed[0].output, /tidsgrænsen/);
+  const noisy = await verifyRepository(root, [{ command: process.execPath, args: ['-e', "process.stdout.write('x'.repeat(3*1024*1024));setInterval(()=>{},1000)"] }]);
+  assert.equal(noisy[0].status, 'failed'); assert.equal(noisy[0].exitCode, null); assert.match(noisy[0].output, /2 MB/);
+  assert.ok(noisy[0].output.length <= 20000);
+});

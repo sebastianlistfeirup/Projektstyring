@@ -3,19 +3,30 @@
 // synkronisering mellem brugere.
 // Køres med: node server/companion.mjs   (port 4310)
 import express from 'express';
+import { localAiAccess } from './local-access.mjs';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, networkInterfaces } from 'node:os';
+import { createWorkspaceBackup, restoreWorkspaceBackup } from './workspace-backup.mjs';
+import { writeAtomicJson } from './atomic-json.mjs';
+import { acceptSnapshot, normalizeSnapshot } from './workspace-state.mjs';
+import { listRepositoryIssues, repositoryIdentity } from './git-issues.mjs';
+import { applyRunToWorkspace } from './task-execution.mjs';
+import { runChat, serviceAvailability } from './ai-services.mjs';
+import { activeRuns, swarmState, pickOrchestrator } from './ai-runtime.mjs';
 import { registerAiRoutes } from './ai-engine.mjs';
+import { aiProcessSnapshot } from './ai-processes.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
 
-const PORT = 4310;
-const APP_DIR = join(homedir(), '.orbit');
+const PORT = Number(process.env.ORBIT_PORT ?? 4310);
+const APP_DIR = process.env.ORBIT_APP_DIR ?? join(homedir(), '.orbit');
 const CONFIG_PATH = join(APP_DIR, 'companion.json');
 const MSAL_CACHE_PATH = join(APP_DIR, 'msal-cache.json');
-const EXPORT_DIR = join(homedir(), 'Documents', 'Orbit');
+const EXPORT_DIR = process.env.ORBIT_EXPORT_DIR ?? join(homedir(), 'Documents', 'Orbit');
 const GRAPH_SCOPES = ['User.Read', 'Tasks.Read', 'Calendars.Read', 'Mail.Read', 'Mail.Send', 'offline_access'];
 
 mkdirSync(APP_DIR, { recursive: true });
@@ -34,7 +45,7 @@ function loadConfig() {
 }
 
 function saveConfig(cfg) {
-  writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+  writeAtomicJson(CONFIG_PATH, cfg);
 }
 
 function psQuote(s) {
@@ -52,6 +63,18 @@ function openExportFolder() {
 }
 
 function broadcast(payload) {
+  if (payload.kind === 'ai' && ['run_start', 'plan', 'run_finished'].includes(payload.type)) {
+    const run = activeRuns.get(payload.runId)?.run;
+    const snapshot = run ? applyRunToWorkspace(lastSnapshot?.snapshot, run, payload.type) : null;
+    if (snapshot) {
+      lastSnapshot = { ...lastSnapshot, snapshot, updatedAt: new Date().toISOString() };
+      broadcast({ type: 'sync', from: 'orbit-runtime', updatedAt: lastSnapshot.updatedAt });
+    }
+  }
+  if (payload.type === 'sync' && lastSnapshot) {
+    lastSnapshot.snapshot = normalizeSnapshot(lastSnapshot.snapshot);
+    writeAtomicJson(SNAPSHOT_PATH, lastSnapshot);
+  }
   const data = JSON.stringify(payload);
   for (const client of wss.clients) {
     if (client.readyState === 1) client.send(data);
@@ -115,7 +138,15 @@ function weekKey(d = new Date()) {
 }
 
 // ---------------- Synkronisering & presence ----------------
+const SNAPSHOT_PATH = join(APP_DIR, 'workspace.json');
 let lastSnapshot = null; // { snapshot, from, updatedAt }
+try {
+  if (existsSync(SNAPSHOT_PATH)) {
+    const saved = JSON.parse(readFileSync(SNAPSHOT_PATH, 'utf8'));
+    if (!Array.isArray(saved.snapshot?.tasks)) throw new Error('Ugyldigt workspace-format');
+    lastSnapshot = saved;
+  }
+} catch (error) { console.error(`Workspace kunne ikke indlæses: ${error.message}. Filen er bevaret.`); }
 const presence = new Map(); // clientId -> { name, since }
 
 // ---------------- Påmindelser & uge-rapport ----------------
@@ -248,12 +279,15 @@ setInterval(() => {
   }
   const bc = backupConfig();
   if (bc.enabled && hhmm === bc.time && lastBackupDate !== todayStr() && lastSnapshot) {
-    lastBackupDate = todayStr();
     try {
       const p = join(BACKUP_DIR, `orbit-backup-${stamp()}.json`);
-      writeFileSync(p, JSON.stringify(lastSnapshot.snapshot, null, 2), 'utf8');
+      writeAtomicJson(p, createWorkspaceBackup(lastSnapshot.snapshot, APP_DIR, ATTACH_DIR));
+      lastBackupDate = todayStr();
       console.log(`Backup gemt: ${p}`);
-    } catch { /* ignorer */ }
+    } catch (error) {
+      console.error(`Automatisk backup fejlede: ${error.message}`);
+      broadcast({ type: 'toast', level: 'error', text: `Backup kunne ikke gemmes: ${error.message}` });
+    }
   }
   // Tids-påmindelser på opgaver
   if (lastSnapshot) {
@@ -270,29 +304,14 @@ setInterval(() => {
 
 // ---------------- AI-assistent (OpenAI-kompatibel) ----------------
 async function aiComplete(messages) {
-  const cfg = loadConfig().ai ?? {};
-  if (!cfg.apiKey) {
-    return { ok: false, reason: 'AI-assistenten er ikke konfigureret – se Integrationer-fanen.' };
-  }
-  const baseUrl = (cfg.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '');
+  const cfg = loadConfig();
   try {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify({ model: cfg.model || 'gpt-4o-mini', messages, temperature: 0.4 }),
-      signal: AbortSignal.timeout(60000),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      return { ok: false, reason: `AI-model svarede ${res.status}: ${body.slice(0, 160)}` };
-    }
-    const data = await res.json();
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) return { ok: false, reason: 'Tomt svar fra AI-modellen.' };
+    const serviceId = await pickOrchestrator(cfg, await serviceAvailability(cfg));
+    if (!serviceId) return { ok: false, reason: 'Ingen abonnementsbekræftet AI-tjeneste er klar. Tilslut en tjeneste i Orbit.' };
+    const content = await runChat({ serviceId, cfg, dirs: { cwd: APP_DIR }, readOnly: true,
+      messages: messages.map(m => ({ role: m.role, text: String(m.content ?? m.text ?? '') })), signal: AbortSignal.timeout(60000) });
     return { ok: true, content };
-  } catch (err) {
-    return { ok: false, reason: String(err) };
-  }
+  } catch (err) { return { ok: false, reason: String(err) }; }
 }
 
 // ---------------- Microsoft Graph ----------------
@@ -370,12 +389,20 @@ async function graphSendMail(subject, textBody) {
 const app = express();
 app.use(express.json({ limit: '48mb' }));
 app.use((req, res, next) => {
+  if (app.locals.aiStopping && req.method !== 'GET' && req.path !== '/api/ai/prepare-shutdown') return res.status(503).json({ ok: false, reason: 'Companion er ved at lukke.' });
+  next();
+});
+app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
+
+app.use('/api/ai', localAiAccess);
+app.use('/api/backup', localAiAccess);
+app.use('/api/config', localAiAccess);
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
@@ -469,6 +496,7 @@ app.post('/api/sync/push', (req, res) => {
     return res.status(400).json({ ok: false, reason: 'Mangler snapshot' });
   }
   const prev = lastSnapshot?.snapshot;
+  if (prev && (prev.workspaceEpoch ?? null) !== (snapshot.workspaceEpoch ?? null)) return res.status(409).json({ ok: false, resetRequired: true, reason: 'Arbejdsområdet er gendannet. Hent den gendannede version før nye ændringer sendes.' });
   if (prev) {
     const prevStatus = new Map((prev.tasks ?? []).map((t) => [t.id, t.status]));
     for (const t of snapshot.tasks) {
@@ -477,13 +505,14 @@ app.post('/api/sync/push', (req, res) => {
       }
     }
   }
+  const accepted = acceptSnapshot(prev, snapshot);
   lastSnapshot = {
-    snapshot,
+    snapshot: accepted.snapshot,
     from: { clientId: String(clientId ?? 'ukendt'), name: String(user?.name ?? 'Ukendt') },
     updatedAt: new Date().toISOString(),
   };
   broadcast({ type: 'sync', from: clientId, updatedAt: lastSnapshot.updatedAt });
-  res.json({ ok: true, updatedAt: lastSnapshot.updatedAt });
+  res.json({ ok: true, updatedAt: lastSnapshot.updatedAt, merged: accepted.merged });
 });
 
 app.get('/api/sync/state', (_req, res) => {
@@ -761,7 +790,7 @@ app.post('/api/backup/now', (_req, res) => {
   if (!lastSnapshot) return res.json({ ok: false, reason: 'Ingen data endnu – åbn appen mindst én gang først.' });
   try {
     const filePath = join(BACKUP_DIR, `orbit-backup-${stamp()}.json`);
-    writeFileSync(filePath, JSON.stringify(lastSnapshot.snapshot, null, 2), 'utf8');
+    writeAtomicJson(filePath, createWorkspaceBackup(lastSnapshot.snapshot, APP_DIR, ATTACH_DIR));
     res.json({ ok: true, path: filePath, count: lastSnapshot.snapshot.tasks?.length ?? 0 });
   } catch (err) {
     res.status(500).json({ ok: false, reason: String(err) });
@@ -786,12 +815,32 @@ app.get('/api/backup/list', (_req, res) => {
 
 app.post('/api/backup/restore', (req, res) => {
   const { name } = req.body ?? {};
+  if (activeRuns.size || aiProcessSnapshot().length || app.locals.orphanProcesses?.().length) return res.status(409).json({ ok: false, reason: 'Stop aktive AI-kørsler og samtaler før gendannelse.' });
   if (!name || !/^[\w.-]+\.json$/.test(String(name))) {
     return res.status(400).json({ ok: false, reason: 'Ugyldigt backup-navn' });
   }
   try {
     const data = JSON.parse(readFileSync(join(BACKUP_DIR, String(name)), 'utf8'));
-    res.json({ ok: true, snapshot: data });
+    if (app.locals.orbitQueue && !app.locals.orbitQueue.storageError) app.locals.orbitQueue.pause('Gendannelse af backup er i gang.');
+    if (lastSnapshot) writeAtomicJson(join(BACKUP_DIR, `before-restore-${Date.now()}.json`), createWorkspaceBackup(lastSnapshot.snapshot, APP_DIR, ATTACH_DIR));
+    let restoredRecord;
+    restoreWorkspaceBackup(data, APP_DIR, ATTACH_DIR, { commitSnapshot: restored => {
+      // Persist the restored queue's pause before committing the workspace.
+      // Even a crash/failure in the subsequent reload cannot replay old intent.
+      const queuePath = join(APP_DIR, 'ai-runs', 'ai-queue.json');
+      if (existsSync(queuePath)) {
+        const restoredQueue = JSON.parse(readFileSync(queuePath, 'utf8'));
+        writeAtomicJson(queuePath, { ...restoredQueue, paused: true, reason: 'Backup er gendannet. Gennemgå køen før den fortsættes.', updatedAt: Date.now() });
+      }
+      restoredRecord = { snapshot: { ...restored, workspaceEpoch: randomUUID() }, from: 'backup', updatedAt: new Date().toISOString() };
+      writeAtomicJson(SNAPSHOT_PATH, restoredRecord);
+    } });
+    lastSnapshot = restoredRecord;
+    const snapshot = restoredRecord.snapshot;
+    swarmState.last = null;
+    app.locals.orbitQueue?.reloadAfterRestore();
+    broadcast({ type: 'workspace_restored', updatedAt: lastSnapshot.updatedAt });
+    res.json({ ok: true, snapshot, warning: app.locals.orbitQueue?.storageError });
   } catch (err) {
     res.status(404).json({ ok: false, reason: String(err) });
   }
@@ -1134,45 +1183,36 @@ app.post('/public/approve/:token', (req, res) => {
 });
 
 // ---------------- GitHub / GitLab ----------------
-function gitCfg() {
-  return loadConfig().git ?? {};
+function gitCfg(projectId) {
+  const cfg = loadConfig();
+  return (projectId ? cfg.gitProjects?.[String(projectId)] : undefined) ?? cfg.git ?? {};
 }
 
 app.post('/api/git/config', (req, res) => {
-  const { provider, token, owner, repo } = req.body ?? {};
-  const cfg = loadConfig();
-  cfg.git = { provider: provider ?? 'github', token: token ?? '', owner: owner ?? '', repo: repo ?? '' };
-  saveConfig(cfg);
-  res.json({ ok: true });
+  try {
+    const { projectId, token } = req.body ?? {};
+    const identity = repositoryIdentity(req.body ?? {}), cfg = loadConfig();
+    const previous = gitCfg(projectId);
+    const value = { ...identity, token: typeof token === 'string' && token.trim() ? token.trim() : previous.provider === identity.provider ? previous.token : undefined };
+    if (projectId) cfg.gitProjects = { ...cfg.gitProjects, [String(projectId)]: value };
+    else cfg.git = value;
+    saveConfig(cfg); res.json({ ok: true });
+  } catch (error) { res.status(400).json({ ok: false, reason: error.message }); }
 });
 
 app.get('/api/git/issues', async (req, res) => {
-  const { provider, token, owner, repo } = gitCfg();
-  if (!token || !owner || !repo) return res.json({ ok: false, reason: 'GitHub/GitLab er ikke konfigureret (token, owner/ejer og repo under Integrationer)' });
-  try {
-    if (provider === 'gitlab') {
-      const r = await fetch(`https://gitlab.com/api/v4/projects/${encodeURIComponent(`${owner}/${repo}`)}/issues?state=opened&per_page=50`, {
-        headers: { 'PRIVATE-TOKEN': token },
-      });
-      if (!r.ok) return res.json({ ok: false, reason: `GitLab svarede ${r.status}` });
-      const data = await r.json();
-      return res.json({ ok: true, items: data.map((i) => ({ id: i.iid, title: i.title, state: i.state })) });
-    }
-    const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues?state=open&per_page=50`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
-    });
-    if (!r.ok) return res.json({ ok: false, reason: `GitHub svarede ${r.status} – tjek token og repo-navn` });
-    const data = await r.json();
-    res.json({ ok: true, items: data.filter((i) => !i.pull_request).map((i) => ({ id: i.number, title: i.title, state: i.state })) });
-  } catch (err) {
-    res.json({ ok: false, reason: String(err) });
-  }
+  try { res.json({ ok: true, ...await listRepositoryIssues(gitCfg(req.query.projectId)) }); }
+  catch (error) { res.json({ ok: false, reason: error.message }); }
 });
 
 app.post('/api/git/close', async (req, res) => {
-  const { provider, owner, repo, token } = gitCfg();
-  const { id } = req.body ?? {};
-  if (!token || !id) return res.status(400).json({ ok: false, reason: 'Mangler id eller konfiguration' });
+  const { id, projectId } = req.body ?? {};
+  const config = gitCfg(projectId);
+  let identity;
+  try { identity = repositoryIdentity(req.body?.owner ? req.body : config); } catch (error) { return res.status(400).json({ ok: false, reason: error.message }); }
+  const { provider, owner, repo } = identity;
+  const token = config.provider === provider ? config.token : null;
+  if (!token || !Number.isInteger(id) || id < 1) return res.status(400).json({ ok: false, reason: 'Mangler gyldigt issue-nummer eller konfiguration' });
   try {
     if (provider === 'gitlab') {
       const r = await fetch(`https://gitlab.com/api/v4/projects/${encodeURIComponent(`${owner}/${repo}`)}/issues/${id}`, {
@@ -1655,11 +1695,34 @@ app.post('/api/economic/draft', async (req, res) => {
 });
 
 // ---- AI-motor (abonnement-first orkestrering) ----
-registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, EXPORT_DIR });
+registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, EXPORT_DIR, getSnapshot: () => lastSnapshot?.snapshot,
+  updateSnapshot: transform => {
+    const next = { ...lastSnapshot, snapshot: normalizeSnapshot(transform(lastSnapshot?.snapshot)), updatedAt: new Date().toISOString(), from: { clientId: 'orbit-runtime', name: 'Orbit' } };
+    writeAtomicJson(SNAPSHOT_PATH, next);
+    lastSnapshot = next;
+    broadcast({ type: 'sync', from: 'orbit-runtime', updatedAt: next.updatedAt });
+  },
+});
+
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try { app.locals.prepareAiShutdown(); } catch (error) { console.error('Kunne ikke gemme køens pause:', error.message); }
+  server.close();
+  for (const client of wss.clients) client.close(1001, 'Companion stopper');
+  const deadline = Date.now() + 20000;
+  while ((activeRuns.size || aiProcessSnapshot().length) && Date.now() < deadline) await delay(100);
+  const remaining = activeRuns.size || aiProcessSnapshot().length || app.locals.orphanProcesses?.().length;
+  if (remaining) console.error('Companion stoppes med uafsluttet arbejde. Kontrollér gendannede kørsler ved næste start.');
+  process.exit(remaining ? 1 : 0);
+}
+process.once('SIGTERM', () => { void shutdown(); });
+process.once('SIGINT', () => { void shutdown(); });
 
 server.listen(PORT, '0.0.0.0', () => {
   startTelegram();
-  console.log(`Orbit Companion kører på http://127.0.0.1:${PORT}`);
+  console.log(`Orbit Companion kører på http://127.0.0.1:${server.address().port}`);
   // LAN-adresser, så app'en også kan nås fra telefonen på samme Wi-Fi.
   for (const addrs of Object.values(networkInterfaces())) {
     for (const a of addrs ?? []) {

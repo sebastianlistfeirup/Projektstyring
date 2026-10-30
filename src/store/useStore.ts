@@ -1,3 +1,4 @@
+import { workLimitReason } from '../lib/workLimits';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { nanoid } from 'nanoid';
@@ -130,6 +131,8 @@ interface OrbitState {
   /** Projekt-bibler (rolle-dokumenter til orkestrering) */
   bibles: Record<string, string>;
   setBible: (projectId: string, text: string) => void;
+  bibleVersions: Record<string, { id: string; version: number; text: string; createdAt: string }[]>;
+  publishBible: (projectId: string) => void;
 
   addProject: (name: string, description?: string) => Project;
   addProjectFromTemplate: (templateId: string, customName?: string) => Project | null;
@@ -344,6 +347,13 @@ export const useStore = create<OrbitState>()(
             c.id === chatId ? { ...c, messages: c.messages.map((m) => (m.id === msgId ? { ...m, ...patch } : m)) } : c,
           ),
         })),
+      bibleVersions: {},
+      publishBible: (projectId) => set(s => {
+        const versions = s.bibleVersions[projectId] ?? [];
+        const text = s.bibles[projectId] ?? '';
+        if (!text.trim() || versions.at(-1)?.text === text) return {};
+        return { bibleVersions: { ...s.bibleVersions, [projectId]: [...versions.slice(-29), { id: nanoid(), version: (versions.at(-1)?.version ?? 0) + 1, text, createdAt: new Date().toISOString() }] } };
+      }),
       bibles: {},
       setBible: (projectId, text) => set((s) => ({ bibles: { ...s.bibles, [projectId]: text } })),
 
@@ -380,6 +390,8 @@ export const useStore = create<OrbitState>()(
           blockedBy: input.blockedBy ?? [],
           emoji: input.emoji,
         };
+        const limit = workLimitReason(state.tasks, state.rules, task, task.status);
+        if (limit) { task.status = 'backlog'; state.addNotification(state.currentUserId, `${limit} Den nye opgave er gemt i backlog.`, task.id); }
         set((s) => ({
           tasks: [...s.tasks, task],
           activity: [makeEntry(state.currentUserId, 'oprettede', task.title, task.id, task.projectId), ...s.activity],
@@ -391,6 +403,8 @@ export const useStore = create<OrbitState>()(
         const state = get();
         const task = state.tasks.find((t) => t.id === id);
         if (!task) return;
+        const reason = patch.status || patch.projectId ? workLimitReason(state.tasks, state.rules, { ...task, projectId: patch.projectId ?? task.projectId }, patch.status ?? task.status) : null;
+        if (reason) { state.addNotification(state.currentUserId, reason, id); return; }
         const now = new Date().toISOString();
         const oldDue = task.dueDate;
         set((s) => ({
@@ -510,8 +524,11 @@ export const useStore = create<OrbitState>()(
           set((s) => ({ trash: s.trash.filter((t) => t.task.id !== trashId) }));
           return;
         }
+        const limit = workLimitReason(state.tasks, state.rules, item.task, item.task.status);
+        const restored = { ...item.task, status: limit ? 'backlog' as const : item.task.status, updatedAt: new Date().toISOString() };
+        if (limit) state.addNotification(state.currentUserId, `${limit} Opgaven er gendannet i backlog.`, item.task.id);
         set((s) => ({
-          tasks: [...s.tasks, item.task],
+          tasks: [...s.tasks, restored],
           trash: s.trash.filter((t) => t.task.id !== trashId),
           activity: [makeEntry(state.currentUserId, 'gendannede', item.task.title, item.task.id, item.task.projectId), ...s.activity],
         }));
@@ -528,6 +545,8 @@ export const useStore = create<OrbitState>()(
         const state = get();
         const task = state.tasks.find((t) => t.id === taskId);
         if (!task) return;
+        const reason = workLimitReason(state.tasks, state.rules, task, newStatus);
+        if (reason) { state.addNotification(state.currentUserId, reason, taskId); return; }
         const now = new Date().toISOString();
         const column = state.tasks
           .filter((t) => t.projectId === task.projectId && t.status === newStatus && t.id !== taskId)
@@ -874,6 +893,8 @@ export const useStore = create<OrbitState>()(
         const state = get();
         const task = state.tasks.find((t) => t.id === id);
         if (!task || task.projectId === projectId) return;
+        const limit = workLimitReason(state.tasks, state.rules, { ...task, projectId }, task.status);
+        if (limit) { state.addNotification(state.currentUserId, limit, id); return; }
         const order = Math.max(0, ...state.tasks.filter((t) => t.projectId === projectId && t.status === 'todo').map((t) => t.order)) + 1;
         set((s) => ({
           tasks: s.tasks.map((t) =>
@@ -884,11 +905,8 @@ export const useStore = create<OrbitState>()(
       },
 
       bulkUpdateTasks: (ids, patch) => {
-        const now = new Date().toISOString();
-        set((s) => ({
-          tasks: s.tasks.map((t) => (ids.includes(t.id) ? { ...t, ...patch, updatedAt: now } : t)),
-          activity: ids.length > 0 ? [makeEntry(s.currentUserId, 'ændrede flere opgaver', `${ids.length} opgaver`, null, null), ...s.activity] : s.activity,
-        }));
+        // Reuse the ordinary transition path, including WIP and automation.
+        for (const id of ids) get().updateTask(id, patch);
       },
 
       bulkDeleteTasks: (ids) => {
@@ -898,7 +916,7 @@ export const useStore = create<OrbitState>()(
       setTaskExtIds: (taskId, ext) => {
         set((s) => ({
           tasks: s.tasks.map((t) =>
-            t.id === taskId ? { ...t, extIds: { ...(t.extIds ?? {}), ...ext } } : t,
+            t.id === taskId ? { ...t, extIds: { ...(t.extIds ?? {}), ...ext }, updatedAt: new Date().toISOString() } : t,
           ),
         }));
       },
@@ -1128,6 +1146,10 @@ export const useStore = create<OrbitState>()(
           simpleMode: false,
           goals: [],
           baselines: [],
+          bibleVersions: {},
+          bibles: {},
+          aiChats: [],
+          aiTaskLinks: {},
           novaLog: [],
           syncConflicts: [],
           activeProjectId: 'p-app',

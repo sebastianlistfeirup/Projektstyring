@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import OrbitPerformanceProbe from '../components/OrbitPerformanceProbe';
+import ServiceConstellation from '../components/ServiceConstellation';
+import { AI_PHASES, normalizePhase, removePlanJob } from '../../shared/ai-plan.mjs';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -16,7 +19,6 @@ import {
   FastForward,
   Flame,
   Gavel,
-  History,
   LayoutTemplate,
   Pause,
   Play,
@@ -47,7 +49,7 @@ import {
   type SwarmRun,
 } from '../lib/swarm';
 import {
-  approvePlan,
+  approvePlanResult,
   cancelRun,
   deleteTemplate,
   deleteTrigger,
@@ -65,10 +67,16 @@ import {
   type Trigger,
 } from '../lib/aiApi';
 import type { AiServiceInfo } from '../lib/aiApi';
+import OrbitWorkMap from '../components/OrbitWorkMap';
+import RunQueuePanel from '../components/RunQueuePanel';
+import RunHistory from '../components/RunHistory';
+import type { RunHistoryItem } from '../lib/aiApi';
+import { useStore } from '../store/useStore';
+import { presentRun, timestamp } from '../lib/runPresentation';
 import { AnalysisPanel, CompareRunsPanel, CopyDeliverableButton, JudgePanel, MiniMap, RunActionsBar } from './AiSwarmExtras';
 
 const BASE_URL = 'http://127.0.0.1:4310';
-const PHASES = ['concept', 'design', 'prototype', 'production', 'testing', 'polish', 'release'];
+const PHASES = AI_PHASES;
 
 const SERVICE_HEX: Record<string, string> = {
   emerald: '#34d399',
@@ -97,335 +105,6 @@ function fmtDur(ms: number | null | undefined): string {
 
 /* ================= canvas-sværmen ================= */
 
-interface NodePos { x: number; y: number; tx: number; ty: number; seed: number; }
-
-function SwarmCanvas({ run, services, active }: {
-  run: SwarmRun | null;
-  services: Record<string, AiServiceInfo> | null;
-  active: boolean;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const nodesRef = useRef<Map<string, NodePos>>(new Map());
-  const particlesRef = useRef<{ x: number; y: number; tx: number; ty: number; color: string; speed: number }[]>([]);
-  const runRef = useRef(run);
-  runRef.current = run;
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    let raf = 0;
-    let frame = 0;
-
-    const resize = () => {
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const rect = canvas.getBoundingClientRect();
-      canvas.width = rect.width * dpr;
-      canvas.height = rect.height * dpr;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(canvas);
-
-    const dark = () => document.documentElement.classList.contains('dark');
-
-    const nodeFor = (id: string, nx: number, ny: number): NodePos => {
-      const m = nodesRef.current;
-      let n = m.get(id);
-      if (!n) {
-        n = { x: nx, y: ny, tx: nx, ty: ny, seed: Math.random() * 1000 };
-        m.set(id, n);
-      }
-      n.tx = nx; n.ty = ny;
-      return n;
-    };
-
-    const draw = () => {
-      frame++;
-      const r = runRef.current;
-      const rect = canvas.getBoundingClientRect();
-      const W = rect.width;
-      const H = rect.height;
-      const cx = W / 2;
-      const cy = H / 2 - 10;
-      ctx.clearRect(0, 0, W, H);
-      const ink = dark() ? 'rgba(255,255,255,' : 'rgba(15,23,42,';
-      const tNow = Date.now();
-
-      // baggrunds-prikgitter
-      ctx.fillStyle = `${ink}0.05)`;
-      for (let gx = 20; gx < W; gx += 42) {
-        for (let gy = 20; gy < H; gy += 42) {
-          ctx.fillRect(gx, gy, 1.5, 1.5);
-        }
-      }
-
-      if (!r || r.jobs.length === 0) {
-        // Idle: sovende tjenester der langsomt driver
-        const list = services ? Object.values(services).filter((s) => s.available) : [];
-        list.slice(0, 10).forEach((s, i) => {
-          const ang = (i / Math.max(1, list.length)) * Math.PI * 2 + frame * 0.0018;
-          const rad = Math.min(W, H) * 0.26;
-          const nx = cx + Math.cos(ang) * rad;
-          const ny = cy + Math.sin(ang) * rad * 0.6 + Math.sin(frame * 0.02 + i) * 4;
-          const n = nodeFor(`idle-${s.id}`, nx, ny);
-          n.x += (n.tx - n.x) * 0.03;
-          n.y += (n.ty - n.y) * 0.03;
-          const c = hex(s.color);
-          const breathe = 0.5 + Math.sin(frame * 0.03 + i * 1.7) * 0.18;
-          ctx.beginPath();
-          ctx.arc(n.x, n.y, 10, 0, Math.PI * 2);
-          ctx.fillStyle = c + '33';
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(n.x, n.y, 4, 0, Math.PI * 2);
-          ctx.globalAlpha = breathe;
-          ctx.fillStyle = c;
-          ctx.fill();
-          ctx.globalAlpha = 1;
-          ctx.font = '10px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillStyle = `${ink}0.45)`;
-          ctx.fillText(s.name, n.x, n.y + 22);
-        });
-        raf = requestAnimationFrame(draw);
-        return;
-      }
-
-      const jobs = r.jobs;
-      const running = jobs.filter((j) => j.status === 'running');
-      const queued = jobs.filter((j) => j.status === 'queued');
-      const done = jobs.filter((j) => j.status === 'done');
-
-      // mål-positioner efter status
-      const target = new Map<string, { x: number; y: number }>();
-      const R = Math.min(W, H) * 0.3;
-      running.forEach((j, i) => {
-        const ang = -Math.PI / 2 + (i - (running.length - 1) / 2) * 0.9;
-        target.set(j.id, { x: cx + Math.cos(ang) * R * (running.length > 2 ? 1.15 : 0.85), y: cy + Math.sin(ang) * R * 0.72 });
-      });
-      queued.forEach((j, i) => {
-        const spread = Math.min(64, (W - 120) / Math.max(1, queued.length));
-        target.set(j.id, { x: cx + (i - (queued.length - 1) / 2) * spread, y: H - 34 });
-      });
-      done.forEach((j, i) => {
-        target.set(j.id, { x: W - 64, y: 30 + i * 26 });
-      });
-      jobs.filter((j) => j.status === 'error').forEach((j) => {
-        target.set(j.id, { x: 64, y: 30 + (target.size % 8) * 26 });
-      });
-      jobs.forEach((j) => { if (!target.has(j.id)) target.set(j.id, { x: cx, y: cy }); });
-
-      // kanter: kørende → deres afhængigheder (levende striber)
-      ctx.lineWidth = 1;
-      jobs.forEach((j) => {
-        if (j.status !== 'running') return;
-        const to = nodeFor(j.id, target.get(j.id)!.x, target.get(j.id)!.y);
-        const parents = (j.dependsOn ?? [])
-          .map((d) => jobs[d])
-          .filter((p): p is SwarmJob => Boolean(p));
-        const src = parents.length ? parents : [];
-        if (!src.length) {
-          // fra orkestrator-kernen
-          ctx.beginPath();
-          ctx.setLineDash([4, 6]);
-          ctx.lineDashOffset = -frame * 0.6;
-          ctx.strokeStyle = `${ink}0.25)`;
-          ctx.moveTo(cx, cy);
-          ctx.quadraticCurveTo((cx + to.x) / 2, Math.min(cy, to.y) - 26, to.x, to.y);
-          ctx.stroke();
-          ctx.setLineDash([]);
-        }
-        src.forEach((p) => {
-          const pt = target.get(p.id);
-          if (!pt) return;
-          ctx.beginPath();
-          ctx.setLineDash([4, 6]);
-          ctx.lineDashOffset = -frame * 0.8;
-          ctx.strokeStyle = hex(serviceColor(services, p.serviceId)) + '88';
-          ctx.moveTo(pt.x, pt.y);
-          ctx.quadraticCurveTo((pt.x + to.x) / 2, Math.min(pt.y, to.y) - 22, to.x, to.y);
-          ctx.stroke();
-          ctx.setLineDash([]);
-        });
-      });
-
-      // partikler: data der strømmer ind i kørende noder
-      if (active && frame % 7 === 0 && running.length) {
-        const j = running[Math.floor(Math.random() * running.length)];
-        const to = target.get(j.id)!;
-        const parents = (j.dependsOn ?? []).map((d) => jobs[d]).filter(Boolean);
-        const from = parents.length ? target.get(parents[Math.floor(Math.random() * parents.length)].id)! : { x: cx, y: cy };
-        particlesRef.current.push({
-          x: from.x, y: from.y, tx: to.x, ty: to.y,
-          color: hex(serviceColor(services, j.serviceId)),
-          speed: 0.015 + Math.random() * 0.02,
-        });
-      }
-      particlesRef.current = particlesRef.current.filter((p) => {
-        p.x += (p.tx - p.x) * p.speed;
-        p.y += (p.ty - p.y) * p.speed;
-        const arrived = Math.hypot(p.tx - p.x, p.ty - p.y) < 6;
-        if (!arrived) {
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
-          ctx.fillStyle = p.color;
-          ctx.shadowColor = p.color;
-          ctx.shadowBlur = 6;
-          ctx.fill();
-          ctx.shadowBlur = 0;
-        }
-        return !arrived;
-      });
-
-      // orkestrator-kerne i midten
-      const pulse = active ? 1 + Math.sin(frame * 0.08) * 0.12 : 1;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 13 * pulse, 0, Math.PI * 2);
-      const coreGrad = ctx.createRadialGradient(cx, cy, 2, cx, cy, 26);
-      coreGrad.addColorStop(0, 'rgba(129,140,248,0.85)');
-      coreGrad.addColorStop(1, 'rgba(129,140,248,0)');
-      ctx.fillStyle = coreGrad;
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(cx, cy, 5, 0, Math.PI * 2);
-      ctx.fillStyle = '#818cf8';
-      ctx.fill();
-      ctx.font = '9px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillStyle = `${ink}0.5)`;
-      ctx.fillText(serviceName(services, r.orchestratorId), cx, cy - 20);
-
-      // noder
-      jobs.forEach((j) => {
-        const tg = target.get(j.id)!;
-        const n = nodeFor(j.id, tg.x, tg.y);
-        n.x += (n.tx - n.x) * 0.07;
-        n.y += (n.ty - n.y) * 0.07;
-        const c = hex(serviceColor(services, j.serviceId));
-
-        if (j.status === 'running') {
-          const beat = 1 + Math.sin(frame * 0.1 + n.seed) * 0.1;
-          // halo
-          const g = ctx.createRadialGradient(n.x, n.y, 2, n.x, n.y, 30 * beat);
-          g.addColorStop(0, c + 'aa');
-          g.addColorStop(1, c + '00');
-          ctx.beginPath();
-          ctx.arc(n.x, n.y, 30 * beat, 0, Math.PI * 2);
-          ctx.fillStyle = g;
-          ctx.fill();
-          // kerne
-          ctx.beginPath();
-          ctx.arc(n.x, n.y, 13 * beat, 0, Math.PI * 2);
-          ctx.fillStyle = c;
-          ctx.shadowColor = c;
-          ctx.shadowBlur = 16;
-          ctx.fill();
-          ctx.shadowBlur = 0;
-          ctx.beginPath();
-          ctx.arc(n.x, n.y, 6, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(255,255,255,0.9)';
-          ctx.fill();
-          // fremskridtsring: forløbet tid vs. gennemsnit
-          const avg = avgJobMs(jobs);
-          if (avg && j.startedAt) {
-            const prog = Math.min(0.999, (tNow - j.startedAt) / avg);
-            ctx.beginPath();
-            ctx.arc(n.x, n.y, 19, -Math.PI / 2, -Math.PI / 2 + prog * Math.PI * 2);
-            ctx.strokeStyle = 'rgba(255,255,255,0.75)';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-          }
-          // omløbssmæk
-          for (let k = 0; k < 3; k++) {
-            const a = frame * 0.06 + n.seed + (k * Math.PI * 2) / 3;
-            ctx.beginPath();
-            ctx.arc(n.x + Math.cos(a) * 24, n.y + Math.sin(a) * 24, 2, 0, Math.PI * 2);
-            ctx.fillStyle = c + 'cc';
-            ctx.fill();
-          }
-          // aktivitetsstød ved delta
-          if (j.lastDeltaAt && tNow - j.lastDeltaAt < 250) {
-            ctx.beginPath();
-            ctx.arc(n.x, n.y, 34, 0, Math.PI * 2);
-            ctx.strokeStyle = c + '55';
-            ctx.lineWidth = 1.5;
-            ctx.stroke();
-          }
-          // underagenter: små satellitter i kredsløb om den kørende node
-          const subs = j.subagents ?? [];
-          subs.forEach((s, si) => {
-            const N = Math.max(1, subs.length);
-            const a2 = frame * 0.045 + n.seed + (si * Math.PI * 2) / N;
-            ctx.beginPath();
-            ctx.moveTo(n.x + Math.cos(a2) * 17, n.y + Math.sin(a2) * 17);
-            ctx.lineTo(n.x + Math.cos(a2) * 40, n.y + Math.sin(a2) * 40);
-            ctx.strokeStyle = c + (s.status === 'running' ? 'aa' : '44');
-            ctx.lineWidth = 1;
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.arc(n.x + Math.cos(a2) * 40, n.y + Math.sin(a2) * 40, s.status === 'running' ? 4.5 : 3.5, 0, Math.PI * 2);
-            ctx.fillStyle = s.status === 'running' ? '#fbbf24' : '#34d399';
-            if (s.status === 'running') { ctx.shadowColor = '#fbbf24'; ctx.shadowBlur = 8; }
-            ctx.fill();
-            ctx.shadowBlur = 0;
-          });
-          ctx.font = 'bold 10px sans-serif';
-          ctx.fillStyle = `${ink}0.85)`;
-          ctx.fillText(serviceName(services, j.serviceId), n.x, n.y + 38);
-          ctx.font = '9px sans-serif';
-          ctx.fillStyle = `${ink}0.45)`;
-          ctx.fillText(j.title.length > 26 ? j.title.slice(0, 25) + '…' : j.title, n.x, n.y + 50);
-        } else if (j.status === 'queued') {
-          ctx.beginPath();
-          ctx.arc(n.x, n.y, 6, 0, Math.PI * 2);
-          ctx.fillStyle = c + '2e';
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(n.x, n.y, 2.5, 0, Math.PI * 2);
-          ctx.fillStyle = c + '99';
-          ctx.fill();
-          ctx.font = '8.5px sans-serif';
-          ctx.fillStyle = `${ink}0.4)`;
-          ctx.fillText(j.title.length > 18 ? j.title.slice(0, 17) + '…' : j.title, n.x, n.y + 16);
-        } else if (j.status === 'done') {
-          ctx.beginPath();
-          ctx.arc(n.x, n.y, 7, 0, Math.PI * 2);
-          ctx.fillStyle = '#34d399';
-          ctx.globalAlpha = 0.9;
-          ctx.fill();
-          ctx.globalAlpha = 1;
-          ctx.beginPath();
-          ctx.moveTo(n.x - 3, n.y);
-          ctx.lineTo(n.x - 0.5, n.y + 2.8);
-          ctx.lineTo(n.x + 3.5, n.y - 2.5);
-          ctx.strokeStyle = '#052e16';
-          ctx.lineWidth = 1.8;
-          ctx.stroke();
-        } else if (j.status === 'error') {
-          const blink = 0.5 + Math.sin(frame * 0.15) * 0.4;
-          ctx.beginPath();
-          ctx.arc(n.x, n.y, 8, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(251,113,133,${blink})`;
-          ctx.fill();
-          ctx.font = '9px sans-serif';
-          ctx.fillStyle = '#fb7185';
-          ctx.fillText('!', n.x, n.y + 3);
-        }
-      });
-
-      raf = requestAnimationFrame(draw);
-    };
-
-    raf = requestAnimationFrame(draw);
-    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
-  }, [services, active]);
-
-  return <canvas ref={canvasRef} className="w-full h-full" aria-hidden />;
-}
-
 function avgJobMs(jobs: SwarmJob[]): number | null {
   const timed = jobs.filter((j) => j.status === 'done' && j.startedAt && j.finishedAt);
   if (!timed.length) return null;
@@ -438,7 +117,7 @@ function RunTimeline({ run, services, active }: { run: SwarmRun; services: Recor
   const rows = useMemo(() => {
     const js = run.jobs.filter((j) => j.startedAt);
     if (!js.length) return null;
-    const t0 = Math.min(run.startedAt, ...js.map((j) => j.startedAt!));
+    const t0 = Math.min(...[run.startedAt, ...js.map((j) => j.startedAt!)].filter(t => t > 0));
     const t1 = Math.max(run.finishedAt ?? Date.now(), ...js.map((j) => j.finishedAt ?? Date.now()));
     return { t0, t1: Math.max(t1, t0 + 1000), jobs: js };
   }, [run]);
@@ -515,7 +194,7 @@ function JobCard({ j, services, runActive, onSkip }: { j: SwarmJob; services: Re
     .map((d) => ({ idx: d }))
     .length;
   const svcInfo = j.serviceId ? services?.[j.serviceId] : null;
-  const estKr = svcInfo?.kind === 'paid-api' ? 0.25 : 0;
+  const billingLabel = svcInfo?.kind === 'local' ? 'Lokalt forbrug' : svcInfo?.billing?.allowed ? 'Inkluderet · brugerbekræftet' : 'Betalingsform ukendt';
 
   return (
     <div
@@ -553,7 +232,7 @@ function JobCard({ j, services, runActive, onSkip }: { j: SwarmJob; services: Re
           {j.status === 'done' && <CheckCircle2 size={12} className="text-emerald-400" />}
           {j.status === 'error' && <AlertTriangle size={12} className="text-rose-400" />}
           {j.status === 'queued' && <CircleDashed size={12} className="opacity-40" />}
-          {runActive && (j.status === 'queued' || j.status === 'error') && onSkip && (
+          {runActive && j.status === 'queued' && onSkip && (
             <button
               onClick={() => onSkip(j.id)}
               title={t('swarm.skipJob')}
@@ -636,7 +315,7 @@ function JobCard({ j, services, runActive, onSkip }: { j: SwarmJob; services: Re
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[9.5px] opacity-45">
               <span className="flex items-center gap-1"><Clock size={9} /> {fmtDur(j.startedAt && j.finishedAt ? j.finishedAt - j.startedAt : null)}</span>
               <span className="flex items-center gap-1"><Activity size={9} /> {j.deltaCount.toLocaleString('da-DK')}</span>
-              <span className="flex items-center gap-1"><Coins size={9} /> {estKr > 0 ? `~${estKr.toFixed(2)} kr` : t('swarm.coveredShort')}</span>
+              <span className="flex items-center gap-1"><Coins size={9} /> {billingLabel}</span>
             </div>
             <CopyDeliverableButton text={j.text} />
             {j.judgeNote && (
@@ -651,9 +330,9 @@ function JobCard({ j, services, runActive, onSkip }: { j: SwarmJob; services: Re
           </p>
         )}
 
-        {j.status === 'error' && (
+        {['error', 'blocked', 'cancelled', 'interrupted', 'skipped'].includes(j.status) && (
           <div className="mt-2">
-            <p className="text-[10.5px] text-rose-300/90 leading-relaxed">{j.error}</p>
+            <p className="text-[10.5px] text-rose-300/90 leading-relaxed">{j.error ?? (j.status === 'skipped' ? 'Sprunget over; afhængige jobs kan ikke fortsætte.' : j.status)}</p>
             <p className="text-[9px] opacity-40 mt-1">{t('swarm.selfHealHint')}</p>
           </div>
         )}
@@ -715,17 +394,24 @@ function RunControls({ run }: { run: SwarmRun }) {
 
 /* ================= godkendelse/redigering af plan (idé 1/2) ================= */
 
-interface PlanDraft { id: string; title: string; serviceId: string | null; phase: string; dependsOn: number[]; description: string; team?: boolean }
+interface PlanDraft { id: string; title: string; serviceId: string | null; phase: string; dependsOn: number[]; description: string; team?: boolean; readOnly?: boolean; context?: string[] }
 
-function ApprovalModal({ services, onClose }: { services: Record<string, AiServiceInfo> | null; onClose: () => void }) {
+function ApprovalModal({ services, open, onClose }: { services: Record<string, AiServiceInfo> | null; open: boolean; onClose: () => void }) {
   const approval = useSwarm((s) => s.approval);
   const setApproval = useSwarm((s) => s.setApproval);
   const [draft, setDraft] = useState<PlanDraft[]>([]);
   const [ready, setReady] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const element = dialog.current;
+    if (open && approval) element?.showModal(); else element?.close();
+  }, [open, approval?.runId]);
 
   useEffect(() => {
     if (approval && !ready) {
-      setDraft(approval.jobs.map((j) => ({ id: j.id, title: j.title, serviceId: j.serviceId, phase: j.phase, dependsOn: [...(j.dependsOn ?? [])], description: j.description, team: j.team })));
+      setDraft(approval.jobs.map(j => ({ ...j, phase: normalizePhase(j.phase), dependsOn: [...(j.dependsOn ?? [])] })));
       setReady(true);
     }
     if (!approval) { setReady(false); onClose(); }
@@ -736,10 +422,24 @@ function ApprovalModal({ services, onClose }: { services: Record<string, AiServi
 
   const patch = (i: number, p: Partial<PlanDraft>) => setDraft((d) => d.map((x, xi) => (xi === i ? { ...x, ...p } : x)));
 
+  const remove = (index: number) => {
+    try { setDraft(removePlanJob(draft, index)); setError(''); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Jobbet kunne ikke fjernes.'); }
+  };
   const approve = async () => {
-    const jobs = draft.filter((j) => j.title.trim()).map((j, i) => ({ ...j, id: j.id || `job-${i}`, dependsOn: (j.dependsOn ?? []).filter((d) => d !== i && d < draft.length) }));
-    const ok = await approvePlan(approval.runId, jobs);
+    if (!draft.length || draft.some(job => !job.title.trim())) { setError('Alle jobs skal have en titel. Tomme jobs fjernes ikke automatisk.'); return; }
+    setBusy(true); setError('');
+    const result = await approvePlanResult(approval.runId, draft);
+    setBusy(false);
+    if (result.ok) { setApproval(null); onClose(); }
+    else setError(result.reason ?? 'Planen kunne ikke godkendes.');
+  };
+  const cancel = async () => {
+    setBusy(true); setError('');
+    const ok = await cancelRun(approval.runId);
+    setBusy(false);
     if (ok) { setApproval(null); onClose(); }
+    else setError('Stop kunne ikke bekræftes. Kontrollér forbindelsen.');
   };
 
   const serviceOpts = (current: string | null) => {
@@ -750,28 +450,28 @@ function ApprovalModal({ services, onClose }: { services: Record<string, AiServi
   };
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center p-4" role="dialog" aria-modal>
-      <div className="absolute inset-0 bg-zinc-950/70 backdrop-blur-sm" />
+    <dialog ref={dialog} aria-label="Gennemgå jobplan" onCancel={event => { event.preventDefault(); onClose(); }} className="fixed m-auto w-[min(96vw,700px)] max-h-[94dvh] rounded-3xl border border-slate-500/30 bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100 p-0 shadow-2xl backdrop:bg-black/75">
       <div className="glass-panel animate-fade-in relative max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-3xl p-5">
         <h3 className="text-base font-bold flex items-center gap-2">
           <Check size={16} className="text-emerald-400" /> {t('swarm.approvalTitle')}
         </h3>
-        <p className="text-[11px] opacity-55 mt-1 mb-3">{t('swarm.approvalHint')}</p>
-        <div className="space-y-2">
+        <p className="text-xs opacity-65 mt-1 mb-3">{t('swarm.approvalHint')}</p>
+        <button className="btn-ghost text-xs mb-3" onClick={onClose}>Se arbejdskortet · planen venter</button>
+        <fieldset disabled={busy} className="space-y-2">
           {draft.map((j, i) => (
-            <div key={j.id || i} className="rounded-2xl border border-white/10 bg-black/15 dark:bg-black/25 p-2.5 space-y-1.5">
+            <div key={j.id || i} role="group" aria-label={`Planjob ${i + 1}`} className="rounded-2xl border border-white/10 bg-black/15 dark:bg-black/25 p-2.5 space-y-1.5">
               <div className="flex gap-1.5">
-                <input value={j.title} onChange={(e) => patch(i, { title: e.target.value })} className="flex-1 rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[12px] outline-none focus:border-indigo-400/50" placeholder={t('swarm.jobTitle')} />
-                <button onClick={() => setDraft((d) => d.filter((_, xi) => xi !== i))} className="rounded-lg p-1.5 opacity-40 hover:opacity-100 hover:text-rose-400 transition" title={t('ai.delete')}>
+                <input aria-label="Jobtitel" value={j.title} onChange={(e) => patch(i, { title: e.target.value })} className="flex-1 rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[12px] outline-none focus:border-indigo-400/50" placeholder={t('swarm.jobTitle')} />
+                <button aria-label={`Fjern job ${i + 1}`} onClick={() => remove(i)} className="rounded-lg p-1.5 opacity-40 hover:opacity-100 hover:text-rose-400 transition" title={t('ai.delete')}>
                   <Trash2 size={13} />
                 </button>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                <select value={j.serviceId ?? ''} onChange={(e) => patch(i, { serviceId: e.target.value || null })} className="rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none">
+                <select aria-label="Tjeneste" value={j.serviceId ?? ''} onChange={(e) => patch(i, { serviceId: e.target.value || null })} className="rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none">
                   <option value="">—</option>
                   {serviceOpts(j.serviceId)}
                 </select>
-                <select value={j.phase} onChange={(e) => patch(i, { phase: e.target.value })} className="rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none">
+                <select aria-label="Fase" value={j.phase} onChange={(e) => patch(i, { phase: e.target.value })} className="rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none">
                   {PHASES.map((p) => <option key={p} value={p}>{t(`ai.phase.${p}`) === `ai.phase.${p}` ? p : t(`ai.phase.${p}`)}</option>)}
                 </select>
                 <label className="flex items-center gap-1 text-[10px] opacity-60 px-1">
@@ -779,28 +479,32 @@ function ApprovalModal({ services, onClose }: { services: Record<string, AiServi
                   {t('swarm.team')}
                 </label>
               </div>
-              <textarea value={j.description} onChange={(e) => patch(i, { description: e.target.value })} rows={2} className="w-full rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none focus:border-indigo-400/50 resize-none" placeholder={t('ai.descriptionPlaceholder')} />
+              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={j.readOnly === true} onChange={e => patch(i, { readOnly: e.target.checked })} />Kun læsning · må ikke ændre repository</label>
+              {!!j.context?.length && <p className="text-[11px] opacity-60 break-all">Kontekstfiler: {j.context.join(', ')}</p>}
+              {draft.length > 1 && <details className="text-xs"><summary className="cursor-pointer opacity-70">Afhænger af {j.dependsOn.length} jobs</summary><div className="flex flex-col gap-1 mt-2">{draft.map((other, index) => index !== i && <label key={other.id} className="flex items-center gap-2"><input type="checkbox" checked={j.dependsOn.includes(index)} onChange={e => patch(i, { dependsOn: e.target.checked ? [...j.dependsOn, index] : j.dependsOn.filter(value => value !== index) })} />{index + 1}. {other.title || 'Uden titel'}</label>)}</div></details>}
+              <textarea aria-label="Jobbeskrivelse" value={j.description} onChange={(e) => patch(i, { description: e.target.value })} rows={2} className="w-full rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none focus:border-indigo-400/50 resize-none" placeholder={t('ai.descriptionPlaceholder')} />
             </div>
           ))}
-        </div>
+        </fieldset>
         <button
-          onClick={() => setDraft((d) => [...d, { id: `job-${d.length}`, title: '', serviceId: null, phase: 'produktion', dependsOn: [], description: '' }])}
+          disabled={busy} onClick={() => setDraft((d) => [...d, { id: `job-${crypto.randomUUID()}`, title: '', serviceId: null, phase: 'production', dependsOn: [], description: '' }])}
           className="mt-2 rounded-xl border border-dashed border-white/15 px-3 py-1.5 text-[11px] opacity-60 hover:opacity-100 transition flex items-center gap-1"
         >
           <PlusIcon /> {t('swarm.addJob')}
         </button>
+        {error && <p role="alert" className="mt-3 text-xs text-rose-500">{error}</p>}
         <div className="mt-4 flex items-center gap-2">
-          <button onClick={() => { setApproval(null); void cancelRun(approval.runId); onClose(); }} className="rounded-xl border border-rose-400/30 text-rose-300 px-3 py-2 text-[11px] hover:bg-rose-400/10 transition">
+          <button disabled={busy} onClick={() => void cancel()} className="rounded-xl border border-rose-400/30 text-rose-300 px-3 py-2 text-[11px] hover:bg-rose-400/10 transition">
             {t('swarm.cancelRun')}
           </button>
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={approve} className="btn-primary rounded-xl px-4 py-2 text-[12px] flex items-center gap-1.5">
+            <button disabled={busy} onClick={approve} className="btn-primary rounded-xl px-4 py-2 text-[12px] flex items-center gap-1.5">
               <Check size={13} /> {t('swarm.approve')}
             </button>
           </div>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }
 
@@ -811,6 +515,9 @@ function PlusIcon() {
 /* ================= autonome triggere (idé 15) ================= */
 
 function TriggersPanel() {
+  const projects = useStore(state => state.projects);
+  const [projectId, setProjectId] = useState('');
+  const [error, setError] = useState('');
   const [triggers, setTriggers] = useState<Trigger[]>([]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: '', kind: 'cron' as 'cron' | 'webhook', cron: '0 8 * * 1', goal: '', mode: 'standard' as Trigger['mode'] });
@@ -821,7 +528,9 @@ function TriggersPanel() {
 
   const add = async () => {
     if (!form.name.trim() || !form.goal.trim()) return;
-    await saveTrigger({ ...form, cron: form.kind === 'cron' ? form.cron : undefined });
+    const saved = await saveTrigger({ ...form, projectId: projectId || undefined, cron: form.kind === 'cron' ? form.cron : undefined });
+    if (!saved) { setError('Planlægningen kunne ikke gemmes. Kontrollér projekt, cron-felter og forbindelsen.'); return; }
+    setError('');
     setForm({ name: '', kind: 'cron', cron: '0 8 * * 1', goal: '', mode: 'standard' });
     reload();
   };
@@ -875,6 +584,9 @@ function TriggersPanel() {
                 <option value="race">{t('swarm.mode.race')}</option>
               </select>
             </div>
+            <label className="block text-[11px] space-y-1"><span>Projekt og gældende grundlag</span><select className="input w-full text-xs" aria-label="Projekt for planlagt kørsel" value={projectId} onChange={event => setProjectId(event.target.value)}><option value="">Uden projekt (ingen repositorytilknytning)</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+            <p className="text-[10px] opacity-50">Tidspunkter bruger maskinens lokale tidszone. Ventende kørsler gemmes; tider mens Companion er lukket efterkøres ikke.</p>
+            {error && <p role="alert" className="text-rose-400 text-xs">{error}</p>}
             <textarea value={form.goal} onChange={(e) => setForm((f) => ({ ...f, goal: e.target.value }))} rows={2} placeholder={t('swarm.triggerGoal')} className="w-full rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none focus:border-indigo-400/50 resize-none" />
             <button onClick={() => void add()} disabled={!form.name.trim() || !form.goal.trim()} className="btn-primary rounded-lg px-3 py-1.5 text-[10.5px] disabled:opacity-40 flex items-center gap-1">
               <PlusIcon /> {t('swarm.addTrigger')}
@@ -1008,15 +720,17 @@ function CostsPanel() {
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10.5px] mb-2">
                 <span className="opacity-60">{t('swarm.costRuns')}: <b>{costs.totalRuns}</b></span>
                 <span className="opacity-60">{t('swarm.costJobs')}: <b>{costs.totalJobs}</b></span>
-                <span className="text-emerald-400">{t('swarm.costEst')}: <b>{costs.estKr.toFixed(2)} kr</b></span>
+                <span className="text-emerald-400">{t('swarm.costEst')}: <b>{costs.estKr?.toFixed(2) ?? 'Ukendt'} kr</b></span>
               </div>
+              <p className="text-xs opacity-65 mb-2">Seneste {costs.windowRuns ?? costs.totalRuns} af {costs.totalAvailable ?? costs.totalRuns} gemte kørsler. Antal hovedjobs er aktivitet, ikke provider-kald eller fakturering.</p>
+              {!!costs.unreadable && <p className="text-xs text-amber-500 mb-2">{costs.unreadable} historikfiler kunne ikke læses.</p>}
               <div className="space-y-1">
                 {costs.byService.map((u) => (
                   <div key={u.id} className="flex items-center gap-2 text-[10.5px]">
                     <span className="flex-1 truncate">{u.name}</span>
                     <span className="opacity-50 tabular-nums">{u.jobs} {t('swarm.costJobsShort')}</span>
                     <span className={cn('text-[9px] px-1.5 py-0.5 rounded-full border', u.subscriptionCovered ? 'border-emerald-400/30 text-emerald-300' : 'border-amber-400/30 text-amber-300')}>
-                      {u.subscriptionCovered ? t('swarm.covered') : `${u.estKr.toFixed(2)} kr`}
+                      {u.subscriptionCovered ? t('swarm.covered') : `${u.estKr?.toFixed(2) ?? 'Ukendt'} kr`}
                     </span>
                   </div>
                 ))}
@@ -1031,18 +745,6 @@ function CostsPanel() {
   );
 }
 /* ================= hovedvisning ================= */
-
-interface RunSummary {
-  file: string;
-  runId: string;
-  goal: string;
-  finishedAt?: string;
-  results?: { jobId: string; title: string; text?: string; artifacts?: SwarmJob['artifacts'] }[];
-  jobs?: unknown[];
-  orchestratorId?: string | null;
-  mode?: string;
-  events?: SwarmEvent[];
-}
 
 interface ReplayState {
   base: SwarmRun;
@@ -1064,22 +766,30 @@ const MODE_KEYS: Record<string, string> = {
 export function AiSwarmView() {
   useLang();
   const connected = useSwarm((s) => s.connected);
+  const recoveredProcesses = useSwarm(s => s.processes).filter(process => process.kind === 'recovered');
   const run = useSwarm((s) => s.run);
   const services = useSwarm((s) => s.services);
   const approval = useSwarm((s) => s.approval);
-  const [history, setHistory] = useState<RunSummary[]>([]);
   const [archived, setArchived] = useState<SwarmRun | null>(null);
+  const [hiddenApproval, setHiddenApproval] = useState<string | null>(null);
   const [replay, setReplay] = useState<ReplayState | null>(null);
+  const [archivedEvents, setArchivedEvents] = useState<SwarmEvent[]>([]);
+  const [mapMode, setMapMode] = useState<'both' | 'work' | 'constellation'>(() => {
+    const saved = localStorage.getItem('orbit-live-view'); return saved === 'work' || saved === 'constellation' ? saved : 'both';
+  });
+  const [animateOrbs, setAnimateOrbs] = useState(true);
+  const [orbSelection, setOrbSelection] = useState<{ runId: string; jobId: string } | null>(null);
+  const historyRequest = useRef(0);
   const [toast, setToast] = useState<string | null>(null);
   const showToast = (msg: string) => {
     setToast(msg);
     window.setTimeout(() => setToast(null), 3200);
   };
-  const [, tick] = useReducer((x: number) => x + 1, 0);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     connectSwarm();
-    const id = setInterval(() => tick(), 1000);
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -1096,23 +806,23 @@ export function AiSwarmView() {
     return () => clearInterval(id);
   }, [replay?.playing]);
 
-  useEffect(() => {
-    fetch('http://127.0.0.1:4310/api/ai/runs').then((r) => r.json()).then((j) => setHistory((j?.runs ?? []).slice(0, 6))).catch(() => undefined);
-  }, [run?.status]);
-
   const shown = replay ? replayEvents(replay.base, replay.events, replay.cursor) : (archived ?? run);
   const active = !archived && !replay && shown?.status === 'running';
+  const liveServices = active && Boolean(shown?.heartbeatAt && now - shown.heartbeatAt <= 35_000);
+  const focusedJob = shown?.jobs.find(job => orbSelection?.runId === shown.runId && job.id === orbSelection.jobId) ?? shown?.jobs.find(job => job.status === 'running') ?? shown?.jobs[0];
+  const selectedRunId = shown?.runId;
+  const selectOrb = useCallback((jobId: string) => { if (selectedRunId) setOrbSelection({ runId: selectedRunId, jobId }); }, [selectedRunId]);
   const jobs = shown?.jobs ?? [];
   const doneCount = jobs.filter((j) => j.status === 'done').length;
   const runCount = jobs.filter((j) => j.status === 'running').length;
   const errCount = jobs.filter((j) => j.status === 'error').length;
-  const elapsed = shown ? (shown.finishedAt ?? Date.now()) - shown.startedAt : 0;
+  const elapsed = shown?.startedAt ? (shown.finishedAt ?? (replay?.cursor ?? now)) - shown.startedAt : null;
   const avg = jobs.length ? avgJobMs(jobs) : null;
-  const remaining = jobs.length - doneCount - errCount;
-  const eta = avg && remaining > 0 ? remaining * avg : null;
+  const remaining = jobs.filter(j => ['queued', 'running'].includes(j.status)).length;
+  const eta = active && avg && remaining > 0 ? remaining * avg : null;
 
   const phaseStats = useMemo(() => PHASES.map((p) => {
-    const inPhase = jobs.filter((j) => j.phase === p);
+    const inPhase = jobs.filter((j) => normalizePhase(j.phase) === p);
     return { phase: p, total: inPhase.length, done: inPhase.filter((j) => j.status === 'done').length };
   }), [jobs]);
 
@@ -1123,35 +833,31 @@ export function AiSwarmView() {
     return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
   }, [jobs]);
 
-  const openArchived = (r: RunSummary) => {
-    setReplay(null);
-    const results = new Map((r.results ?? []).map((x) => [x.jobId, x]));
-    const finishedAt = Date.parse(r.finishedAt ?? '') || null;
-    const base: SwarmRun = {
-      runId: r.runId,
-      goal: r.goal,
-      mode: r.mode ?? 'standard',
-      startedAt: finishedAt ? finishedAt - 60_000 : Date.now(),
-      orchestratorId: r.orchestratorId ?? null,
-      status: 'done',
-      notes: [],
-      finishedAt,
-      jobs: ((r.jobs ?? []) as SwarmJob[]).map((j) => {
-        const res = results.get(j.id);
-        return { ...j, status: res ? 'done' as const : 'queued' as const, liveText: '', notes: [], deltaCount: 0, lastDeltaAt: null, startedAt: null, finishedAt: null, text: res?.text ?? '', artifacts: res?.artifacts ?? [], error: null };
-      }),
-    };
-    setArchived(base);
-    if ((r.events?.length ?? 0) > 1) {
-      const events = [...(r.events ?? [])].sort((a, b) => a.at - b.at);
-      setReplay({ base: { ...base, startedAt: events[0].at, jobs: [], finishedAt: null }, events, t0: events[0].at, t1: events[events.length - 1].at, cursor: events[0].at, playing: false, speed: 8 });
-    }
+  const openArchived = async (r: RunHistoryItem) => {
+    const request = ++historyRequest.current;
+    try {
+      const response = await fetch(`${BASE_URL}/api/ai/runs/${encodeURIComponent(r.runId)}`);
+      const data = await response.json();
+      if (!response.ok || !data.ok || !data.run) throw new Error('Historikken kunne ikke hentes.');
+      if (request !== historyRequest.current) return;
+      setReplay(null);
+      setArchived(presentRun(data.run));
+      setArchivedEvents((data.run.eventsTruncated ? [] : data.run.events ?? []).filter((event: SwarmEvent) => timestamp(event.at)).sort((a: SwarmEvent, b: SwarmEvent) => a.at - b.at));
+    } catch { if (request === historyRequest.current) showToast('Historikken kunne ikke hentes. Kontrollér forbindelsen.'); }
+  };
+
+  const startReplay = () => {
+    if (!archived || archivedEvents.length < 2) return;
+    const events = archivedEvents;
+    // Evidence from the end must not appear before its event in the replay.
+    const base = { ...archived, jobs: [], evidence: undefined, verification: undefined, verificationHistory: [], results: [], projectPlan: undefined, projectPlanError: undefined, heartbeatAt: undefined, serviceCalls: [], finishedAt: null };
+    setReplay({ base, events, t0: events[0].at, t1: events.at(-1)!.at, cursor: events[0].at, playing: false, speed: 8 });
   };
 
   const modeKey = shown?.mode ? MODE_KEYS[shown.mode] : null;
 
   return (
-    <div className="flex flex-col h-full gap-3 p-3 md:p-6 max-w-[1500px] mx-auto w-full">
+    <div className="flex flex-col h-full overflow-y-auto [&>*]:shrink-0 gap-3 p-3 md:p-6 max-w-[1500px] mx-auto w-full">
       {/* header */}
       <div className="flex flex-wrap items-center gap-3">
         <div>
@@ -1173,10 +879,11 @@ export function AiSwarmView() {
         </div>
         <div className="flex-1" />
         {(archived || replay) && (
-          <button onClick={() => { setArchived(null); setReplay(null); }} className="btn-primary rounded-xl px-3 py-1.5 text-[11px] flex items-center gap-1.5">
+          <button onClick={() => { historyRequest.current++; setArchived(null); setReplay(null); setArchivedEvents([]); }} className="btn-primary rounded-xl px-3 py-1.5 text-[11px] flex items-center gap-1.5">
             <Zap size={12} /> {t('swarm.backToLive')}
           </button>
         )}
+        {archived && !replay && archivedEvents.length > 1 && <button className="btn-ghost text-xs" onClick={startReplay}><Play size={13} />Genafspil hændelser</button>}
         {!connected && (
           <span className="text-[10px] px-2 py-1 rounded-lg bg-amber-400/10 border border-amber-400/30 text-amber-300 flex items-center gap-1.5">
             <AlertTriangle size={11} /> {t('swarm.noCompanionShort')}
@@ -1184,18 +891,28 @@ export function AiSwarmView() {
         )}
       </div>
 
+      {shown?.eventsJournal && <div className="text-xs opacity-65 flex flex-wrap gap-2"><a className="underline" href={`${BASE_URL}/api/ai/runs/${encodeURIComponent(shown.runId)}/events`} target="_blank" rel="noreferrer">Hent fuld aktivitetslog · {shown.eventCount ?? '—'} hændelser</a>{shown.eventsTruncated && <span>Loggen kan ikke indlæses komplet til genafspilning. Brug den fulde aktivitetslog.</span>}</div>}
+      <RunQueuePanel />
+      {recoveredProcesses.length > 0 && <section aria-label="Processer fra afbrudte kørsler" className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm space-y-2">
+        <h2 className="font-semibold flex items-center gap-2"><AlertTriangle size={16} />En tidligere agent kan stadig arbejde</h2>
+        <p className="text-xs opacity-75">Nye Auto-kørsler og opdatering er blokeret, indtil de registrerede processer er afsluttet. Kontrollér proces-id'et i maskinens procesoversigt, og luk den relevante agent. Orbit afslutter ikke en ukendt proces automatisk efter genstart.</p>
+        <ul className="space-y-2">{recoveredProcesses.map(process => <li key={process.pid} className="flex flex-wrap items-center gap-3 text-xs"><span className="font-mono">Proces {process.pid}</span>{process.runId && <button className="btn-ghost text-xs" onClick={() => void openArchived({ runId: process.runId!, file: `${process.runId}.json`, goal: '' })}>Gennemse den afbrudte kørsel</button>}</li>)}</ul>
+      </section>}
+
+
       {/* pulserende banner når en plan afventer godkendelse */}
       {approval && (
-        <div className="rounded-2xl border border-amber-400/50 bg-amber-400/10 px-3.5 py-2.5 flex items-center gap-2 animate-pulse">
+        <div className="rounded-2xl border border-amber-400/50 bg-amber-400/10 px-3.5 py-2.5 flex flex-wrap items-center gap-2">
           <AlertTriangle size={14} className="text-amber-300 shrink-0" />
           <span className="text-[12px] font-semibold text-amber-200">{t('swarm.approvalWaiting')}</span>
-          <span className="text-[10px] opacity-50">{t('swarm.approvalWaitingHint')}</span>
+          <span className="text-xs opacity-65 flex-1">{t('swarm.approvalWaitingHint')}</span>
+          <button className="btn-primary text-xs" onClick={() => setHiddenApproval(null)}>Redigér og godkend planen</button>
         </div>
       )}
 
       {!shown ? (
         <div className="flex-1 rounded-2xl border border-white/10 glass-panel flex flex-col items-center justify-center text-center gap-3 p-8">
-          <div className="h-[300px] md:h-[340px] w-full max-w-2xl"><SwarmCanvas run={null} services={services} active={false} /></div>
+          <div className="w-full"><ServiceConstellation run={null} services={services} active={false} /></div>
           <h2 className="text-lg font-bold flex items-center gap-2"><Cpu size={17} /> {t('swarm.idle')}</h2>
           <p className="text-[12.5px] opacity-55 max-w-md leading-relaxed">{t('swarm.idleHint')}</p>
         </div>
@@ -1204,7 +921,7 @@ export function AiSwarmView() {
           {/* statuslinje */}
           <div className="rounded-2xl border border-white/10 glass-panel p-3.5 space-y-2.5">
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[12px]">
-              <span className="font-medium max-w-[46%] truncate" title={shown.goal}>{shown.goal}</span>
+              <span className="font-semibold text-sm w-full break-words" title={shown.goal}>{shown.goal}</span>
               {modeKey && (
                 <span className="text-[9px] px-1.5 py-0.5 rounded-full border border-violet-400/40 text-violet-300">{t(modeKey)}</span>
               )}
@@ -1233,6 +950,7 @@ export function AiSwarmView() {
               <span>{t('swarm.progress')}</span>
               <span>{t('swarm.jobsDone').replace('{done}', String(doneCount)).replace('{total}', String(jobs.length))}</span>
             </div>
+            <details><summary className="text-xs opacity-60 cursor-pointer">Flere tal om kørslen</summary>
             {/* faser */}
             <div className="flex gap-1 pt-1">
               {phaseStats.map(({ phase, total, done }) => total === 0 ? null : (
@@ -1261,6 +979,7 @@ export function AiSwarmView() {
                 })}
               </div>
             )}
+            </details>
           </div>
 
           {/* dommer-panel for race/debate/vote */}
@@ -1314,22 +1033,27 @@ export function AiSwarmView() {
             </div>
           )}
 
-          {/* canvas-sværmen + minimap */}
-          <div className="rounded-2xl border border-white/10 bg-black/10 dark:bg-black/25 overflow-hidden relative h-[300px] sm:h-[380px]">
-            <SwarmCanvas run={shown} services={services} active={active || Boolean(replay?.playing)} />
-            <MiniMap jobs={jobs} />
-            {(shown.notes?.length ?? 0) > 0 && (
-              <div className="absolute left-3 bottom-2 right-3 text-[10px] opacity-45 truncate">
-                {shown.notes[shown.notes.length - 1]}
-              </div>
-            )}
+          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Visning af arbejdet">
+            {([['both', 'Kugler og arbejdskort'], ['constellation', 'Kun kugler'], ['work', 'Kun arbejdskort']] as const).map(([mode, label]) => <button key={mode} className="btn-ghost text-xs" aria-pressed={mapMode === mode} onClick={() => { setMapMode(mode); localStorage.setItem('orbit-live-view', mode); }}>{label}</button>)}
           </div>
+          {mapMode !== 'work' && <section aria-label="Animeret agentunivers" className="rounded-2xl border border-zinc-200 dark:border-white/10 bg-black/5 dark:bg-black/20 overflow-hidden">
+            <header className="px-4 pt-4 flex flex-wrap items-start gap-3"><div className="flex-1"><h2 className="font-semibold text-sm">AI-univers</h2><p className="text-xs opacity-65 mt-1">Aktive tjenester i denne kørsel lyser. Mindre kugler viser underagenter og deres forbindelser. Vælg en kugle for at følge arbejdet.</p></div><button className="btn-ghost text-xs" aria-pressed={!animateOrbs} onClick={() => setAnimateOrbs(value => !value)}>{animateOrbs ? 'Pause animationer' : 'Start animationer'}</button></header>
+            <div className="relative">
+              <ServiceConstellation run={shown} services={services} active={animateOrbs} live={liveServices} historical={Boolean(archived || replay)} selectedId={focusedJob?.id} onSelect={selectOrb} />
+              <MiniMap jobs={jobs} />
+            </div>
+            <div role="group" aria-label="Vælg agentopgave" className="px-4 pb-3 flex flex-wrap gap-2 max-h-36 overflow-auto">{jobs.map(job => <button key={job.id} className="rounded-full border border-zinc-200 dark:border-white/10 px-3 py-1.5 text-xs text-left" aria-pressed={focusedJob?.id === job.id} onClick={() => selectOrb(job.id)}><span className="inline-block w-2 h-2 rounded-full mr-2" style={{ background: hex(serviceColor(services, job.serviceId)) }} />{serviceName(services, job.serviceId)} · {job.title}</button>)}</div>
+            {focusedJob && <div className="px-4 pb-3 text-xs"><p className="font-medium">{serviceName(services, focusedJob.serviceId)} · {focusedJob.title}</p><p className="opacity-65 mt-1">{focusedJob.actions?.at(-1)?.label ?? focusedJob.error ?? 'Ingen registreret værktøjshændelse endnu.'}</p>{!!focusedJob.subagents?.length && <details className="opacity-65 mt-1"><summary className="cursor-pointer">{focusedJob.subagents.length} registrerede underagenter</summary><p className="mt-1">{focusedJob.subagents.map(agent => agent.name).join(', ')}</p></details>}</div>}
+            {!archived && !replay && <OrbitPerformanceProbe key={shown.runId} />}
+            <p className="px-4 pb-3 text-[10px] opacity-50">Animation viser aktivitet, ikke en beregnet færdiggørelsesprocent. Reduceret bevægelse følger enhedens indstilling.</p>
+          </section>}
+          {mapMode !== 'constellation' && <OrbitWorkMap key={shown.runId} run={shown} services={services} connected={connected} historical={Boolean(archived || replay)} now={replay?.cursor ?? now} selectedJobId={focusedJob?.id} onSelectJob={selectOrb} />}
 
           {/* tidslinje: præcis hvem arbejdede hvornår, inkl. underagenter */}
           <RunTimeline run={shown} services={services} active={active || Boolean(replay?.playing)} />
 
           {/* agent-kort */}
-          {jobs.length > 0 && (
+          {mapMode === 'constellation' && jobs.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
               {[...jobs]
                 .sort((a, b) => (a.status === 'running' ? -1 : b.status === 'running' ? 1 : a.status === 'error' ? -1 : b.status === 'error' ? 1 : 0))
@@ -1347,7 +1071,8 @@ export function AiSwarmView() {
         </>
       )}
 
-      {/* styringspaneler */}
+      {/* Sjældent brugte driftsfunktioner ligger bag en tydelig indgang. */}
+      <details className="rounded-xl border border-zinc-200 dark:border-white/10 p-3"><summary className="cursor-pointer text-xs opacity-65">Automatisering, skabeloner og analyse</summary>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
         <TriggersPanel />
         <TemplatesPanel services={services} />
@@ -1356,31 +1081,12 @@ export function AiSwarmView() {
         <CompareRunsPanel />
       </div>
 
-      {/* historik */}
-      {history.length > 0 && (
-        <div className="rounded-2xl border border-white/10 glass-panel p-3">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider opacity-60 flex items-center gap-1.5 mb-2"><History size={12} /> {t('swarm.history')}</h3>
-          <div className="flex flex-wrap gap-1.5">
-            {history.map((h) => (
-              <button
-                key={h.file}
-                onClick={() => openArchived(h)}
-                className="rounded-xl border border-white/10 bg-black/10 dark:bg-white/5 px-2.5 py-1.5 text-left hover:border-indigo-400/40 transition max-w-[240px]"
-              >
-                <div className="text-[11px] truncate font-medium">{h.goal || h.runId}</div>
-                <div className="text-[9.5px] opacity-45">
-                  {h.finishedAt ? new Date(h.finishedAt).toLocaleString('da-DK', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
-                  {' '}· {(h.results?.length ?? 0)} {t('swarm.delivered')}
-                  {(h.events?.length ?? 0) > 1 ? ` · ▶ ${t('swarm.replay')}` : ''}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      </details>
+
+      <RunHistory refreshKey={`${run?.runId ?? ''}:${run?.status ?? ''}`} onOpen={r => void openArchived(r)} />
 
       {/* godkendelsesmodal til plan-pause */}
-      {approval && <ApprovalModal services={services} onClose={() => undefined} />}
+      {approval && <ApprovalModal services={services} open={hiddenApproval !== approval.runId} onClose={() => setHiddenApproval(approval.runId)} />}
 
       {/* lille toast til handlinger (genoptagelse, link, eksport) */}
       {toast && (
