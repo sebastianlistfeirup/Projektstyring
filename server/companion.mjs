@@ -18,6 +18,8 @@ import { applyRunToWorkspace } from './task-execution.mjs';
 import { runChat, serviceAvailability } from './ai-services.mjs';
 import { activeRuns, swarmState, pickOrchestrator } from './ai-runtime.mjs';
 import { registerAiRoutes } from './ai-engine.mjs';
+import { aiProcessSnapshot } from './ai-processes.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const PORT = Number(process.env.ORBIT_PORT ?? 4310);
 const APP_DIR = process.env.ORBIT_APP_DIR ?? join(homedir(), '.orbit');
@@ -385,6 +387,10 @@ async function graphSendMail(subject, textBody) {
 // ---------------- HTTP + WS ----------------
 const app = express();
 app.use(express.json({ limit: '48mb' }));
+app.use((req, res, next) => {
+  if (app.locals.aiStopping && req.method !== 'GET' && req.path !== '/api/ai/prepare-shutdown') return res.status(503).json({ ok: false, reason: 'Companion er ved at lukke.' });
+  next();
+});
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -807,7 +813,7 @@ app.get('/api/backup/list', (_req, res) => {
 
 app.post('/api/backup/restore', (req, res) => {
   const { name } = req.body ?? {};
-  if (activeRuns.size) return res.status(409).json({ ok: false, reason: 'Stop aktive AI-kørsler før gendannelse.' });
+  if (activeRuns.size || aiProcessSnapshot().length) return res.status(409).json({ ok: false, reason: 'Stop aktive AI-kørsler og samtaler før gendannelse.' });
   if (!name || !/^[\w.-]+\.json$/.test(String(name))) {
     return res.status(400).json({ ok: false, reason: 'Ugyldigt backup-navn' });
   }
@@ -1683,6 +1689,22 @@ registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, EXPORT_DIR, 
     broadcast({ type: 'sync', from: 'orbit-runtime', updatedAt: next.updatedAt });
   },
 });
+
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try { app.locals.prepareAiShutdown(); } catch (error) { console.error('Kunne ikke gemme køens pause:', error.message); }
+  server.close();
+  for (const client of wss.clients) client.close(1001, 'Companion stopper');
+  const deadline = Date.now() + 20000;
+  while ((activeRuns.size || aiProcessSnapshot().length) && Date.now() < deadline) await delay(100);
+  const remaining = activeRuns.size || aiProcessSnapshot().length;
+  if (remaining) console.error('Companion stoppes med uafsluttet arbejde. Kontrollér gendannede kørsler ved næste start.');
+  process.exit(remaining ? 1 : 0);
+}
+process.once('SIGTERM', () => { void shutdown(); });
+process.once('SIGINT', () => { void shutdown(); });
 
 server.listen(PORT, '0.0.0.0', () => {
   startTelegram();

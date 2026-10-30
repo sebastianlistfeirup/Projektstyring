@@ -1,11 +1,14 @@
 param([switch]$RefuseActive)
 $ErrorActionPreference = 'Stop'
+function Test-AiBusy($state) {
+    return (($state.run.status -in @('running', 'awaiting_approval')) -or ($state.processes -and $state.processes.Count -gt 0))
+}
 try {
     $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in @(4310, 5173) })
     if ($listeners.LocalPort -contains 4310) {
         # A reachable control endpoint is required before touching processes.
         $state = Invoke-RestMethod 'http://127.0.0.1:4310/api/ai/swarm' -TimeoutSec 5
-        if ($RefuseActive -and $state.run.status -in @('running', 'awaiting_approval')) { throw 'En AI-koersel er aktiv. Afslut eller stop den i Orbit foer opdatering.' }
+        if ($RefuseActive -and (Test-AiBusy $state)) { throw 'En AI-koersel eller samtale er aktiv. Afslut eller stop den i Orbit foer opdatering.' }
         # Prevent a queued job from starting between cancellation and shutdown.
         try {
             Invoke-RestMethod 'http://127.0.0.1:4310/api/ai/queue/control' -Method Post -ContentType 'application/json' -Body '{"action":"pause"}' -TimeoutSec 5 | Out-Null
@@ -13,16 +16,26 @@ try {
             if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw }
         }
         $state = Invoke-RestMethod 'http://127.0.0.1:4310/api/ai/swarm' -TimeoutSec 5
-        if ($state.run.status -in @('running', 'awaiting_approval')) {
-            if ($RefuseActive) { throw 'En AI-koersel er aktiv. Afslut eller stop den i Orbit foer opdatering.' }
-            $runId = [uri]::EscapeDataString($state.run.runId)
-            Invoke-RestMethod "http://127.0.0.1:4310/api/ai/runs/$runId/cancel" -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 5 | Out-Null
+        try {
+            $shutdownBody = @{ refuseActive = [bool]$RefuseActive } | ConvertTo-Json -Compress
+            Invoke-RestMethod 'http://127.0.0.1:4310/api/ai/prepare-shutdown' -Method Post -ContentType 'application/json' -Body $shutdownBody -TimeoutSec 5 | Out-Null
+        } catch {
+            if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw }
+            # Compatibility with older Companion versions, which only track Auto.
+            if ($RefuseActive -and (Test-AiBusy $state)) { throw 'En AI-koersel er aktiv. Afslut eller stop den i Orbit foer opdatering.' }
+            if ($state.run.status -in @('running', 'awaiting_approval')) {
+                $runId = [uri]::EscapeDataString($state.run.runId)
+                Invoke-RestMethod "http://127.0.0.1:4310/api/ai/runs/$runId/cancel" -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 5 | Out-Null
+            }
+        }
+        $state = Invoke-RestMethod 'http://127.0.0.1:4310/api/ai/swarm' -TimeoutSec 5
+        if (Test-AiBusy $state) {
             $deadline = (Get-Date).AddSeconds(25)
             do {
                 Start-Sleep -Milliseconds 300
                 $state = Invoke-RestMethod 'http://127.0.0.1:4310/api/ai/swarm' -TimeoutSec 5
-            } while (($state.run.status -in @('running', 'awaiting_approval')) -and (Get-Date) -lt $deadline)
-            if ($state.run.status -in @('running', 'awaiting_approval')) { throw 'Koerslen er endnu ikke stoppet. Processerne er bevaret; se Orbit Live.' }
+            } while ((Test-AiBusy $state) -and (Get-Date) -lt $deadline)
+            if (Test-AiBusy $state) { throw 'AI-processerne er endnu ikke stoppet. De er bevaret; se Orbit Live.' }
         }
     }
     foreach ($processId in ($listeners.OwningProcess | Sort-Object -Unique)) {

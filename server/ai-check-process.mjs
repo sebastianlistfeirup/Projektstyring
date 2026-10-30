@@ -1,4 +1,5 @@
 import { spawn, execFile } from 'node:child_process';
+import { trackAiProcess } from './ai-processes.mjs';
 
 // Checks run as their own process group so npm/Godot/test-runner children are
 // stopped with their parent. No shell interprets the user-supplied arguments.
@@ -25,6 +26,7 @@ export function runCheckProcess(command, args, { cwd, signal, timeoutMs = 600000
       catch (error) { callbackError ??= error; stop('Procesregistrering kunne ikke gemmes.'); }
     };
     const startedAt = Date.now();
+    const untrack = trackAiProcess(child.pid, { kind: 'verification', command: String(command).split(/[\\/]/).at(-1), stop: () => stop('Kontrollen stoppes, fordi Companion lukkes.') });
     const abort = () => stop('Kontrollen blev afbrudt.');
     const timer = setTimeout(() => stop('Kontrollen overskred tidsgrænsen.'), timeoutMs);
     const capture = chunk => {
@@ -40,6 +42,7 @@ export function runCheckProcess(command, args, { cwd, signal, timeoutMs = 600000
       // A parent can exit while a detached-stdio grandchild ignores SIGTERM.
       if (reason) force();
       if (windowsStop) await windowsStop;
+      untrack();
       notify(true);
       if (callbackError) { reject(callbackError); return; }
       resolve({ exitCode: reason ? null : code, status: signal?.aborted ? 'cancelled' : !reason && code === 0 ? 'passed' : 'failed', output: `${output}${reason ? `\n${reason}` : ''}`.slice(-20000) });

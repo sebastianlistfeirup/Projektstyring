@@ -9,6 +9,7 @@ import { billingPolicy } from './ai-billing.mjs';
 import { agentEvents } from './ai-events.mjs';
 import { nativeCliOptions } from './ai-cli-options.mjs';
 import { serviceCapabilities } from './ai-capabilities.mjs';
+import { trackAiProcess } from './ai-processes.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { spawn, execFile, execFileSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, chmodSync, statSync } from 'fs';
@@ -545,6 +546,7 @@ export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent,
       terminationTimer.unref();
     };
     const call = fn => { try { fn(); } catch (e) { callbackError ??= e; kill(); } };
+    const untrack = trackAiProcess(child.pid, { kind: 'agent', command: String(cmd).split(/[\\/]/).at(-1), stop: () => { callbackError ??= new Error('AI-processen stoppes, fordi Companion lukkes.'); kill(); } });
     const line = text => {
       if (!text.trim()) return;
       let event;
@@ -564,13 +566,14 @@ export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent,
       } else { out += chunk; call(() => onDelta?.(chunk)); }
     });
     child.stderr.on('data', chunk => { out = (out + chunk).slice(-20000); });
-    child.on('error', e => { clean(); reject(new Error(`Kunne ikke starte '${cmd}': ${e.message}`)); });
+    child.on('error', e => { untrack(); clean(); reject(new Error(`Kunne ikke starte '${cmd}': ${e.message}`)); });
     child.on('close', async code => {
       if (jsonl && lineBuf.trim()) line(lineBuf);
       // Do not cancel escalation just because the parent exited: grandchildren
       // with separate stdio may still be running in the same process group.
       if (stopped && child.pid && process.platform !== 'win32') try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already stopped */ }
       if (windowsStop) await windowsStop;
+      untrack();
       if (child.pid) call(() => onProcess?.({ pid: child.pid, finished: true }));
       clean();
       if (callbackError) reject(callbackError);

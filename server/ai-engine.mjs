@@ -11,10 +11,15 @@ import { DurableRunQueue } from './ai-queue.mjs';
 import { readRun, recoverRuns, validatePlan, runPath, withRunEvents, eventJournalPath, liveRunView } from './ai-state.mjs';
 import { importWorkshopJobs } from './ai-workshop.mjs';
 import { repositoryChanges, repositoryPatch } from './ai-diff.mjs';
+import { aiProcessSnapshot, stopAiProcesses } from './ai-processes.mjs';
 import { executeRun, swarmState, activeRuns, loadTemplates, saveUserTemplates, startTriggerScheduler, validateCron, pickOrchestrator, planWithLLM, parseJsonObject, projectMemoryDirs } from './ai-runtime.mjs';
 
 // ---- HTTP-ruter --------------------------------------------------------------
 export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, getSnapshot, updateSnapshot }) {
+  app.use('/api/ai', (req, res, next) => {
+    if (app.locals.aiStopping && req.method !== 'GET' && req.path !== '/prepare-shutdown') return res.status(503).json({ ok: false, reason: 'Companion er ved at lukke. Start Orbit igen for at fortsætte.' });
+    next();
+  });
   setSecretsDir(APP_DIR); // nøgleboksen bor ved siden af companion.json i ~/.orbit
   const dirs = {
     uploads: join(APP_DIR, 'ai-uploads'),
@@ -49,7 +54,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     return live ? 'En proces fra en afbrudt kørsel kan stadig arbejde. Stop den før køen fortsættes.' : '';
   };
   const queue = new DurableRunQueue({ path: join(dirs.runs, 'ai-queue.json'),
-    isBusy: () => Boolean(swarmState.active), canResume: orphanGuard,
+    isBusy: () => Boolean(swarmState.active) || app.locals.aiStopping === true, canResume: orphanGuard,
     readRun: runId => readRun(dirs, runId),
     resolveInput: input => getSnapshot ? projectExecution(getSnapshot(), input) : input,
     execute: input => executeRun({ ...input, repository: input.repositoryPath ? { source: String(input.repositoryPath), startCommit: input.repositoryStartCommit } : null,
@@ -57,6 +62,19 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     onUpdate: state => broadcast?.({ kind: 'ai_queue', type: 'queue_updated', updatedAt: state.updatedAt }),
   });
   app.locals.orbitQueue = queue;
+  app.locals.prepareAiShutdown = () => {
+    app.locals.aiStopping = true;
+    try { if (!queue.storageError) queue.pause('Companion lukkes. Fortsæt køen, når Orbit er startet igen.'); }
+    finally {
+      for (const handle of activeRuns.values()) { handle.cancelled = true; handle.abort.abort(); handle.resolveApproval?.([]); }
+      stopAiProcesses();
+    }
+  };
+  app.post('/api/ai/prepare-shutdown', (req, res) => {
+    if (req.body?.refuseActive === true && (activeRuns.size || aiProcessSnapshot().length)) return res.status(409).json({ ok: false, reason: 'En AI-kørsel eller samtale er aktiv. Afslut den før opdatering.' });
+    app.locals.prepareAiShutdown();
+    res.json({ ok: true, processes: aiProcessSnapshot() });
+  });
   queue.recover();
   if (!queue.storageError && recovered.some(run => run.status === 'interrupted' && run.processes?.length)) queue.pause('Companion genstartede under en kørsel. Kontrollér processer og leverance før arbejdskøen fortsættes.');
   startTriggerScheduler({ loadConfig, broadcast, enqueue: (body, options) => queue.enqueue(queueInput(body), options), pump: () => queue.pump() });
@@ -243,7 +261,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   // Live swarm-tilstand: aktiv kørsel eller seneste afsluttede.
   app.get('/api/ai/swarm', (req, res) => {
     const run = swarmState.active ?? swarmState.last;
-    res.json({ ok: true, run: req.query.view === 'live' ? liveRunView(run) : run });
+    res.json({ ok: true, run: req.query.view === 'live' ? liveRunView(run) : run, processes: aiProcessSnapshot() });
   });
 
   app.get('/api/ai/runs', (_req, res) => {

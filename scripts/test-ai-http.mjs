@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { registerAiRoutes } from '../server/ai-engine.mjs';
 import { localAiAccess } from '../server/local-access.mjs';
 import { activeRuns } from '../server/ai-runtime.mjs';
+import { stopAiProcesses } from '../server/ai-processes.mjs';
 
 test('HTTP approval, validation, browser disconnect and persisted results', async t => {
   const root = mkdtempSync(join(tmpdir(), 'orbit-http-'));
@@ -73,4 +74,33 @@ test('HTTP approval, validation, browser disconnect and persisted results', asyn
     await new Promise(r => setTimeout(r, 50));
   }
   assert.equal(run.goal, 'Detached'); assert.equal(run.status, 'done');
+});
+
+test('shutdown sees direct chat processes, can refuse active work, then drains and blocks new calls', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-shutdown-')), fake = join(root, 'fake.mjs');
+  writeFileSync(fake, "console.log('Direct chat active');setInterval(()=>{},1000);");
+  let cfg = { aiProviders: { codex: { cmd: process.execPath, cliTemplate: `"${fake}" {prompt}`, billingMode: 'included', noExtraCharges: true } } };
+  const app = express(); app.use(express.json()); app.use('/api/ai', localAiAccess);
+  registerAiRoutes(app, { loadConfig: () => cfg, saveConfig: value => { cfg = value; }, APP_DIR: root });
+  const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
+  t.after(() => { stopAiProcesses(); server.closeAllConnections(); server.close(); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (path, body) => fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const response = await post('/api/ai/chat', { service: 'codex', messages: [{ role: 'user', text: 'Read-only fixture' }] });
+  const output = response.text(); void output.catch(() => {});
+  let state;
+  for (let i = 0; i < 100; i++) {
+    state = await (await fetch(`${base}/api/ai/swarm`)).json();
+    if (state.processes.length) break;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.equal(state.processes.length, 1); assert.equal(state.processes[0].kind, 'agent');
+  assert.equal((await post('/api/ai/prepare-shutdown', { refuseActive: true })).status, 409);
+  assert.equal((await (await fetch(`${base}/api/ai/swarm`)).json()).processes.length, 1);
+  assert.equal((await post('/api/ai/prepare-shutdown', {})).status, 200);
+  assert.match(await output, /Companion lukkes/);
+  assert.deepEqual((await (await fetch(`${base}/api/ai/swarm`)).json()).processes, []);
+  assert.equal((await post('/api/ai/chat', { service: 'codex', messages: [] })).status, 503);
+  assert.equal((await post('/api/ai/queue/control', { action: 'resume' })).status, 503);
+  assert.equal((await (await fetch(`${base}/api/ai/queue`)).json()).queue.paused, true);
 });
