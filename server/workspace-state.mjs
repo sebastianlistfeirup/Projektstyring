@@ -10,6 +10,18 @@ export function normalizeSnapshot(snapshot) {
 // Core deletions carry tombstones; extra collections retain per-field versions.
 export function acceptSnapshot(previous, incoming) {
   let merged = false;
+  // This pointer is advanced only by verified server execution. A later browser
+  // edit of the project name/settings must not rewind the cumulative branch.
+  if (Array.isArray(incoming.projects)) {
+    const projects = new Map((previous?.projects ?? []).map(project => [project.id, project]));
+    incoming = { ...incoming, projects: incoming.projects.map(project => {
+      const workspace = projects.get(project.id)?.aiWorkspace;
+      if (JSON.stringify(project.aiWorkspace) === JSON.stringify(workspace)) return project;
+      merged = true;
+      const { aiWorkspace: _ignored, ...rest } = project;
+      return workspace ? { ...rest, aiWorkspace: workspace } : rest;
+    }) };
+  }
   const deletedEntities = mergeTombstones(previous?.deletedEntities, incoming.deletedEntities);
   incoming = { ...incoming, deletedEntities };
   if (previous) {

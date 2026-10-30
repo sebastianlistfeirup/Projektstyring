@@ -35,7 +35,7 @@ else if(p.includes('FAIL_MARKER')) { console.error('Reproduced test failure'); p
 else if(p.includes('REPAIR_TEST')&&!p.includes('RETTELSE EFTER FAKTISK TESTFEJL')) { fs.writeFileSync('game.txt','broken'); console.log('First implementation requires a test repair'); }
 else if(p.includes('"orbitProjectPlan"')) console.log(JSON.stringify({orbitProjectPlan:{version:1,releaseGoal:'En stabil save/load-cyklus',summary:'Et afgrænset restarbejde',firstMilestone:'Gem og indlæs en kampagne',unknowns:['Gameplay skal afprøves manuelt'],tasks:[{id:'save',title:'Verificér save-format',description:'Bevar kompatibilitet',priority:'high',scope:'version1',acceptanceCriteria:['Data bevares'],verification:['Kør save/load-test'],evidence:['game.txt'],dependsOn:[]}]}}));
 else if(p.includes('Kortlæg kode og gældende beslutninger')) console.log('game.txt er læst. Ingen tests er kørt i denne analyse.');
-else { await new Promise(r=>setTimeout(r,1800)); fs.writeFileSync('game.txt','fixed'); console.log('## Leverance\\n\\n| Fil | Resultat |\\n| --- | --- |\\n| game.txt | fixed |\\n\\nÆndringen er implementeret.'); }`);
+else { await new Promise(r=>setTimeout(r,1800)); if(p.includes('CHAIN_FIRST')) fs.writeFileSync('first-delivery.txt','retained first task'); if(p.includes('CHAIN_SECOND')) { if(fs.readFileSync('first-delivery.txt','utf8')!=='retained first task') process.exit(12); fs.writeFileSync('second-delivery.txt','second task built on first'); } fs.writeFileSync('game.txt','fixed'); console.log('## Leverance\\n\\n| Fil | Resultat |\\n| --- | --- |\\n| game.txt | fixed |\\n\\nÆndringen er implementeret.'); }`);
   expect((await request.post(`${base}/api/ai/services/codex`, { data: { cmd: process.execPath, cliTemplate: `"${fake}" {prompt}`, billingMode: 'included', noExtraCharges: true } })).ok()).toBeTruthy();
   await request.post(`${base}/api/ai/prefs`, { data: { autoJudge: false, selfHeal: false, orchestrator: 'codex' } });
 });
@@ -430,4 +430,48 @@ test('immediate Enter after a work-order selection keeps the task link while nav
   }).toEqual({ status: 'done', taskId });
   const { snapshot } = await (await request.get(`${base}/api/sync/state`)).json();
   expect(snapshot.tasks.find((task: { id: string }) => task.id === taskId).status).toBe('inreview');
+});
+
+test('dependent work orders continue on verified code while their human review and source checkout remain intact', async ({ page, request }) => {
+  await request.post(`${base}/api/ai/queue/control`, { data: { action: 'pause' } });
+  const projectId = await setup(page);
+  await page.getByLabel('Fortsæt på projektets verificerede AI-arbejdsgren', { exact: true }).check();
+  await page.getByRole('button', { name: 'Kontrollér og gem', exact: true }).click();
+  await expect.poll(() => page.evaluate(async id => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts');
+    return useStore.getState().projects.find((project: { id: string }) => project.id === id).continueVerifiedWork;
+  }, projectId)).toBe(true);
+  const taskIds = await page.evaluate(async id => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts');
+    // @ts-expect-error Vite browser module
+    const { pushNow } = await import('/src/lib/sync.ts');
+    const store = useStore.getState(), first = store.tasks.find((task: { projectId: string }) => task.projectId === id);
+    store.updateTask(first.id, { description: 'CHAIN_FIRST: Implementér første del og bevar den til næste arbejdsordre.' });
+    const second = store.addTask({ projectId: id, title: 'Byg videre på første leverance', description: 'CHAIN_SECOND: Første fil skal være bevaret før den næste kan skrives.', blockedBy: [first.id] });
+    useStore.setState({ rules: { ...store.rules, wip: { ...store.rules.wip, inreview: 20 } } });
+    await pushNow(); return [first.id, second.id];
+  }, projectId);
+  for (const taskId of taskIds) expect((await request.post(`${base}/api/ai/queue`, { data: { goal: 'Udfør arbejdsordren', projectId, taskId } })).ok()).toBeTruthy();
+  await request.post(`${base}/api/ai/queue/control`, { data: { action: 'resume' } });
+  await page.close();
+  await expect.poll(async () => {
+    const { queue } = await (await request.get(`${base}/api/ai/queue`)).json();
+    return queue.entries.filter((entry: { input: { projectId: string } }) => entry.input.projectId === projectId).map((entry: { status: string }) => entry.status);
+  }, { timeout: 30000 }).toEqual(['done', 'done']);
+  const { snapshot } = await (await request.get(`${base}/api/sync/state`)).json();
+  const project = snapshot.projects.find((project: { id: string }) => project.id === projectId);
+  expect(project.aiWorkspace.includedTaskIds).toEqual(taskIds);
+  const tasks = snapshot.tasks.filter((task: { id: string }) => taskIds.includes(task.id));
+  expect(tasks.map((task: { status: string }) => task.status)).toEqual(['inreview', 'inreview']);
+  const run = (await (await request.get(`${base}/api/ai/runs/${project.aiWorkspace.runId}`)).json()).run;
+  expect(run.repository.baseCommit).toBe(tasks[0].aiDelivery.commit);
+  expect(readFileSync(join(run.workDir, 'first-delivery.txt'), 'utf8')).toBe('retained first task');
+  expect(readFileSync(join(run.workDir, 'second-delivery.txt'), 'utf8')).toBe('second task built on first');
+  const currentChanges = await (await request.get(`${base}/api/ai/runs/${run.runId}/changes`)).json();
+  expect(currentChanges.files.map((file: { path: string }) => file.path)).toEqual(['second-delivery.txt']);
+  const branchChanges = await (await request.get(`${base}/api/ai/runs/${run.runId}/changes?scope=project`)).json();
+  expect(branchChanges.files.map((file: { path: string }) => file.path)).toEqual(['first-delivery.txt', 'game.txt', 'second-delivery.txt']);
+  expect(readFileSync(join(source, 'game.txt'), 'utf8')).toBe('original');
 });

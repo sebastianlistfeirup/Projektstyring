@@ -33,6 +33,38 @@ test('failures and review capacity preserve honest task status; old runs cannot 
   assert.equal(applyRunToWorkspace(active, { ...run, runId: 'old', status: 'done' }, 'run_finished'), null);
 });
 
+test('verified project continuation carries dependency evidence and browser edits cannot rewind it', () => {
+  const initial = fixture(); initial.projects[0].continueVerifiedWork = true;
+  initial.projects[0].scopeTaskIds.push('next');
+  initial.tasks.push({ id: 'next', projectId: 'p', title: 'Next', status: 'todo', blockedBy: ['t'] });
+  const run = { runId: 'r', projectId: 'p', taskId: 't', goal: 'Fix', status: 'running', repository: { source: '/correct/repo', sourceCommit: 'base', branch: 'orbit/r' }, continuationFromCommit: null, continuationTaskIds: [], workDir: '/work/r' };
+  const active = applyRunToWorkspace(initial, run, 'run_start');
+  const finished = applyRunToWorkspace(active, { ...run, status: 'done', verification: { status: 'passed' }, evidence: { commit: 'verified' } }, 'run_finished');
+  assert.equal(finished.tasks[0].status, 'inreview');
+  assert.deepEqual(finished.projects[0].aiWorkspace.includedTaskIds, ['t']);
+  const next = projectExecution(finished, { projectId: 'p', taskId: 'next' });
+  assert.equal(next.repositoryStartCommit, 'verified'); assert.deepEqual(next.continuationTaskIds, ['t']);
+  const oldEdit = structuredClone(initial); oldEdit.projects[0].updatedAt = '2099-01-01'; oldEdit.projects[0].name = 'New project name';
+  const merged = acceptSnapshot(finished, oldEdit).snapshot;
+  assert.equal(merged.projects[0].aiWorkspace.commit, 'verified'); assert.equal(merged.projects[0].name, 'New project name');
+  const failed = applyRunToWorkspace(active, { ...run, status: 'blocked', verification: { status: 'failed' }, evidence: { commit: 'broken' } }, 'run_finished');
+  assert.equal(failed.projects[0].aiWorkspace, undefined);
+  assert.throws(() => projectExecution(failed, { projectId: 'p', taskId: 'next' }), /forgænger/);
+  const disabled = structuredClone(finished); disabled.projects[0].continueVerifiedWork = false;
+  assert.throws(() => projectExecution(disabled, { projectId: 'p', taskId: 'next' }), /forgænger/);
+  finished.projects[0].verificationChecks = [];
+  assert.throws(() => projectExecution(finished, { projectId: 'p', taskId: 'next' }), /kvalitetskontroller/);
+});
+
+test('an older completed branch cannot replace a newer project continuation pointer', () => {
+  const snapshot = fixture(); snapshot.projects[0].continueVerifiedWork = true;
+  snapshot.projects[0].aiWorkspace = { source: '/correct/repo', commit: 'newer', includedTaskIds: ['other'] };
+  const run = { runId: 'old', projectId: 'p', taskId: 't', goal: 'Old', status: 'running', continuationFromCommit: null, repository: { source: '/correct/repo' } };
+  const active = applyRunToWorkspace(snapshot, run, 'run_start');
+  const result = applyRunToWorkspace(active, { ...run, status: 'done', verification: { status: 'passed' }, evidence: { commit: 'old-completion' } }, 'run_finished');
+  assert.equal(result.projects[0].aiWorkspace.commit, 'newer');
+});
+
 
 test('project context pins full published bible and project decisions with verifiable identities', async () => {
   const { createHash } = await import('node:crypto');

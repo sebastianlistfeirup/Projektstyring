@@ -5,8 +5,8 @@ import { realpathSync } from 'node:fs';
 const exec = promisify(execFile);
 const git = async (cwd, args, maxBuffer = 4 * 1024 * 1024) => (await exec('git', ['--literal-pathspecs', ...args], { cwd, timeout: 30000, maxBuffer })).stdout;
 
-async function target(run, requestedCommit) {
-  const baseCommit = run.repository?.baseCommit, commit = requestedCommit ?? run.evidence?.commit ?? run.results?.at(-1)?.commit;
+async function target(run, requestedCommit, wholeBranch = false) {
+  const baseCommit = wholeBranch ? run.repository?.sourceCommit ?? run.repository?.baseCommit : run.repository?.baseCommit, commit = requestedCommit ?? run.evidence?.commit ?? run.results?.at(-1)?.commit;
   if (!run.repository || !/^[a-f0-9]{40,64}$/.test(baseCommit ?? '') || !/^[a-f0-9]{40,64}$/.test(commit ?? '')) throw new Error('Kørslen har endnu ingen gemt repository-leverance.');
   const recorded = [run.evidence?.commit, ...(run.results ?? []).map(result => result.commit), ...(run.verificationHistory ?? []).map(attempt => attempt.commit)];
   if (!recorded.includes(commit)) throw new Error('Commit er ikke registreret som en leverance i denne kørsel.');
@@ -17,8 +17,8 @@ async function target(run, requestedCommit) {
   return { cwd, baseCommit, commit };
 }
 
-export async function repositoryChanges(run, file, requestedCommit) {
-  const { cwd, baseCommit, commit } = await target(run, requestedCommit);
+export async function repositoryChanges(run, file, requestedCommit, wholeBranch = false) {
+  const { cwd, baseCommit, commit } = await target(run, requestedCommit, wholeBranch);
   const options = ['diff', '--no-ext-diff', '--no-textconv', '--no-renames'];
   const stats = (await git(cwd, [...options, '--numstat', '-z', baseCommit, commit, '--'])).split('\0').filter(Boolean).map(row => {
     const [added, removed, ...path] = row.split('\t');
@@ -42,8 +42,8 @@ export async function repositoryChanges(run, file, requestedCommit) {
   return { baseCommit, commit, file: entry, patch, truncated };
 }
 
-export async function repositoryPatch(run, expectedCommit) {
-  const { cwd, baseCommit, commit } = await target(run, expectedCommit);
+export async function repositoryPatch(run, expectedCommit, wholeBranch = false) {
+  const { cwd, baseCommit, commit } = await target(run, expectedCommit, wholeBranch);
   try { return await git(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--no-color', '--binary', baseCommit, commit, '--'], 16 * 1024 * 1024); }
   catch (error) {
     if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw new Error('Patchen er større end 16 MB. Brug Git i kørslens arbejdsmappe til denne leverance.');

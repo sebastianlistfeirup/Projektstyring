@@ -7,12 +7,13 @@ type FileDiff = { patch: string; truncated: boolean; file: ChangedFile; commit: 
 const labels: Record<string, string> = { A: 'Ny', D: 'Slettet', M: 'Ændret', T: 'Type ændret' };
 const BASE = 'http://127.0.0.1:4310';
 
-export default function CodeChanges({ runId, commit }: { runId: string; commit?: string }) {
+export default function CodeChanges({ runId, commit, wholeBranch = false }: { runId: string; commit?: string; wholeBranch?: boolean }) {
   const [open, setOpen] = useState(false), [loading, setLoading] = useState(false);
   const [overview, setOverview] = useState<Overview | null>(null), [selected, setSelected] = useState('');
   const [diff, setDiff] = useState<FileDiff | null>(null), [error, setError] = useState(''), [fileError, setFileError] = useState('');
   const dialog = useRef<HTMLDialogElement>(null), request = useRef<AbortController | null>(null);
   const url = `${BASE}/api/ai/runs/${encodeURIComponent(runId)}/changes`;
+  const scope = wholeBranch ? 'project' : 'task';
   useEffect(() => { if (open) dialog.current?.showModal(); else { dialog.current?.close(); request.current?.abort(); } }, [open]);
   useEffect(() => () => request.current?.abort(), []);
   async function show() {
@@ -20,7 +21,7 @@ export default function CodeChanges({ runId, commit }: { runId: string; commit?:
     const controller = new AbortController(); request.current = controller;
     setOpen(true); setLoading(true); setError(''); setFileError(''); setOverview(null); setDiff(null);
     try {
-      const response = await fetch(`${url}${commit ? `?commit=${encodeURIComponent(commit)}` : ''}`, { signal: controller.signal }), data = await response.json();
+      const response = await fetch(`${url}?scope=${scope}${commit ? `&commit=${encodeURIComponent(commit)}` : ''}`, { signal: controller.signal }), data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.reason ?? 'Kodeændringerne kunne ikke hentes.');
       if (!controller.signal.aborted) { setOverview(data); setSelected(data.files[0]?.path ?? ''); }
     } catch (err) { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : String(err)); }
@@ -29,17 +30,17 @@ export default function CodeChanges({ runId, commit }: { runId: string; commit?:
   useEffect(() => {
     if (!open || !overview || !selected) return;
     const controller = new AbortController();
-    void fetch(`${url}?file=${encodeURIComponent(selected)}&commit=${encodeURIComponent(overview.commit)}`, { signal: controller.signal }).then(async response => {
+    void fetch(`${url}?file=${encodeURIComponent(selected)}&commit=${encodeURIComponent(overview.commit)}&scope=${scope}`, { signal: controller.signal }).then(async response => {
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.reason ?? 'Filens ændringer kunne ikke hentes.');
       if (data.commit !== overview.commit) throw new Error('Kørslen har fået et nyt commit. Luk og åbn gennemgangen igen for at se den samlede leverance.');
       if (!controller.signal.aborted) setDiff(data);
     }).catch(err => { if (!controller.signal.aborted) setFileError(err instanceof Error ? err.message : String(err)); });
     return () => controller.abort();
-  }, [open, overview, selected, url]);
+  }, [open, overview, selected, url, scope]);
   const lines = diff?.patch.split('\n') ?? [];
   return <>
-    <button type="button" className="btn-ghost text-xs" onClick={() => void show()}><GitCompareArrows size={14} />Gennemse kodeændringer</button>
+    <button type="button" className="btn-ghost text-xs" onClick={() => void show()}><GitCompareArrows size={14} />{wholeBranch ? 'Gennemse hele AI-arbejdsgrenen' : 'Gennemse kodeændringer'}</button>
     <dialog ref={dialog} aria-label="Kodegennemgang" onCancel={() => setOpen(false)} onClose={() => setOpen(false)} className="fixed m-auto w-[min(96vw,1400px)] max-h-[94dvh] rounded-2xl border border-slate-500/40 bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100 p-0 shadow-2xl backdrop:bg-black/75">
       <header className="flex items-start gap-3 border-b border-current/10 p-4"><div className="min-w-0 flex-1"><h2 className="font-semibold">Kodegennemgang</h2><p className="text-xs opacity-60 mt-1">{overview ? `${overview.totalFiles} ændrede filer · ${overview.baseCommit.slice(0, 10)} → ${overview.commit.slice(0, 10)}` : 'Henter den gemte kodeleverance…'}</p><p className="text-xs opacity-60 mt-1">Sammenligningen viser gemte commits. Kontroller og eventuelle senere lokale ændringer vurderes særskilt.</p></div><button type="button" aria-label="Luk kodegennemgang" className="btn-ghost p-2" onClick={() => setOpen(false)}><X size={18} /></button></header>
       {loading && <p role="status" className="p-4 text-sm flex gap-2"><Loader2 size={16} className="animate-spin" />Henter ændringer…</p>}
@@ -58,7 +59,7 @@ export default function CodeChanges({ runId, commit }: { runId: string; commit?:
             </>}
           </section>
         </div>
-        <footer className="p-3 border-t border-current/10"><a className="btn-ghost text-xs inline-flex" href={`${url}.patch?commit=${encodeURIComponent(overview.commit)}`}><Download size={14} />Hent samlet Git-patch</a></footer>
+        <footer className="p-3 border-t border-current/10"><a className="btn-ghost text-xs inline-flex" href={`${url}.patch?commit=${encodeURIComponent(overview.commit)}&scope=${scope}`}><Download size={14} />Hent samlet Git-patch</a></footer>
       </>}
     </dialog>
   </>;

@@ -52,7 +52,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     isBusy: () => Boolean(swarmState.active), canResume: orphanGuard,
     readRun: runId => readRun(dirs, runId),
     resolveInput: input => getSnapshot ? projectExecution(getSnapshot(), input) : input,
-    execute: input => executeRun({ ...input, repository: input.repositoryPath ? { source: String(input.repositoryPath) } : null,
+    execute: input => executeRun({ ...input, repository: input.repositoryPath ? { source: String(input.repositoryPath), startCommit: input.repositoryStartCommit } : null,
       checks: validateChecks(input.checks ?? []), cfg: loadConfig(), dirs, emit: event => broadcast?.({ kind: 'ai', ...event }) }),
     onUpdate: state => broadcast?.({ kind: 'ai_queue', type: 'queue_updated', updatedAt: state.updatedAt }),
   });
@@ -263,13 +263,13 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     try {
       if (req.query.file !== undefined && typeof req.query.file !== 'string') throw new Error('Vælg én fil.');
       const run = activeRuns.get(req.params.runId)?.run ?? readRun(dirs, req.params.runId);
-      res.json({ ok: true, ...await repositoryChanges(run, req.query.file, req.query.commit) });
+      res.json({ ok: true, ...await repositoryChanges(run, req.query.file, req.query.commit, req.query.scope === 'project') });
     } catch (error) { res.status(400).json({ ok: false, reason: error.message }); }
   });
   app.get('/api/ai/runs/:runId/changes.patch', async (req, res) => {
     try {
       const run = activeRuns.get(req.params.runId)?.run ?? readRun(dirs, req.params.runId);
-      const patch = await repositoryPatch(run, req.query.commit);
+      const patch = await repositoryPatch(run, req.query.commit, req.query.scope === 'project');
       res.setHeader('Content-Disposition', `attachment; filename="orbit-${run.runId}.patch"`);
       res.type('text/x-diff').send(patch);
     } catch (error) { res.status(400).json({ ok: false, reason: error.message }); }
@@ -515,7 +515,11 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       const p = runPath(dirs, req.params.runId);
       if (!existsSync(p)) return res.status(404).json({ ok: false, reason: 'Kørsel ikke fundet' });
       const prev = readRun(dirs, req.params.runId);
-      if (getSnapshot && prev.projectId) projectExecution(getSnapshot(), { projectId: prev.projectId, taskId: prev.taskId, goal: prev.goal });
+      if (getSnapshot && prev.projectId) {
+        const input = projectExecution(getSnapshot(), { projectId: prev.projectId, taskId: prev.taskId, goal: prev.goal });
+        if (prev.repository?.source && input.repositoryPath !== prev.repository.source) return res.status(409).json({ ok: false, reason: 'Projektet har skiftet repository. Genoptag ikke en kørsel fra den tidligere mappe.' });
+        if (input.repositoryStartCommit && input.repositoryStartCommit !== prev.continuationFromCommit) return res.status(409).json({ ok: false, reason: 'Projektets AI-arbejdsgren er gået videre siden dette forsøg. Start en ny arbejdsordre fra det aktuelle grundlag i stedet for at genoptage en ældre gren.' });
+      }
       if (swarmState.active) return res.status(409).json({ ok: false, reason: 'En kørsel er allerede aktiv.' });
       if (prev.schemaVersion !== 2) return res.status(409).json({ ok: false, reason: 'Denne ældre kørsel mangler gemt projektkontekst. Start en ny kørsel med bibel og repository.' });
       if (!prev.jobs?.some(j => j.status !== 'done') && !['failed', 'interrupted', 'cancelled'].includes(prev.verification?.status)) return res.status(400).json({ ok: false, reason: 'Alle jobs leverede — intet at genoptage.' });
@@ -699,7 +703,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     try { input = getSnapshot ? projectExecution(getSnapshot(), req.body ?? {}) : req.body ?? {}; validateAttachmentList(input.attachments); }
     catch (error) { return res.status(409).json({ ok: false, reason: error.message }); }
     const emit = sse(res);
-    const { goal, bible, attachments, jobs, mode, pauseAfterPlan, projectId, taskId, repositoryPath, checks, contextManifest } = input;
+    const { goal, bible, attachments, jobs, mode, pauseAfterPlan, projectId, taskId, repositoryPath, repositoryStartCommit, continuationTaskIds, checks, contextManifest } = input;
     const runId = randomUUID().slice(0, 12);
     const cfg = loadConfig();
     try {
@@ -707,8 +711,8 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
         runId,
         goal: String(goal ?? ''),
         bible: String(bible ?? ''),
-        attachments, projectId, taskId, contextManifest,
-        repository: repositoryPath ? { source: String(repositoryPath) } : null,
+        attachments, projectId, taskId, contextManifest, continuationTaskIds,
+        repository: repositoryPath ? { source: String(repositoryPath), startCommit: repositoryStartCommit } : null,
         checks: validateChecks(checks ?? []),
         predefinedJobs: jobs,
         cfg, dirs, emit,

@@ -39,6 +39,29 @@ test('uncommitted source changes are never silently omitted', async () => {
   await assert.rejects(createRunWorktree(root, join(root, 'work'), 'test'), /lokale ændringer/);
 });
 
+test('successive worktrees carry verified commits and reject divergent source changes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-chain-')), source = join(root, 'source');
+  const { mkdirSync } = await import('node:fs'); mkdirSync(source);
+  git(source, 'init', '-q'); git(source, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'base');
+  const sourceHead = git(source, 'rev-parse', 'HEAD');
+  const first = await createRunWorktree(source, join(root, 'first'), 'first');
+  writeFileSync(join(first.workDir, 'first.txt'), 'First delivery'); git(first.workDir, 'add', '.');
+  git(first.workDir, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'first');
+  const firstCommit = git(first.workDir, 'rev-parse', 'HEAD');
+  const second = await createRunWorktree(source, join(root, 'second'), 'second', firstCommit);
+  assert.equal(readFileSync(join(second.workDir, 'first.txt'), 'utf8'), 'First delivery');
+  assert.equal(second.baseCommit, firstCommit); assert.equal(second.sourceCommit, sourceHead);
+  assert.equal(git(source, 'rev-parse', 'HEAD'), sourceHead); assert.equal(existsSync(join(source, 'first.txt')), false);
+  writeFileSync(join(source, 'separate.txt'), 'User work'); git(source, 'add', '.');
+  git(source, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'diverged');
+  await assert.rejects(createRunWorktree(source, join(root, 'third'), 'third', firstCommit), /forskellige ændringer/);
+  git(source, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'merge', '--no-edit', firstCommit);
+  const integrated = await createRunWorktree(source, join(root, 'integrated'), 'integrated', firstCommit);
+  assert.equal(readFileSync(join(integrated.workDir, 'separate.txt'), 'utf8'), 'User work');
+  assert.equal(readFileSync(join(integrated.workDir, 'first.txt'), 'utf8'), 'First delivery');
+  assert.equal(integrated.baseCommit, git(source, 'rev-parse', 'HEAD'));
+});
+
 test('check progress and process identity are observable before completion, cancellation stops children', async () => {
   const root = mkdtempSync(join(tmpdir(), 'orbit-check-cancel-')), marker = join(root, 'child-pulse');
   const controller = new AbortController(), progress = [], processes = [];

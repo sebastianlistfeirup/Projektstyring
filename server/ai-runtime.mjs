@@ -497,11 +497,13 @@ async function runTeamJob({ job, handle, goal, bible, attachments, cfg, dirs, av
 }
 
 // ---- Hovedkørsel --------------------------------------------------------------
-export async function executeRun({ runId, goal, bible, attachments = [], predefinedJobs, cfg, dirs, emit, mode = 'standard', pauseAfterPlan = false, resumeDir = null, previousRun = null, projectId = null, taskId = null, repository = null, checks = [], contextManifest = null }) {
+export async function executeRun({ runId, goal, bible, attachments = [], predefinedJobs, cfg, dirs, emit, mode = 'standard', pauseAfterPlan = false, resumeDir = null, previousRun = null, projectId = null, taskId = null, repository = null, checks = [], contextManifest = null, continuationTaskIds = [] }) {
   attachments = validateAttachmentList(attachments);
   dirs = projectMemoryDirs(dirs, projectId);
   const run = {
     runId, goal, projectId, taskId, repository, checks,
+    continuationFromCommit: previousRun?.continuationFromCommit ?? repository?.startCommit ?? null,
+    continuationTaskIds: [...(previousRun?.continuationTaskIds ?? continuationTaskIds)],
     contextManifest: previousRun?.contextManifest ?? contextManifest,
     verification: { status: 'not_run', checks: [] },
     verificationHistory: [...(previousRun?.verificationHistory ?? [])],
@@ -550,7 +552,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
   try {
   track({ type: 'run_start', runId, goal, projectId, taskId, startedAt: new Date().toISOString() });
   handle.abort.signal.throwIfAborted();
-  if (repository && !previousRun) run.repository = await createRunWorktree(repository.source, handle.runDir, runId);
+  if (repository && !previousRun) run.repository = await createRunWorktree(repository.source, handle.runDir, runId, repository.startCommit);
   handle.abort.signal.throwIfAborted();
   await initRunWorkdir(handle.runDir, goal);
   mkdirSync(run.auditDir, { recursive: true });

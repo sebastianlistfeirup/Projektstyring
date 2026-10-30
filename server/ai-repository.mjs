@@ -16,13 +16,23 @@ export async function inspectRepository(path) {
   return { source: root, baseCommit, branch, dirty };
 }
 
-export async function createRunWorktree(path, workDir, runId) {
+export async function createRunWorktree(path, workDir, runId, startCommit) {
   const repo = await inspectRepository(path);
   // Snapshot the committed base. Uncommitted work is never silently omitted.
   if (repo.dirty) throw new Error('Repository har lokale ændringer. Commit eller gem dem før Orbit opretter en arbejdsgren.');
+  let baseCommit = repo.baseCommit;
+  if (startCommit) {
+    if (!/^[a-f0-9]{40,64}$/.test(startCommit)) throw new Error('Den gemte AI-arbejdsgren har et ugyldigt commit.');
+    const ancestor = async (before, after) => {
+      try { await git(repo.source, ['merge-base', '--is-ancestor', before, after]); return true; }
+      catch (error) { if (error.code === 1) return false; throw error; }
+    };
+    if (await ancestor(repo.baseCommit, startCommit)) baseCommit = startCommit;
+    else if (!await ancestor(startCommit, repo.baseCommit)) throw new Error('Kildegrenen og den verificerede AI-gren har forskellige ændringer. Integrér dem i Git før næste arbejdsordre. Orbit fletter dem ikke automatisk.');
+  }
   const branch = `orbit/${runId}`;
-  await git(repo.source, ['worktree', 'add', '-b', branch, workDir, repo.baseCommit]);
-  return { ...repo, branch, workDir };
+  await git(repo.source, ['worktree', 'add', '-b', branch, workDir, baseCommit]);
+  return { ...repo, sourceCommit: repo.baseCommit, baseCommit, branch, workDir };
 }
 
 export function validateChecks(checks) {
