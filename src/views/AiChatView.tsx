@@ -174,6 +174,9 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
   const [key, setKey] = useState('');
   const [model, setModel] = useState(s.model ?? '');
   const [baseUrl, setBaseUrl] = useState('');
+  const [command, setCommand] = useState(s.cmd ?? '');
+  const [cliTemplate, setCliTemplate] = useState(s.cliTemplate ?? '');
+  const [checkingCli, setCheckingCli] = useState(false);
   const [savingKey, setSavingKey] = useState(false);
   const [keyFeedback, setKeyFeedback] = useState<{ ok: boolean; text: string } | null>(null);
   const needsKey = s.kind === 'sub-api' || s.kind === 'paid-api';
@@ -208,6 +211,7 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
         </span>
       </button>
       {s.reason && <div className="px-2.5 pb-1.5 text-[10px] opacity-50 leading-snug">{s.reason}</div>}
+      {open && s.capabilities && <p className="px-2.5 pb-2 text-[10px] opacity-65">{s.capabilities.repository ? 'Adapter: repository, kommandoer, MCP og livehændelser.' : s.capabilities.produces ? `Adapter: ${s.capabilities.produces === 'model3d' ? '3D-modeller' : s.capabilities.produces === 'audio' ? 'lyd' : 'video'}.` : 'Adapter: tekst og analyse. Kan ikke selv ændre projektfiler.'}{s.customTemplate ? ' Egen CLI-skabelon: native flag og liveformat tilføjes ikke automatisk.' : ''}</p>}
       {open && (needsKey || s.kind === 'cli' || s.kind === 'local') && (
         <div className="px-2.5 pb-2.5 pt-1 space-y-1.5 border-t border-white/5">
           <label className="flex items-center gap-2 text-[11px]">
@@ -267,11 +271,30 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
             <label className="block text-[11px]">Avatar-id<input className="input w-full" defaultValue={s.avatarId ?? ''} onBlur={async e => { await saveService(s.id, { avatarId: e.target.value.trim() }); onChanged(); }} /></label>
             <label className="block text-[11px]">Stemme-id<input className="input w-full" defaultValue={s.voiceId ?? ''} onBlur={async e => { await saveService(s.id, { voiceId: e.target.value.trim() }); onChanged(); }} /></label>
           </div>}
-          {s.kind === 'cli' && (
-            <div className="text-[10px] opacity-60">
-              {t('chat.cliDetected')}: <code className="font-mono">{s.cmd}</code>
-            </div>
-          )}
+          {s.kind === 'cli' && <div className="space-y-2 text-[11px]">
+            <p className="opacity-70">Log ind med leverandørens eget værktøj på denne maskine. Orbit genbruger den lokale opsætning.</p>
+            <button className="btn-ghost text-xs" disabled={checkingCli} onClick={async () => {
+              setCheckingCli(true);
+              try {
+                const result = await (await fetch(`${BASE_URL}/api/ai/services/${s.id}/inspect`, { method: 'POST' })).json();
+                setKeyFeedback({ ok: result.ok, text: result.ok ? result.installation.note : result.reason });
+                onChanged();
+              } catch { setKeyFeedback({ ok: false, text: 'Companion svarer ikke.' }); }
+              finally { setCheckingCli(false); }
+            }}>{checkingCli ? 'Kontrollerer…' : 'Kontrollér installation'}</button>
+            {s.installation && <p className="break-words opacity-70">{s.installation.version} · kontrolleret {new Date(s.installation.checkedAt).toLocaleDateString()}</p>}
+            <details><summary className="cursor-pointer opacity-70">Program og model</summary><div className="mt-2 space-y-2">
+              <label className="block">Program eller fuld sti<input aria-label={`${s.name} program`} className="input w-full" value={command} onChange={e => setCommand(e.target.value)} /></label>
+              <label className="block">Valgfri model<input aria-label={`${s.name} model`} className="input w-full" value={model} onChange={e => setModel(e.target.value)} placeholder="Brug CLI-værktøjets standard" /></label>
+              <label className="block">Egen argumentskabelon<input aria-label={`${s.name} argumentskabelon`} className="input w-full font-mono" value={cliTemplate} onChange={e => setCliTemplate(e.target.value)} placeholder="Tomt felt bruger Orbits adapter" /></label>
+              <p className="opacity-60">En egen skabelon skal indeholde {'{prompt}'}. Den overtager selv tilladelser og outputformat. Brug standardadapteren, når det er muligt.</p>
+              <button className="btn-primary text-xs" onClick={async () => {
+                const result = await saveService(s.id, { cmd: command.trim(), model: model.trim() || null, cliTemplate });
+                setKeyFeedback({ ok: result.ok, text: result.ok ? 'CLI-opsætning gemt.' : result.reason ?? 'Kunne ikke gemme.' }); onChanged();
+              }}>Gem CLI-opsætning</button>
+            </div></details>
+            {keyFeedback && <p role="status" className={keyFeedback.ok ? 'text-emerald-400' : 'text-rose-400'}>{keyFeedback.text}</p>}
+          </div>}
           {s.kind === 'local' && (
             <>
               <div className="flex gap-1.5">
@@ -420,8 +443,8 @@ export function AiChatView() {
   useEffect(() => { if (chatId) sessionStorage.setItem('orbit-active-chat', chatId); else sessionStorage.removeItem('orbit-active-chat'); }, [chatId]);
 
   async function prepareTakeover() {
-    const serviceId = ['codex', 'claude'].find(id => services?.[id]?.available);
-    if (!serviceId) { setSendIssue('Tilslut Codex eller Claude Code først, så projektets kode kan læses.'); return; }
+    const serviceId = ['codex', 'claude', 'gemini', 'kimi', 'qwen-code'].find(id => services?.[id]?.available && services[id].capabilities?.repository);
+    if (!serviceId) { setSendIssue('Tilslut en coding-agent først, så projektets kode kan læses.'); return; }
     if (!chatProject?.repositoryPath) { setSendIssue('Tilknyt projektets repository under Repository og kvalitetskontroller først.'); return; }
     const template = (await fetchTemplates()).find(t => t.id === 'tpl-project-takeover');
     if (!template) { setSendIssue('Skabelonen kunne ikke hentes fra Companion.'); return; }

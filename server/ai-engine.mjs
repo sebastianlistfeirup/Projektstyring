@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, realpathSync } from 'fs';
 import { join, basename, dirname } from 'path';
 import { randomUUID } from 'crypto';
-import { serviceById, serviceAvailability, runChat, setSecretsDir, loadKeySecrets, saveKeySecrets, aiCfg } from './ai-services.mjs';
+import { serviceById, serviceAvailability, runChat, setSecretsDir, loadKeySecrets, saveKeySecrets, aiCfg, inspectCliInstallation, parseCliTemplate } from './ai-services.mjs';
 import { extractDocument, hydrateAttachment } from './ai-documents.mjs';
 import { inspectRepository, validateChecks } from './ai-repository.mjs';
 import { projectExecution } from './task-execution.mjs';
@@ -54,6 +54,16 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     res.json({ ok: true, services: await serviceAvailability(cfg), prefs: aiCfg(cfg).prefs });
   });
 
+  app.post('/api/ai/services/:id/inspect', async (req, res) => {
+    try {
+      const cfg = loadConfig(), installation = await inspectCliInstallation(req.params.id, cfg);
+      cfg.aiProviders ??= {};
+      cfg.aiProviders[req.params.id] = { ...cfg.aiProviders[req.params.id], installation };
+      saveConfig(cfg);
+      res.json({ ok: true, installation });
+    } catch (error) { res.status(400).json({ ok: false, reason: error.message }); }
+  });
+
   app.post('/api/ai/prefs', (req, res) => {
     const cfg = loadConfig();
     const patch = req.body ?? {};
@@ -78,6 +88,10 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     cfg.aiProviders = cfg.aiProviders ?? {};
     const cur = cfg.aiProviders[svc.id] ?? {};
     const { enabled, apiKey, model, cmd, cliTemplate, baseUrl, avatarId, voiceId, billingMode, noExtraCharges } = req.body ?? {};
+    if (cliTemplate) {
+      try { if (!parseCliTemplate(String(cliTemplate)).includes('{prompt}')) throw new Error('Skabelonen skal indeholde {prompt}.'); }
+      catch (error) { return res.status(400).json({ ok: false, reason: error.message }); }
+    }
 
     // Nøglehåndtering: nye nøgler gemmes i den hemmelige nøgleboks, og en
     // evt. gammel nøgle i companion.json migreres straks derover og slettes.
@@ -107,8 +121,8 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       ...(noExtraCharges !== undefined ? { noExtraCharges: noExtraCharges === true } : {}),
       ...(enabled !== undefined ? { enabled } : {}),
       ...(model !== undefined ? { model } : {}),
-      ...(cmd ? { cmd } : {}),
-      ...(cliTemplate ? { cliTemplate } : {}),
+      ...(cmd !== undefined ? { cmd: String(cmd).trim() || undefined, installation: null } : {}),
+      ...(cliTemplate !== undefined ? { cliTemplate: String(cliTemplate).trim() || undefined } : {}),
       ...(baseUrl ? { baseUrl } : {}),
       ...(avatarId !== undefined ? { avatarId: String(avatarId) } : {}),
       ...(voiceId !== undefined ? { voiceId: String(voiceId) } : {}),

@@ -4,6 +4,10 @@ import type { AiAttachment, AiMessage } from './types';
 const BASE = 'http://127.0.0.1:4310';
 
 export interface AiServiceInfo {
+  capabilities?: { text: boolean; repository: boolean; nativeMcp: boolean; structuredEvents: boolean; produces: string | null };
+  customTemplate?: boolean;
+  cliTemplate?: string | null;
+  installation?: { version: string; checkedAt: string; login: string; note: string } | null;
   id: string;
   name: string;
   kind: 'cli' | 'local' | 'sub-api' | 'paid-api' | 'manual';

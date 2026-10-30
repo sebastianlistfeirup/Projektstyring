@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { createRunWorktree, verifyRepository, repositoryEvidence } from './ai-repository.mjs';
 import { validatePlan, executeGraph, runOutcome, saveRun } from './ai-state.mjs';
 import { validateProjectPlan, PROJECT_PLAN_FORMAT } from './project-plan.mjs';
+import { serviceCapabilities } from './ai-capabilities.mjs';
 const execFileAsync = promisify(execFile);
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync } from 'fs';
 import { join } from 'path';
@@ -117,8 +118,8 @@ function recordUsage(run, serviceId) {
 // ---- Orkestrator: planlægning + eksekvering ----------------------------------
 export async function pickOrchestrator(cfg, availability) {
   const { prefs } = aiCfg(cfg);
-  const order = [prefs.orchestrator, 'claude', 'codex', 'kimi', 'gemini', 'qwen'].filter(Boolean);
-  for (const id of order) if (availability[id]?.available) return id;
+  const order = [prefs.orchestrator, 'claude', 'codex', 'kimi', 'gemini', 'qwen-code', 'qwen'].filter(Boolean);
+  for (const id of order) if (availability[id]?.available && serviceById(id) && serviceCapabilities(serviceById(id)).text) return id;
   return null;
 }
 
@@ -174,7 +175,8 @@ function attachmentContext(attachments) {
 export async function planWithLLM({ orchestratorId, goal, bible, attachments = [], cfg, dirs, availability, extra, signal }) {
   const roster = AI_SERVICES.map((s) => {
     const a = availability[s.id];
-    return `- ${s.id} (${s.name}): stærke sider: ${s.strengths.join(', ')} — ${a?.available ? 'TILGÆNGELIG' : 'ikke tilgængelig'}`;
+    const cap = serviceCapabilities(s);
+    return `- ${s.id} (${s.name}): ${cap.repository ? 'coding-agent: kan læse/ændre repository, køre kommandoer og bruge native MCP' : cap.produces ? `producerer ${cap.produces}, ikke chat eller kode` : 'tekstgenerering: kan ikke selv ændre filer eller køre tests'}; stærke sider: ${s.strengths.join(', ')} — ${a?.available ? 'TILGÆNGELIG' : 'ikke tilgængelig'}`;
   }).join('\n');
   const runMem = runsMemoryTail(dirs);
   const prompt = `PLANLÆGNINGSFASE — du må IKKE udføre målet, køre tests, ændre filer eller producere en slutrapport. Returnér kun en jobplan; selve arbejdet udføres først af de efterfølgende Auto-jobs.\n\nDu er orkestrator for et AI-drevet projekt. Mål, som du KUN skal planlægge: ${goal}\n\n${bible ? `Projektets bibel (roller/stil): ${bible}\n\n` : ''}${runMem ? `Tidligere kørsler (kontekst — undgå at gentage fejl):\n${runMem}\n\n` : ''}Roster:\n${roster}\n\nFordel arbejdet til de TILGÆNGELIGE tjenester efter deres stærke sider. Brug færrest mulige jobs (typisk 1-4, højst 10) med afhængigheder (dependsOn = indeks i listen, tidligere jobs). Respektér målets præcise scope og tilføj aldrig nye faser. Medieproduktion og release må kun planlægges, når målet udtrykkeligt beder om det. ${extra ?? ''}\n\nStop efter planen. Ingen værktøjskald, ingen kodeændringer, ingen tests og ingen forklaring. ${PLAN_SCHEMA}`;
@@ -217,13 +219,13 @@ export function planByRules({ goal, availability }) {
   const steps = [
     {
       title: 'Udfør målet uden scope-udvidelse',
-      svc: pick('codex', 'claude', 'kimi', 'qwen', 'gemini'),
+      svc: pick('codex', 'claude', 'kimi', 'qwen-code', 'gemini'),
       phase: 'produktion',
       desc: `Arbejd kun på dette mål. Tilføj ingen faser, assets, medieproduktion eller release:\n${goal}`,
     },
     {
       title: 'Verificér tests og rapportér faktiske resultater',
-      svc: pick('claude', 'codex', 'kimi', 'gemini', 'qwen'),
+      svc: pick('claude', 'codex', 'kimi', 'gemini', 'qwen-code'),
       phase: 'test',
       desc: `Kør præcis de kontroller og tests, målet kræver. Rapportér faktiske kommandoer, resultater, ændrede filer og restfejl. Opfind ingen PASS-resultater:\n${goal}`,
     },
@@ -248,7 +250,7 @@ export function planByRules({ goal, availability }) {
 // Afstemning: dommeren vælger det bedste svar og begrunder.
 // Rolle-pipeline: arkitekt → koder → reviewer (anden service!) → tester.
 function buildDebatePlan({ goal, availability, vote }) {
-  const free = ['claude', 'codex', 'kimi', 'gemini', 'qwen'].filter((id) => availability[id]?.available).slice(0, 3);
+  const free = ['claude', 'codex', 'kimi', 'gemini', 'qwen-code', 'qwen'].filter((id) => availability[id]?.available).slice(0, 3);
   if (free.length < 2) return null;
   const judge = ['claude', 'kimi', 'gemini', 'codex'].find((id) => availability[id]?.available);
   if (!judge) return null;
@@ -278,7 +280,7 @@ function buildDebatePlan({ goal, availability, vote }) {
 // Race-tilstand (A/B-race): to forskellige motorer løser samme opgave uafhængigt;
 // en tredje (dommer) kårer vinderen og præsenterer det endelige svar.
 function buildRacePlan({ goal, availability }) {
-  const free = ['claude', 'codex', 'kimi', 'gemini', 'qwen'].filter((id) => availability[id]?.available);
+  const free = ['claude', 'codex', 'kimi', 'gemini', 'qwen-code'].filter((id) => availability[id]?.available);
   if (free.length < 3) return null;
   const [a, b] = free;
   const judge = free.find((id) => id !== a && id !== b) ?? free[2];
@@ -313,8 +315,8 @@ function buildRacePlan({ goal, availability }) {
 function buildRolesPlan({ goal, availability, bible }) {
   const pick = (...ids) => ids.find((id) => availability[id]?.available) ?? null;
   const arch = pick('claude', 'kimi', 'gemini');
-  const coder = pick('codex', 'qwen', 'kimi');
-  const reviewer = pick('kimi', 'gemini', 'claude');
+  const coder = pick('codex', 'qwen-code', 'kimi', 'claude', 'gemini');
+  const reviewer = ['kimi', 'gemini', 'claude', 'qwen-code', 'codex'].find(id => id !== coder && availability[id]?.available);
   const tester = pick('gemini', 'claude', 'codex');
   const jobs = [];
   if (arch) jobs.push({ id: 'job-0', title: 'Arkitekt: spec', serviceId: arch, phase: 'design', dependsOn: [], description: `Du er ARKITEKT. Skriv en kort, præcis spec (krav, struktur, filer, grænseflader) for: ${goal}.${bible ? ` Respekér projektets bibel.` : ''}` });
@@ -329,7 +331,7 @@ function buildRolesPlan({ goal, availability, bible }) {
 const JUDGE_SCHEMA = `Svar KUN med JSON (intet andet): {"score":number(0-10),"note":string}`;
 
 async function judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs, signal }) {
-  const prompt = `Du er kvalitets-dommer for et AI-projekt.\nProjektmål: ${String(goal).slice(0, 800)}\n${bible ? `Bibel (stil/krav): ${String(bible)}\n` : ''}Job: ${job.title}\nOpgavebeskrivelse: ${String(job.description ?? '').slice(0, 1200)}\n\nLeverancen:\n${String(text).slice(0, 6000)}\n\nBedøm leverancen mod opgavebeskrivelsen: 0-10, hvor 6 er "accepterbar" og 8+ er "rigtig god". Giv én kort, konkret begrundelse på dansk. ${JUDGE_SCHEMA}`;
+  const prompt = `Du er kvalitets-dommer for et AI-projekt.\nProjektmål: ${String(goal)}\n${bible ? `Bibel (stil/krav): ${String(bible)}\n` : ''}Job: ${job.title}\nOpgavebeskrivelse: ${String(job.description ?? '')}\n\nLeverancen:\n${String(text)}\n\nBedøm leverancen mod opgavebeskrivelsen: 0-10, hvor 6 er "accepterbar" og 8+ er "rigtig god". Giv én kort, konkret begrundelse på dansk. ${JUDGE_SCHEMA}`;
   const raw = await runChat({ serviceId: judgeId, messages: [{ role: 'user', text: prompt }], cfg, dirs, signal, readOnly: true, cwd: dirs.cwd });
   const m = raw.match(/\{[\s\S]*\}/);
   if (!m) throw new Error('Dommeren returnerede ikke JSON');
@@ -570,14 +572,14 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
   } else if (mode === 'debate' || mode === 'vote') {
     jobs = buildDebatePlan({ goal, availability, vote: mode === 'vote' })
       ?? planByRules({ goal, availability });
-    if (!jobs.some((j) => j.title.startsWith('Dommer'))) track({ type: 'job_note', jobId: null, note: 'For få gratis motorer til debat — bruger standardplan.' });
+    if (!jobs.some((j) => j.title.startsWith('Dommer'))) track({ type: 'job_note', jobId: null, note: 'For få tilgængelige motorer til debat — bruger standardplan.' });
   } else if (mode === 'roles') {
     jobs = buildRolesPlan({ goal, availability, bible })
       ?? planByRules({ goal, availability });
   } else if (mode === 'race') {
     jobs = buildRacePlan({ goal, availability })
       ?? planByRules({ goal, availability });
-    if (!jobs.some((j) => j.title.startsWith('Dommer'))) track({ type: 'job_note', jobId: null, note: 'For få gratis motorer til race (kræver 3) — bruger standardplan.' });
+    if (!jobs.some((j) => j.title.startsWith('Dommer'))) track({ type: 'job_note', jobId: null, note: 'For få tilgængelige motorer til race (kræver 3) — bruger standardplan.' });
   } else if (orchestratorId) {
     try { jobs = await planWithLLM({ orchestratorId, goal, bible, attachments: run.attachments, cfg, dirs: { ...dirs, cwd: handle.runDir }, availability, signal: handle.abort.signal }); }
     catch (e) { track({ type: 'job_note', jobId: null, note: `Orkestrator-plan fejlede (${e.message}) — bruger regelbaseret plan.` }); jobs = planByRules({ goal, availability }); }
@@ -653,7 +655,8 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
 
     const baseCommit = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: handle.runDir })).stdout.trim();
     try {
-      if (run.repository && ['prototype', 'produktion', 'polering'].includes(job.phase) && !['codex', 'claude', 'kimi', 'gemini', 'meshy', 'elevenlabs', 'heygen'].includes(job.serviceId)) throw new Error('Dette repository-job kræver en coding-agent med fil- og kommandoadgang.');
+      const capabilities = serviceCapabilities(serviceById(job.serviceId) ?? { id: '' });
+      if (run.repository && ['prototype', 'produktion', 'polering'].includes(job.phase) && !capabilities.repository && !capabilities.produces) throw new Error('Dette repository-job kræver en coding-agent med fil- og kommandoadgang.');
       const isMedia = ['meshy', 'elevenlabs', 'heygen'].includes(job.serviceId);
       let text;
       let artifacts = [];
@@ -679,7 +682,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       let score = null;
       let judgeNote = null;
       if (!isMedia && prefs.autoJudge !== false && !job.team) {
-        const judgeId = ['claude', 'kimi', 'gemini', 'codex'].find((id) => id !== job.serviceId && availability[id]?.available);
+        const judgeId = ['claude', 'kimi', 'gemini', 'codex', 'qwen-code'].find((id) => id !== job.serviceId && availability[id]?.available);
         if (judgeId) {
           try {
             const judged = await judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs: { ...dirs, cwd: handle.runDir }, signal: handle.abort.signal });

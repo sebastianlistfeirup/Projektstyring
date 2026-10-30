@@ -12,7 +12,7 @@ Denne ændring samler projektets arbejdsordre, AI-kørsel, isoleret Git-gren og 
 6. Upload bibel, dokumenter eller screenshots. Tekst fra PDF/DOCX kan bruges som bibelkladde. Vælg **Gør kladden gældende** for at fastlægge en version.
 7. Vælg en arbejdsordre og kør Auto. Orbit viser jobs, afhængigheder, underagenter, værktøjshændelser, commit og faktiske testresultater.
 
-Direkte chat med én tjeneste er til læsning/rådgivning. Repositoryændringer køres gennem Auto, så arbejdet har en isoleret arbejdsgren og en gemt leverance. Codex/Claude bruger deres native læsetilstand i analysefaser. Brugerdefinerede CLI-skabeloner og andre værktøjers egne tilladelser skal også være korrekt konfigureret.
+Direkte chat med én tjeneste er til læsning/rådgivning. Repositoryændringer køres gennem Auto, så arbejdet har en isoleret arbejdsgren og en gemt leverance. Codex, Claude, Gemini og Qwen Code bruger native læsetilstand i analysefaser; Kimi bruger en eksplicit profil med læse-/søgeværktøjer. Brugerdefinerede CLI-skabeloner og andre værktøjers egne tilladelser skal også være korrekt konfigureret.
 
 ## Hvad kørselsmotoren garanterer i den implementerede sti
 
@@ -45,7 +45,8 @@ Ollama regnes kun som lokal ved en loopback-adresse og en model uden kendt cloud
 | Claude | Lokal Claude Code CLI | Native værktøjer/MCP og Agent-hændelser. |
 | Gemini | Lokal Gemini CLI | Installeret, konfigureret CLI kræves. |
 | Kimi | Lokal Kimi CLI | Installeret, konfigureret CLI kræves. |
-| Qwen | Lokal Ollama | Tekstgenerering; ingen generel fil-/kommando-værktøjsløkke endnu. |
+| Qwen Code | Lokal Qwen Code CLI | Repositoryværktøjer og native MCP; egen konto og betaling skal valideres. |
+| Qwen lokal | Lokal Ollama | Tekstgenerering; ingen generel fil-/kommando-værktøjsløkke. |
 | Grok | Konfigurerbar CLI / særskilt xAI API-adapter | Katalogposten er ikke dokumentation for en officiel abonnementsdækket CLI. Skal valideres konkret; API er ikke automatisk inkluderet i Grok-abonnementet. |
 | Meshy | API-job med gemt provider-id og GLB | Inkluderede API-credits og stop for ekstraforbrug skal kontrolleres på kontoen. |
 | HeyGen | API-job med avatar-/stemme-id og lokal MP4 | Kontoens API-adgang og credits skal kontrolleres. |
@@ -57,7 +58,7 @@ Meshy/HeyGen gemmer hensigt og jobkvittering. Efter genoptagelse bruges det eksi
 
 ## MCP og livevisning
 
-Brugerens native Codex/Claude MCP-konfiguration bevares. Orbit deaktiverer ikke længere Codex-apps ved opstart. Codex JSONL og Claude stream-json oversættes til fil-, kommando-, MCP- og underagenthændelser i Orbit Live. Ukendte eventtyper ignoreres; eventformater fra andre CLI-versioner skal afprøves.
+De fem native coding-adaptere bevarer deres egen MCP-konfiguration ved udførelse. Kimis analyseprofil begrænser værktøjer til læsning og søgning. Codex JSONL samt Claude, Gemini, Kimi og Qwen Code stream-json oversættes til offentlige værktøjs- og agenthændelser i Orbit Live. [Adapterkontrakter og installation](ai-adapters.md) beskriver flag og begrænsninger. Ukendte eventtyper ignoreres; eventformater fra andre CLI-versioner skal afprøves.
 
 Der er endnu ikke en fælles MCP-servermanager eller en universal tool-calling-loop for alle modeller. Livekortet viser de strukturerede hændelser, adapteren modtager. Det opfinder ikke underagenter, og det viser ikke modellernes interne ræsonnementer.
 
@@ -108,7 +109,7 @@ På Windows sættes miljøvariablen med PowerShell: `$env:ORBIT_SOAK_MINUTES='12
 
 1. Verificér en rigtig Realmread-opgave fra arbejdsordre til build og manuel spiltest.
 2. Indfør et vedvarende joblager med leases, idempotens og kontrolleret recovery, før flere workers eller maskiner tilføjes.
-3. Adskil kapabiliteter fra modelnavne: filadgang, tests, billeder, browser, MCP, 3D, lyd og video skal forhandles og verificeres pr. adapter.
+3. Verificér adapterkatalogets kapabiliteter mod de installerede versioner og konti: filadgang, tests, billeder, browser, MCP, 3D, lyd og video.
 4. Tilføj versionsbaseret dokumentsøgning med kildehenvisninger og kontekstbudget; bevar hele biblen som autoritativ kilde.
 5. Tilføj leverandørspecifik kvote-/reset-aflæsning, hvor der findes understøttede interfaces. Ukendt må fortsat være ukendt.
 6. Udvid først parallel kodning med separat worktree pr. job og en integration-/testkø. Flere samtidige svar er ikke det samme som verificeret fremdrift.
@@ -116,7 +117,7 @@ På Windows sættes miljøvariablen med PowerShell: `$env:ORBIT_SOAK_MINUTES='12
 
 ## Verifikation udført under udviklingen
 
-30. oktober 2026: Linux-build, lint uden fejl (eksisterende React-advarsler), 21 importkontroller, 3 workspace-tests og 40 server-/AI-tests bestod. Seks Playwright-forløb er afprøvet med rigtig Chromium: upload af bibel på over 6.000 tegn, offentliggørelse af bibelversion, repositorytilknytning, reel filkontrol, genindlæsning under udførelse, bevaret kilde-checkout, status til gennemgang, et fejlet forløb, der forblev fejlet i chatten, præcisering og filupload efter genindlæsning, serverafslutning med lukket browser, projektoprettelse på mobil, projektgennemgang med import uden dubletter samt sletning og gendannelse på tværs af åbne faner. Det tidligere checkpoint bestod også GitHub-kontrollerne på Windows efter en rettelse af absolutte programstier.
+30. oktober 2026: Linux-build, lint uden fejl (eksisterende React-advarsler), 21 importkontroller, 3 workspace-tests og 43 server-/AI-tests bestod. Seks Playwright-forløb er afprøvet med rigtig Chromium: upload af bibel på over 6.000 tegn, offentliggørelse af bibelversion, repositorytilknytning, reel filkontrol, genindlæsning under udførelse, bevaret kilde-checkout, status til gennemgang, et fejlet forløb, der forblev fejlet i chatten, præcisering og filupload efter genindlæsning, serverafslutning med lukket browser, projektoprettelse på mobil, projektgennemgang med import uden dubletter samt sletning og gendannelse på tværs af åbne faner. Det tidligere checkpoint bestod også GitHub-kontrollerne på Windows efter en rettelse af absolutte programstier.
 
 Godkendelsespausen blev desuden afprøvet i 12 faktiske minutter med 144 stikprøver. Ingen jobstart skete før eksplicit godkendelse. Dette er en afgrænset varighedstest med en lokal prøveagent, ikke dokumentation for flere døgns autonomi med rigtige udbydere.
 

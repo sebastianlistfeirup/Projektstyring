@@ -7,6 +7,8 @@ import { readProviderSse as readSse, readLines } from './ai-stream.mjs';
 import { hydrateAttachment } from './ai-documents.mjs';
 import { billingPolicy } from './ai-billing.mjs';
 import { agentEvents } from './ai-events.mjs';
+import { nativeCliOptions } from './ai-cli-options.mjs';
+import { serviceCapabilities } from './ai-capabilities.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { spawn, execFile, execFileSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, chmodSync, statSync } from 'fs';
@@ -25,6 +27,7 @@ export const AI_SERVICES = [
   { id: 'kimi',       name: 'Kimi Code',      kind: 'cli',      cmd: 'kimi',   cliTemplate: '-p {prompt}',                        color: 'indigo',   strengths: ['kode', 'lang kontekst', 'dokumentation', 'orkestrering'] },
   { id: 'gemini',     name: 'Gemini CLI',     kind: 'cli',      cmd: 'gemini', cliTemplate: '-p {prompt}',                        color: 'sky',      strengths: ['multimodal', 'research', 'design-feedback'] },
   { id: 'qwen',       name: 'Qwen (lokal)',   kind: 'local',    baseUrl: 'http://127.0.0.1:11434', model: 'qwen2.5-coder:7b',     color: 'slate',    strengths: ['privat', 'hurtig kode', 'gratis'] },
+  { id: 'qwen-code',  name: 'Qwen Code',      kind: 'cli',      cmd: 'qwen', cliTemplate: '-p {prompt}', color: 'slate', strengths: ['kode', 'MCP', 'underagenter', 'test'] },
   { id: 'meshy',      name: 'Meshy',          kind: 'sub-api',  baseUrl: 'https://api.meshy.ai/v1',                            color: 'teal',     strengths: ['3D-modeller', 'teksturer'] },
   { id: 'elevenlabs', name: 'ElevenLabs',     kind: 'sub-api',  baseUrl: 'https://api.elevenlabs.io/v1',                       color: 'rose',     strengths: ['stemmer', 'lyd', 'TTS'] },
   { id: 'heygen',     name: 'HeyGen',         kind: 'sub-api',  baseUrl: 'https://api.heygen.com/v2',                          color: 'violet',   strengths: ['avatar-video', 'præsentation'] },
@@ -117,6 +120,18 @@ async function resolveCliCommand(cmd) {
   } catch { return null; }
 }
 
+export async function inspectCliInstallation(serviceId, cfg) {
+  const service = serviceById(serviceId), provider = aiCfg(cfg).providers[serviceId] ?? {};
+  if (service?.kind !== 'cli') throw new Error('Denne forbindelse bruger ikke en lokal CLI.');
+  const command = await resolveCliCommand(provider.cmd ?? service.cmd);
+  if (!command) throw new Error('Programmet blev ikke fundet. Installer leverandørens CLI eller angiv stien til programmet.');
+  const launch = cliSpawnSpec(command, ['--version']);
+  const result = await execFileP(launch.cmd, launch.args, { timeout: 5000, maxBuffer: 64000, env: cliChildEnv(process.env, { claude: serviceId === 'claude' }) });
+  const version = `${result.stdout}\n${result.stderr}`.trim().slice(0, 500);
+  if (!/\d+\.\d+/.test(version)) throw new Error('Programmet svarede, men versionen kunne ikke genkendes. Kontrollér at stien peger på den rigtige CLI.');
+  return { version, checkedAt: new Date().toISOString(), login: 'not_checked', note: 'Installation svarer. Login, modeladgang og resterende abonnementskvote er ikke kontrolleret.' };
+}
+
 let cliCache = { at: 0, signature: '', found: {} };
 async function detectClis(providers) {
   const cliServices = AI_SERVICES.filter((s) => s.kind === 'cli');
@@ -199,9 +214,13 @@ export async function serviceAvailability(cfg) {
       reason = 'Klar til manuel tilslutning';
     }
     if (s.id === 'heygen' && available && (!p.avatarId || !p.voiceId)) { available = false; reason = 'Angiv avatar-id og stemme-id fra din HeyGen-konto.'; }
+    if (s.id === 'grok' && !p.cliTemplate) { available = false; reason = 'Grok kræver en konkret, verificeret CLI-skabelon. Der antages ingen officiel abonnementsdækket Grok-CLI.'; }
     const billing = billingPolicy(s, { ...p, model: resolvedModel ?? p.model, remoteModel });
     if (!billing.allowed) { available = false; reason = billing.reason; }
     out[s.id] = {
+      installation: p.installation ?? null, cliTemplate: p.cliTemplate ?? null,
+      capabilities: serviceCapabilities(s),
+      customTemplate: Boolean(p.cliTemplate && p.cliTemplate !== s.cliTemplate),
       billing,
       avatarId: p.avatarId ?? null, voiceId: p.voiceId ?? null,
       id: s.id, name: s.name, kind: s.kind, color: s.color, strengths: s.strengths,
@@ -218,6 +237,7 @@ export async function serviceAvailability(cfg) {
 export function assertUsable(svc, cfg) {
   const { providers } = aiCfg(cfg);
   const p = providers[svc.id] ?? {};
+  if (svc.id === 'grok' && !p.cliTemplate) throw new Error('Konfigurér en konkret Grok-CLI-skabelon før brug. Orbit antager ikke en officiel abonnementsintegration.');
   const billing = billingPolicy(svc, p);
   if (!billing.allowed) throw new Error(`${svc.name}: ${billing.reason}`);
   if ((svc.kind === 'sub-api' || svc.kind === 'paid-api') && !p.apiKey) {
@@ -497,21 +517,23 @@ export function parseCliTemplate(template) {
   return tokens;
 }
 
+export function cliArguments(template, prompt, extraArgs = []) {
+  const tokens = parseCliTemplate(template || '-p {prompt}');
+  if (!tokens.includes('{prompt}')) throw new Error('CLI-skabelonen skal indeholde {prompt}.');
+  const parts = tokens.map(token => token === '{prompt}' ? prompt : token);
+  parts.splice(tokens[0] === 'exec' ? 1 : 0, 0, ...extraArgs);
+  return parts;
+}
+
 export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, onProcess, jsonl, claude = false, extraArgs = [], signal }) {
   signal?.throwIfAborted();
   const resolvedCmd = await resolveCliCommand(cmd);
   if (!resolvedCmd) throw new Error(`Kunne ikke starte '${cmd}': CLI'en blev ikke fundet`);
-  const tokens = parseCliTemplate(cliTemplate || '-p {prompt}');
-  const parts = []; let promptInserted = false;
-  for (const token of tokens) {
-    if (token === '{prompt}') { parts.push(...extraArgs, prompt); promptInserted = true; }
-    else parts.push(token);
-  }
-  if (!promptInserted) parts.push(...extraArgs);
+  const parts = cliArguments(cliTemplate, prompt, extraArgs);
   const launch = cliSpawnSpec(resolvedCmd, parts);
   return new Promise((resolve, reject) => {
     const env = cliChildEnv({ ...process.env, NO_COLOR: '1' }, { claude });
-    for (const key of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'MOONSHOT_API_KEY']) delete env[key];
+    for (const key of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'MOONSHOT_API_KEY', 'DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'KIMI_API_KEY']) delete env[key];
     const child = spawn(launch.cmd, launch.args, { cwd: cwd ?? process.cwd(), env, detached: process.platform !== 'win32' });
     let terminationTimer, callbackError, stopped = false, out = '', lineBuf = '', bytes = 0;
     const kill = () => {
@@ -574,44 +596,32 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
   const delta = (d) => { acc += d; onDelta?.(d, acc); };
   if (svc.kind === 'cli') {
     let prompt = messages.map(contentToText).join('\n\n---\n\n');
+    const contextDir = join(dirs.runs ?? dirs.uploads ?? dirs.cwd, 'contexts');
+    let contextPath;
     if (prompt.length > 6000) {
-      const contextDir = join(dirs.runs ?? dirs.uploads ?? dirs.cwd, 'contexts');
       mkdirSync(contextDir, { recursive: true });
-      const contextPath = join(contextDir, `${randomUUID()}.txt`);
+      contextPath = join(contextDir, `${randomUUID()}.txt`);
       writeFileSync(contextPath, prompt, { mode: 0o600 });
       prompt = `Læs hele opgaven og alle gældende instruktioner i UTF-8-filen ${contextPath}. Filen indeholder den fulde samtale og projektkontekst. Følg opgavens fase og afgrænsning. Udfør ikke arbejde før du har læst filen.`;
     }
     const template = p.cliTemplate ?? svc.cliTemplate;
     const useDefaultTemplate = template === svc.cliTemplate;
-    // Claude køres med stream-json så Task-underagenter kan spores som egne linjer.
-    // Brugerdefinerede skabeloner respekteres uden ekstra permissions eller mapper.
-    const useJson = ['claude', 'codex'].includes(serviceId) && useDefaultTemplate;
-    const accessDirs = useDefaultTemplate && (serviceId === 'codex' || serviceId === 'claude')
+    // Preserve native MCP configuration. Custom templates own their arguments.
+    const accessDirs = useDefaultTemplate
       ? cliAccessDirectories(cwd ? messages.map(m => ({ attachments: m.attachments })) : messages) : [];
-    const extraArgs = [];
-    if (serviceId === 'codex' && useDefaultTemplate) {
-      // Preserve user-configured MCP/app integrations in the coding agent.
-      // Orkestratorens planfase må læse projektet, men aldrig udføre ændringer.
-      extraArgs.push('--sandbox', readOnly ? 'read-only' : 'workspace-write');
-      for (const dir of accessDirs) extraArgs.push('--add-dir', dir);
-    } else if (serviceId === 'claude' && useDefaultTemplate) {
-      // Print-mode er ikke-interaktiv. Planfasen er læse-only; job må skrive.
-      extraArgs.push('--permission-mode', readOnly ? 'plan' : 'acceptEdits');
-      if (accessDirs.length) extraArgs.push('--add-dir', ...accessDirs);
-    }
-    if (useJson && serviceId === 'claude') extraArgs.push('--output-format', 'stream-json', '--verbose');
-    if (useJson && serviceId === 'codex') extraArgs.push('--json');
+    if (useDefaultTemplate && contextPath) accessDirs.push(contextDir);
+    const native = useDefaultTemplate ? nativeCliOptions(serviceId, { readOnly, accessDirs, contextDir, model: p.model }) : { args: [], jsonl: false };
     await chatCli({
       cmd: p.cmd ?? svc.cmd,
       cliTemplate: template,
-      extraArgs,
+      extraArgs: native.args,
       prompt,
       cwd: cwd ?? dirs.cwd,
-      jsonl: useJson,
+      jsonl: native.jsonl,
       claude: serviceId === 'claude',
       onDelta: delta,
       onProcess,
-      onEvent: useJson ? agentEvents(serviceId, { onText: delta, onSubagent, onAction }) : undefined,
+      onEvent: native.jsonl ? agentEvents(serviceId, { onText: delta, onSubagent, onAction }) : undefined,
       signal,
     });
   } else if (svc.kind === 'local') {

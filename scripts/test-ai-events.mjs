@@ -1,10 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { agentEvents } from '../server/ai-events.mjs';
-import { chatCli } from '../server/ai-services.mjs';
+import { chatCli, cliArguments, inspectCliInstallation, setSecretsDir } from '../server/ai-services.mjs';
+import { nativeCliOptions } from '../server/ai-cli-options.mjs';
+import { serviceCapabilities } from '../server/ai-capabilities.mjs';
 
 test('Codex events expose actual actions and final text without reasoning', () => {
   const text = [], actions = [], subagents = [];
@@ -19,7 +21,60 @@ test('Codex events expose actual actions and final text without reasoning', () =
   assert.deepEqual(actions.map(a => a.status), ['running', 'error', 'done']);
   assert.equal(actions[2].label, 'update: game.gd');
   assert.equal(subagents[0].subId, 'child');
+  emit({ type: 'item.completed', item: { type: 'collab_tool_call', tool: 'spawn_agent', receiver_thread_ids: ['child'] } });
+  assert.equal(subagents.at(-1).phase, 'start');
+  emit({ type: 'item.completed', item: { type: 'collab_tool_call', tool: 'wait', receiver_thread_ids: ['child'], agents_states: { child: { status: 'completed' } } } });
+  assert.equal(subagents.at(-1).phase, 'done');
   assert.throws(() => emit({ type: 'turn.failed', error: { message: 'quota' } }), /quota/);
+});
+
+test('Gemini, Kimi and Qwen native streams expose tool status and fail on terminal errors', () => {
+  const texts = [], actions = [], children = [];
+  const callbacks = { onText: t => texts.push(t), onAction: a => actions.push(a), onSubagent: a => children.push(a) };
+  const gemini = agentEvents('gemini', callbacks);
+  gemini({ type: 'message', role: 'user', content: 'private input' });
+  gemini({ type: 'message', role: 'assistant', content: 'Gemini reply' });
+  gemini({ type: 'tool_use', tool_id: 'g', tool_name: 'run_shell_command', parameters: { command: 'npm test', key: 'hidden' } });
+  gemini({ type: 'tool_result', tool_id: 'g', status: 'error', error: { message: 'Test failed' } });
+  assert.equal(actions.at(-1).status, 'error');
+  assert.throws(() => gemini({ type: 'result', status: 'error', error: { message: 'Quota' } }), /Quota/);
+  const kimi = agentEvents('kimi', callbacks);
+  kimi({ role: 'assistant', content: 'Kimi reply', tool_calls: [{ id: 'k', function: { name: 'Read', arguments: '{"path":"game.gd"}' } }] });
+  kimi({ role: 'tool', tool_call_id: 'k', content: 'Contents of game.gd' });
+  assert.equal(actions.at(-1).status, 'done');
+  assert.equal(actions.at(-1).label, 'game.gd');
+  assert.throws(() => kimi({ type: 'error', message: 'Unavailable' }), /Unavailable/);
+  const qwen = agentEvents('qwen-code', callbacks);
+  qwen({ type: 'assistant', message: { content: [{ type: 'text', text: 'Qwen reply' }, { type: 'tool_use', id: 'q', name: 'Agent', input: { description: 'Review save/load' } }] } });
+  qwen({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'q' }] } });
+  assert.equal(children.at(-1).phase, 'done');
+  assert.deepEqual(texts, ['Gemini reply', 'Kimi reply', 'Qwen reply']);
+  assert.ok(!JSON.stringify(actions).includes('hidden'));
+});
+
+test('native CLI options preserve prompt values and Kimi analysis uses a read-only tool profile', () => {
+  const contextDir = mkdtempSync(join(tmpdir(), 'orbit-options-'));
+  for (const id of ['codex', 'claude', 'gemini', 'qwen-code', 'kimi']) {
+    const options = nativeCliOptions(id, { readOnly: true, accessDirs: ['a path'], contextDir });
+    const args = cliArguments(id === 'codex' ? 'exec --skip-git-repo-check {prompt}' : '-p {prompt}', 'actual prompt', options.args);
+    assert.equal(options.jsonl, true);
+    if (id !== 'codex') assert.equal(args[args.indexOf('-p') + 1], 'actual prompt');
+    else assert.equal(args[0], 'exec');
+    assert.equal(serviceCapabilities({ id }).repository, true);
+  }
+  const profile = readFileSync(join(contextDir, 'orbit-reader.md'), 'utf8');
+  assert.match(profile, /tools:\n  - Read\n  - Grep\n  - Glob/);
+  assert.ok(!profile.includes('Bash'));
+  assert.equal(serviceCapabilities({ id: 'qwen' }).repository, false);
+  assert.throws(() => cliArguments('-p', 'lost prompt'), /prompt/);
+});
+
+test('installation probe runs version only and never reports verified login or quota', async () => {
+  setSecretsDir(mkdtempSync(join(tmpdir(), 'orbit-probe-')));
+  const result = await inspectCliInstallation('codex', { aiProviders: { codex: { cmd: process.execPath } } });
+  assert.match(result.version, /\d+\.\d+/);
+  assert.equal(result.login, 'not_checked');
+  await assert.rejects(inspectCliInstallation('meshy', {}), /ikke en lokal CLI/);
 });
 
 test('Claude tracks MCP and Agent tools and reports failed child results', () => {
