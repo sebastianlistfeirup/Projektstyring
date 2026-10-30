@@ -10,6 +10,8 @@ test('backup restores documents, chat, AI history and bytes without credentials 
   mkdirSync(join(app, 'ai-uploads'), { recursive: true }); mkdirSync(attachments);
   writeFileSync(join(app, 'ai-uploads', 'bible.pdf'), Buffer.from([0, 1, 255]));
   writeFileSync(join(app, 'ai-keys.json'), 'must not be exported');
+  mkdirSync(join(app, 'ai-account-checks'), { recursive: true });
+  writeFileSync(join(app, 'ai-account-checks', 'codex.json'), JSON.stringify({ status: 'passed', quota: 'unknown' }));
   mkdirSync(join(app, 'ai-runs', 'work', 'example'), { recursive: true });
   writeFileSync(join(app, 'ai-runs', 'work', 'example', 'private-cache'), 'must not be exported');
   writeFileSync(join(attachments, 'image.png'), 'image');
@@ -27,6 +29,7 @@ test('backup restores documents, chat, AI history and bytes without credentials 
   assert.equal(readFileSync(join(targetAttachments, 'image.png'), 'utf8'), 'image');
   assert.equal(existsSync(join(target, 'ai-uploads', 'stale')), false);
   assert.equal(readFileSync(join(target, 'ai-runs', 'work', 'local', 'source'), 'utf8'), 'keep registered worktree');
+  assert.equal(JSON.parse(readFileSync(join(target, 'ai-account-checks', 'codex.json'), 'utf8')).quota, 'unknown');
 });
 
 test('tampered or traversing backup is rejected before live data changes', () => {

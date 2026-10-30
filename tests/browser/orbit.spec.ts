@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type WebSocketRoute } from '@playwright/test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -618,7 +618,10 @@ test('service spheres group jobs, retain nested satellites and keep animation wo
   const jobs = ids.map((serviceId, index) => ({ id: `service-${index}`, serviceId, title: `Demonstration ${serviceId}`, description: 'Kontrolleret visualiseringsfixture', phase: 'production', dependsOn: [], status: 'running', startedAt: start, finishedAt: null, notes: [], actions: [], artifacts: [], text: '', liveText: '', deltaCount: 0, lastDeltaAt: start,
     subagents: Array.from({ length: 30 }, (_, child) => ({ subId: `child-${child}`, parentSubId: child === 1 ? 'child-0' : undefined, name: `${serviceId} underagent ${child + 1}`, status: 'running', startedAt: start, finishedAt: null, text: 'Demonstrationsdata' })) }));
   jobs.push({ ...jobs[0], id: 'second-claude-job', title: 'Endnu en Claude-opgave', subagents: [] });
-  const run = { runId: 'service-universe-fixture', goal: 'Demonstration af servicekugler', status: 'running', startedAt: start, heartbeatAt: start, jobs, notes: [], results: [], events: [], orchestratorId: 'codex' };
+  const serviceCalls = ids.map((serviceId, index) => ({ callId: `call-${index}`, serviceId, jobId: `service-${index}`, role: 'execution', startedAt: start }));
+  const run = { serviceCalls, runId: 'service-universe-fixture', goal: 'Demonstration af servicekugler', status: 'running', startedAt: start, heartbeatAt: start, jobs, notes: [], results: [], events: [], orchestratorId: 'codex' };
+  let socket: WebSocketRoute | undefined;
+  await page.routeWebSocket('ws://127.0.0.1:4310/ws', ws => { socket = ws; });
   await page.route(`${base}/api/ai/swarm*`, route => route.fulfill({ json: { ok: true, run } }));
   await page.goto('/#/swarm');
   const universe = page.getByRole('region', { name: 'Animeret agentunivers', exact: true });
@@ -637,6 +640,30 @@ test('service spheres group jobs, retain nested satellites and keep animation wo
     return { sampleFrames: gaps.length, medianFrameGapMs: gaps[Math.floor(gaps.length / 2)], p95FrameGapMs: gaps[Math.floor(gaps.length * .95)], maxFrameGapMs: gaps.at(-1), animations: document.querySelector('.orbit-universe')!.getAnimations({ subtree: true }).length };
   });
   expect(performance.animations).toBeLessThanOrEqual(10);
+  // Controlled WebSocket traffic, not real provider/account evidence.
+  let sent = 0;
+  const traffic = setInterval(() => {
+    const job = jobs[sent % 9]; job.deltaCount++; job.liveText = 'Kontrolleret stream';
+    socket?.send(JSON.stringify({ kind: 'ai', type: 'job_delta', runId: run.runId, jobId: job.id, delta: 'x' })); sent++;
+    run.heartbeatAt = Date.now();
+  }, 20);
+  try {
+    await universe.getByText('Mål visningens performance', { exact: true }).click();
+    await universe.getByRole('button', { name: 'Start performancemåling', exact: true }).click();
+    await expect(universe.getByText(/Måling afsluttet/)).toBeVisible({ timeout: 15000 });
+    const downloadPromise = page.waitForEvent('download');
+    await universe.getByRole('button', { name: 'Gem måling som JSON' }).click();
+    const download = await downloadPromise;
+    await download.saveAs(testInfo.outputPath('streaming-performance.json'));
+    const measurement = JSON.parse(readFileSync(testInfo.outputPath('streaming-performance.json'), 'utf8'));
+    expect(measurement.textEventsObserved).toBeGreaterThan(50);
+    expect(measurement.activeServices).toHaveLength(9);
+    expect(measurement.maxAnimations).toBeLessThanOrEqual(10);
+    expect(measurement.interrupted).toBe(false);
+    expect(measurement.runChanged).toBe(false);
+    expect(measurement.frames).toBeGreaterThan(0);
+  } finally { clearInterval(traffic); }
+
   writeFileSync(testInfo.outputPath('service-performance.json'), JSON.stringify(performance, null, 2));
   await testInfo.attach('Service sphere performance sample', { body: JSON.stringify(performance), contentType: 'application/json' });
   await universe.getByRole('button', { name: 'Pause animationer', exact: true }).click();
@@ -651,6 +678,11 @@ test('service spheres group jobs, retain nested satellites and keep animation wo
   await page.emulateMedia({ reducedMotion: 'reduce' });
   expect(await universe.locator('.orbit-universe').evaluate(node => node.getAnimations({ subtree: true }).length)).toBe(0);
   jobs.forEach((job, index) => { job.subagents.splice(index < 3 ? 3 : 0); job.status = index < 3 ? 'running' : 'queued'; });
+  serviceCalls.splice(3); run.heartbeatAt = Date.now();
+  await expect(universe.locator('[data-service-orb]')).toHaveCount(3, { timeout: 10000 });
+  await universe.getByRole('checkbox', { name: 'Vis også inaktive tjenester' }).check();
+  await expect(universe.locator('[data-service-orb]')).toHaveCount(9);
+  await expect(universe.locator('.orbit-sphere[data-working=true]')).toHaveCount(3);
   await expect(universe.locator('[data-subagent-orb]')).toHaveCount(9, { timeout: 10000 });
   await page.setViewportSize({ width: 1440, height: 1400 });
   await universe.screenshot({ path: testInfo.outputPath('service-universe.png') });
@@ -704,4 +736,61 @@ test('backup restoration replaces both open tabs and rejects stale data without 
     const { useStore } = await import('/src/store/useStore.ts'); return useStore.getState().tasks.some((task: { id: string }) => task.id === id);
   }, freshId)).toBe(true);
   await other.close();
+});
+
+
+test('service light follows provider calls, not job status, and expires with stale heartbeat', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.setItem('orbit-toured', '1'); localStorage.setItem('swarm-sound', 'off'); });
+  const start = Date.now();
+  const job = { id: 'code', serviceId: 'codex', title: 'Ret save/load', description: '', phase: 'production', dependsOn: [], status: 'running', startedAt: start, finishedAt: null, notes: [], actions: [], artifacts: [], text: '', liveText: '', deltaCount: 0, subagents: [{ subId: 'old-child', serviceId: 'codex', callId: 'finished-coding', name: 'Tidligere koder', status: 'running', text: '', startedAt: start, finishedAt: null }] };
+  const run = { runId: 'activity-fixture', goal: 'Kontrol af faktisk aktivitet', status: 'running', startedAt: start, heartbeatAt: start, jobs: [job], serviceCalls: [{ callId: 'review-call', serviceId: 'claude', jobId: 'code', role: 'review', startedAt: start }], notes: [], results: [], events: [], orchestratorId: 'gemini' };
+  await page.route(`${base}/api/ai/swarm*`, route => route.fulfill({ json: { ok: true, run } }));
+  await page.goto('/#/swarm');
+  const universe = page.getByRole('region', { name: 'Animeret agentunivers', exact: true });
+  const update = async () => page.evaluate(async value => {
+    // @ts-expect-error Vite module for live event fixture
+    const { useSwarm } = await import('/src/lib/swarm.ts'); useSwarm.getState().setRun(value);
+  }, run);
+  await expect(universe.locator('[data-service-orb]')).toHaveCount(1);
+  await expect(universe.locator('[data-service-orb="claude"]')).toContainText('Gennemgår: Ret save/load');
+  await universe.getByRole('checkbox', { name: 'Vis også inaktive tjenester' }).check();
+  await expect(universe.locator('[data-service-orb="codex"] .orbit-sphere')).toHaveAttribute('data-working', 'false');
+  await expect(universe.locator('[data-subagent-orb]')).toHaveAttribute('data-working', 'false');
+  await universe.getByRole('button', { name: 'Underagent: Tidligere koder' }).click();
+  await expect(universe.getByRole('status')).toContainText('ingen bekræftet liveaktivitet');
+  await universe.getByRole('button', { name: 'Pause animationer', exact: true }).click();
+  await expect(universe.locator('.orbit-sphere[data-working=true]')).toHaveCount(1);
+  expect(await universe.locator('.orbit-universe').evaluate(node => node.getAnimations({ subtree: true }).length)).toBe(0);
+  run.serviceCalls.splice(0); await update();
+  await expect(universe.locator('.orbit-sphere[data-working=true]')).toHaveCount(0);
+  run.serviceCalls.push({ callId: 'plan-call', serviceId: 'gemini', jobId: '', role: 'planning', startedAt: start }); await update();
+  await expect(universe.locator('[data-service-orb="gemini"]')).toContainText('Planlægger næste arbejde');
+  await expect(universe.locator('.orbit-sphere[data-working=true]')).toHaveCount(1);
+  run.heartbeatAt = Date.now() - 36_000; await update();
+  await expect(universe.locator('.orbit-sphere[data-working=true]')).toHaveCount(0);
+  await expect(universe).toContainText('afventer frisk status');
+  run.heartbeatAt = Date.now(); run.status = 'awaiting_approval'; await update();
+  await expect(universe.locator('.orbit-sphere[data-working=true]')).toHaveCount(0);
+  run.status = 'done'; await update();
+  await expect(universe.locator('.orbit-sphere[data-working=true]')).toHaveCount(0);
+  await universe.getByRole('checkbox', { name: 'Vis også inaktive tjenester' }).uncheck();
+  await expect(universe.locator('[data-service-orb]')).toHaveCount(0);
+});
+
+
+test('account test starts through connection settings and keeps billing and quota separate from delivery', async ({ page, request }) => {
+  const dir = mkdtempSync(join(tmpdir(), 'orbit-account-browser-')), fake = join(dir, 'check.mjs');
+  writeFileSync(fake, "console.log(process.argv.at(-1).match(/ORBIT_CHECK_[a-f0-9]+/)?.[0] ?? 'NO_MARKER');");
+  await request.post(`${base}/api/ai/services/codex`, { data: { cmd: process.execPath, cliTemplate: `"${fake}" {prompt}`, billingMode: 'included', noExtraCharges: true } });
+  await page.addInitScript(() => localStorage.setItem('orbit-toured', '1'));
+  await page.goto('/#/chat');
+  await page.getByText(/^Forbindelser · /).first().click();
+  await page.getByRole('button', { name: /^Codex Inkluderet/ }).click();
+  await page.getByRole('button', { name: 'Kør én kontotest', exact: true }).click();
+  await expect(page.getByText(/Kontotest: Prøve leveret/)).toBeVisible();
+  await expect(page.getByText(/Kvoten er ukendt/)).toBeVisible();
+  await page.reload();
+  await page.getByText(/^Forbindelser · /).first().click();
+  await page.getByRole('button', { name: /^Codex Inkluderet/ }).click();
+  await expect(page.getByText(/Kontotest: Prøve leveret/)).toBeVisible();
 });

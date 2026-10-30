@@ -1,3 +1,4 @@
+import { createLiveEventBuffer } from '../../shared/live-event-buffer.mjs';
 import { useStore } from '../store/useStore';
 import { create } from 'zustand';
 import { presentRun } from './runPresentation';
@@ -6,6 +7,8 @@ import { fetchAiServices, type AiServiceInfo } from './aiApi';
 /* ---------- typer ---------- */
 
 export interface SwarmSubagent {
+  serviceId?: string;
+  callId?: string;
   parentSubId?: string;
   subId: string;
   name: string;
@@ -45,7 +48,10 @@ export interface SwarmJob {
   judgeNote?: string | null;
 }
 
+export interface ServiceCall { callId: string; serviceId: string; jobId: string | null; role: 'planning' | 'execution' | 'review' | 'media'; startedAt: number }
+
 export interface SwarmRun {
+  serviceCalls?: ServiceCall[];
   repository?: { source: string; baseCommit: string; branch?: string; workDir?: string } | null;
   eventsJournal?: boolean;
   eventCount?: number;
@@ -179,6 +185,8 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
             goal: String(evt.goal ?? ''),
             mode: String(evt.mode ?? 'standard'),
             startedAt: Date.parse(String(evt.startedAt ?? '')) || Date.now(),
+            serviceCalls: [],
+            heartbeatAt: Date.now(),
             orchestratorId: null,
             status: 'running',
             jobs: [],
@@ -187,6 +195,10 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
             finishedAt: null,
           },
         });
+        break;
+      case 'service_call_start':
+      case 'service_call_end':
+        if (cur) set({ run: applyEventPure(cur, evt) });
         break;
       case 'orchestrator':
         if (cur) set({ run: { ...cur, orchestratorId: (evt.serviceId as string) ?? null } });
@@ -245,7 +257,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
               j.id === id
                 ? {
                     ...j,
-                    deltaCount: j.deltaCount + 1,
+                    deltaCount: j.deltaCount + (Number.isSafeInteger(evt.deltaCount) && Number(evt.deltaCount) > 0 ? Number(evt.deltaCount) : 1),
                     liveText: (j.liveText + String(evt.delta ?? '')).slice(-400),
                     lastDeltaAt: Date.now(),
                   }
@@ -267,7 +279,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
                     ...j,
                     subagents: [
                       ...(j.subagents ?? []).filter((s) => s.subId !== sid),
-                      { subId: sid, parentSubId: typeof evt.parentSubId === 'string' ? evt.parentSubId : undefined, name: String(evt.name ?? 'Underagent'), status: 'running' as const, startedAt: Date.now(), finishedAt: null, text: '' },
+                      { subId: sid, serviceId: typeof evt.serviceId === 'string' ? evt.serviceId : undefined, callId: typeof evt.callId === 'string' ? evt.callId : undefined, parentSubId: typeof evt.parentSubId === 'string' ? evt.parentSubId : undefined, name: String(evt.name ?? 'Underagent'), status: 'running' as const, startedAt: Date.now(), finishedAt: null, text: '' },
                     ],
                   }
                 : j,
@@ -470,6 +482,7 @@ async function syncState() {
 export function connectSwarm(): void {
   if (started) return;
   started = true;
+  const liveEvents = createLiveEventBuffer(events => { for (const event of events) useSwarm.getState().apply(event); });
   const connect = () => {
     try {
       ws = new WebSocket(WS_URL);
@@ -487,10 +500,11 @@ export function connectSwarm(): void {
       try {
         const obj = JSON.parse(String(m.data));
         // Serveren sender AI-hændelser med kind:'ai' (obj.type er hændelsestypen).
-        if (obj?.kind === 'ai' || obj?.type === 'ai') useSwarm.getState().apply(obj);
+        if (obj?.kind === 'ai' || obj?.type === 'ai') liveEvents.push(obj);
       } catch { /* ignorer ikke-JSON */ }
     };
     ws.onclose = () => {
+      liveEvents.flush();
       useSwarm.getState().setConnected(false);
       scheduleReconnect();
     };
@@ -545,10 +559,15 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
         ...run,
         startedAt: Number(evt.at) || Date.parse(String(evt.startedAt ?? '')) || Date.now(),
         status: 'running',
+        serviceCalls: [],
         jobs: [],
         notes: [],
         finishedAt: null,
       };
+    case 'service_call_start':
+      return { ...run, serviceCalls: [...(run.serviceCalls ?? []).filter(call => call.callId !== (evt.call as ServiceCall).callId), evt.call as ServiceCall] };
+    case 'service_call_end':
+      return { ...run, serviceCalls: (run.serviceCalls ?? []).filter(call => call.callId !== evt.callId) };
     case 'orchestrator':
       return { ...run, orchestratorId: (evt.serviceId as string) ?? null };
     case 'plan':
@@ -597,7 +616,7 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
                 ...j,
                 subagents: [
                   ...(j.subagents ?? []).filter((x) => x.subId !== sid),
-                  { subId: sid, parentSubId: typeof evt.parentSubId === 'string' ? evt.parentSubId : undefined, name: String(evt.name ?? 'Underagent'), status: 'running' as const, startedAt: Number(evt.at), finishedAt: null, text: '' },
+                  { subId: sid, serviceId: typeof evt.serviceId === 'string' ? evt.serviceId : undefined, callId: typeof evt.callId === 'string' ? evt.callId : undefined, parentSubId: typeof evt.parentSubId === 'string' ? evt.parentSubId : undefined, name: String(evt.name ?? 'Underagent'), status: 'running' as const, startedAt: Number(evt.at), finishedAt: null, text: '' },
                 ],
               }
             : j,

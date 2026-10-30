@@ -15,6 +15,21 @@ import { createHash, randomUUID } from 'crypto';
 import { AI_SERVICES, serviceById, serviceAvailability, runChat, produceMedia, aiCfg } from './ai-services.mjs';
 
 
+// A job can spend time in Git, checks or another provider's review. Only an
+// outstanding provider call establishes service activity; job status does not.
+async function serviceCall(track, info, execute) {
+  const call = { callId: randomUUID(), ...info, startedAt: Date.now() };
+  track?.({ type: 'service_call_start', call });
+  try { return await execute(call.callId); }
+  finally { track?.({ type: 'service_call_end', callId: call.callId }); }
+}
+async function trackedChat({ track, jobId = null, role = 'execution', ...options }) {
+  return serviceCall(track, { serviceId: options.serviceId, jobId, role }, callId => runChat({
+    ...options,
+    onSubagent: sub => options.onSubagent?.({ ...sub, serviceId: options.serviceId, callId }),
+  }));
+}
+
 // ---- Langtidshukommelse (idé 4 + 17) ----------------------------------------
 export function projectMemoryDirs(dirs, projectId) {
   const scope = projectId ? createHash('sha256').update(String(projectId)).digest('hex').slice(0, 24) : 'unscoped';
@@ -179,7 +194,7 @@ function attachmentContext(attachments) {
   };
 }
 
-export async function planWithLLM({ orchestratorId, goal, bible, attachments = [], cfg, dirs, availability, extra, signal }) {
+export async function planWithLLM({ orchestratorId, goal, bible, attachments = [], cfg, dirs, availability, extra, signal, track, jobId = null }) {
   const roster = AI_SERVICES.map((s) => {
     const a = availability[s.id];
     const cap = serviceCapabilities(s);
@@ -187,7 +202,7 @@ export async function planWithLLM({ orchestratorId, goal, bible, attachments = [
   }).join('\n');
   const runMem = runsMemoryTail(dirs);
   const prompt = `PLANLÆGNINGSFASE — du må IKKE udføre målet, køre tests, ændre filer eller producere en slutrapport. Returnér kun en jobplan; selve arbejdet udføres først af de efterfølgende Auto-jobs.\n\nDu er orkestrator for et AI-drevet projekt. Mål, som du KUN skal planlægge: ${goal}\n\n${bible ? `Projektets bibel (roller/stil): ${bible}\n\n` : ''}${runMem ? `Tidligere kørsler (kontekst — undgå at gentage fejl):\n${runMem}\n\n` : ''}Roster:\n${roster}\n\nFordel arbejdet til de TILGÆNGELIGE tjenester efter deres stærke sider. Brug færrest mulige jobs (typisk 1-4, højst 10) med afhængigheder (dependsOn = indeks i listen, tidligere jobs). Respektér målets præcise scope og tilføj aldrig nye faser. Medieproduktion og release må kun planlægges, når målet udtrykkeligt beder om det. ${extra ?? ''}\n\nStop efter planen. Ingen værktøjskald, ingen kodeændringer, ingen tests og ingen forklaring. ${PLAN_SCHEMA}`;
-  const raw = await runChat({ serviceId: orchestratorId, messages: [attachmentContext(attachments), { role: 'user', text: prompt }].filter(Boolean), cfg, dirs, signal, readOnly: true, cwd: dirs.cwd });
+  const raw = await trackedChat({ track, jobId, role: 'planning', serviceId: orchestratorId, messages: [attachmentContext(attachments), { role: 'user', text: prompt }].filter(Boolean), cfg, dirs, signal, readOnly: true, cwd: dirs.cwd });
   // CLI-loggen kan indeholde test-JSON før selve planen. Vælg objektet med jobs,
   // ikke blot det første tilfældige JSON-objekt i svaret.
   const plan = parseJsonObject(raw, (value) => Array.isArray(value.jobs));
@@ -337,11 +352,11 @@ function buildRolesPlan({ goal, availability, bible }) {
 // ---- Kvalitets-dommer (auto-judge): scorer hver leverance mod opgaven ----
 const JUDGE_SCHEMA = `Svar KUN med JSON: {"score":number(0-10),"note":string,"examinedFiles":[string],"findings":[{"severity":"critical"|"major"|"minor"|"info","file":string,"message":string}]}`;
 
-async function judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs, signal, baseCommit, commit, requireFiles, onAction, onProcess }) {
+async function judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs, signal, baseCommit, commit, requireFiles, onAction, onProcess, onSubagent, track }) {
   const scope = (await execFileAsync('git', ['diff', '--stat', baseCommit, commit], { cwd: dirs.cwd, timeout: 10000 })).stdout;
   const minimumScore = minimumReviewScore(aiCfg(cfg).prefs);
   const prompt = `Du er uafhængig reviewer for et AI-projekt. Undersøg den faktiske leverance i kørselsmappen. Læs relevante ændrede filer og deres integrationer og tests; en overbevisende tekst er ikke bevis for korrekt kode. Du må ikke ændre filer eller udføre eksterne handlinger. Angiv kun filer, du faktisk har undersøgt. Testresultater udføres separat af Orbit; påstå ikke, at tests er kørt, hvis du ikke har evidens.\nProjektmål: ${String(goal)}\n${bible ? `Projektgrundlag:\n${String(bible)}\n` : ''}Job: ${job.title}\nOpgave: ${job.description ?? ''}\nCommit til review: ${commit}\nÆndringsoversigt:\n${scope || '(Ingen ændringer i versionsstyrede filer)'}\n\nLeverancens forklaring:\n${text}\n\nVurder korrekthed, integrationer, acceptkriterier og overholdelse af biblen. Minimumscore er ${minimumScore}/10. Kritiske og væsentlige fund (critical/major) blokerer også ved høj score. Hvis grundlaget er utilstrækkeligt, sig det tydeligt og giv ikke en bestået vurdering. ${JUDGE_SCHEMA}`;
-  const raw = await runChat({ serviceId: judgeId, messages: [{ role: 'user', text: prompt }], cfg, dirs, signal, readOnly: true, cwd: dirs.cwd, onAction, onProcess });
+  const raw = await trackedChat({ track, jobId: job.id, role: 'review', serviceId: judgeId, messages: [{ role: 'user', text: prompt }], cfg, dirs, signal, readOnly: true, cwd: dirs.cwd, onAction, onProcess, onSubagent });
   const parsed = parseJsonObject(raw, value => typeof value.score === 'number');
   return { ...validateReview(parsed, { minimumScore, requireFiles }), serviceId: judgeId, commit };
 }
@@ -353,7 +368,11 @@ export const activeRuns = new Map(); // runId -> { run, instructions: [], skip: 
 
 function updateSwarm(run, obj) {
   try {
-    if (obj.type === 'orchestrator') {
+    if (obj.type === 'service_call_start') {
+      run.serviceCalls = [...(run.serviceCalls ?? []).filter(call => call.callId !== obj.call.callId), obj.call];
+    } else if (obj.type === 'service_call_end') {
+      run.serviceCalls = (run.serviceCalls ?? []).filter(call => call.callId !== obj.callId);
+    } else if (obj.type === 'orchestrator') {
       run.orchestratorId = obj.serviceId ?? null;
       run.plannerMode = obj.mode ?? null;
     } else if (obj.type === 'plan') {
@@ -380,7 +399,7 @@ function updateSwarm(run, obj) {
       if (j) {
         j.subagents = [
           ...(j.subagents ?? []).filter((s) => s.subId !== obj.subId),
-          { subId: obj.subId, parentSubId: obj.parentSubId, name: obj.name, status: 'running', startedAt: Date.now(), finishedAt: null, text: '' },
+          { subId: obj.subId, serviceId: obj.serviceId, callId: obj.callId, parentSubId: obj.parentSubId, name: obj.name, status: 'running', startedAt: Date.now(), finishedAt: null, text: '' },
         ];
       }
     } else if (obj.type === 'subagent_delta') {
@@ -453,7 +472,7 @@ async function runTeamJob({ job, handle, goal, bible, attachments, cfg, dirs, av
   let subJobs;
   if (orchestratorId) {
     try {
-      subJobs = (await planWithLLM({ orchestratorId, goal: `${goal} — DELMÅL: ${subGoal}`, bible, attachments, cfg, dirs, availability, extra: 'Lav 2-4 SMÅ jobs til netop dette delmål.', signal: handle.abort.signal })).slice(0, 4);
+      subJobs = (await planWithLLM({ orchestratorId, goal: `${goal} — DELMÅL: ${subGoal}`, bible, attachments, cfg, dirs, availability, extra: 'Lav 2-4 SMÅ jobs til netop dette delmål.', signal: handle.abort.signal, track, jobId: job.id })).slice(0, 4);
     } catch { subJobs = null; }
   }
   if (!subJobs || !subJobs.length) {
@@ -473,11 +492,11 @@ async function runTeamJob({ job, handle, goal, bible, attachments, cfg, dirs, av
     },
     execute: async sj => {
       const subId = `${job.id}:${sj.id}`;
-      track({ type: 'subagent_start', jobId: job.id, subId, name: sj.title });
+      track({ type: 'subagent_start', jobId: job.id, subId, name: sj.title, serviceId: sj.serviceId });
       try {
         assertJobCapability(sj, serviceById(sj.serviceId), handle.run.repository);
         if (serviceCapabilities(serviceById(sj.serviceId) ?? {}).produces) throw new Error('Underteams kan ikke producere medier. Læg mediejobbet i hovedplanen, så kvittering og fil bliver gemt.');
-        const text = await runChat({ serviceId: sj.serviceId, cfg, dirs, cwd: handle.runDir, signal: handle.abort.signal, readOnly: job.readOnly === true,
+        const text = await trackedChat({ track, jobId: job.id, serviceId: sj.serviceId, cfg, dirs, cwd: handle.runDir, signal: handle.abort.signal, readOnly: job.readOnly === true,
           messages: [
             { role: 'system', text: `Overordnet mål: ${goal}\nProjektbibel: ${bible ?? ''}` },
             { role: 'user', text: `Seneste præciseringer fra brugeren:\n${handle.instructions.join('\n')}` },
@@ -528,6 +547,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     jobs: [],
     notes: [],
     processes: [],
+    serviceCalls: [],
     events: [],
     usage: { byService: {}, jobs: 0 },
     instructions: [...(previousRun?.instructions ?? [])],
@@ -537,7 +557,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
   activeRuns.set(runId, handle);
   swarmState.active = run;
   // Public activity is append-only; frequent live snapshots are bounded.
-  const checkpoints = new Set(['run_start', 'plan', 'job_added', 'job_start', 'job_done', 'job_error', 'job_cancelled', 'job_blocked', 'job_skipped', 'job_process', 'job_judged', 'verification', 'run_finished', 'done', 'error']);
+  const checkpoints = new Set(['service_call_start', 'service_call_end', 'run_start', 'plan', 'job_added', 'job_start', 'job_done', 'job_error', 'job_cancelled', 'job_blocked', 'job_skipped', 'job_process', 'job_judged', 'verification', 'run_finished', 'done', 'error']);
   let lastSnapshotAt = 0;
   const track = (obj) => {
     const transient = ['job_delta', 'delta', 'subagent_delta'].includes(obj.type);
@@ -583,7 +603,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       ?? planByRules({ goal, availability });
     if (!jobs.some((j) => j.title.startsWith('Dommer'))) track({ type: 'job_note', jobId: null, note: 'For få tilgængelige motorer til race (kræver 3) — bruger standardplan.' });
   } else if (orchestratorId) {
-    try { jobs = await planWithLLM({ orchestratorId, goal, bible, attachments: run.attachments, cfg, dirs: { ...dirs, cwd: handle.runDir }, availability, signal: handle.abort.signal }); }
+    try { jobs = await planWithLLM({ orchestratorId, goal, bible, attachments: run.attachments, cfg, dirs: { ...dirs, cwd: handle.runDir }, availability, signal: handle.abort.signal, track }); }
     catch (e) { track({ type: 'job_note', jobId: null, note: `Orkestrator-plan fejlede (${e.message}) — bruger regelbaseret plan.` }); jobs = planByRules({ goal, availability }); }
   } else {
     jobs = planByRules({ goal, availability });
@@ -648,7 +668,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     const attempt = async (extra) => {
       const text = job.team
         ? await runTeamJob({ job, run, handle, goal, bible, attachments: run.attachments, cfg, dirs, availability, orchestratorId, emit, track })
-        : await runChat({
+        : await trackedChat({ track, jobId: job.id,
             serviceId: job.serviceId, messages: [...baseCtx, ...extra], cfg, dirs, cwd: handle.runDir, signal: handle.abort.signal, readOnly: job.readOnly === true,
             onDelta: (d) => track({ type: 'job_delta', jobId: job.id, delta: d }),
             onProcess: process => track({ type: 'job_process', jobId: job.id, ...process }),
@@ -669,7 +689,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       let artifacts = [];
       if (isMedia) {
         text = job.description || job.title;
-        artifacts = await produceMedia(job, text, cfg, dirs, track, handle.abort.signal);
+        artifacts = await serviceCall(track, { serviceId: job.serviceId, jobId: job.id, role: 'media' }, () => produceMedia(job, text, cfg, dirs, track, handle.abort.signal));
         if (!artifacts.length) throw new Error('Mediejobbet leverede ingen fil.');
       } else try {
         text = await attempt([]);
@@ -698,8 +718,9 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
             }
             candidateCommit = await gitCommit(handle.runDir, `Til review: ${job.title}`);
             track({ type: 'job_status', jobId: job.id, status: `${serviceById(judgeId)?.name ?? judgeId} gennemgår det faktiske commit.` });
-            const judged = await judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs: { ...dirs, cwd: handle.runDir }, signal: handle.abort.signal, baseCommit, commit: candidateCommit, requireFiles: Boolean(run.repository && !job.readOnly),
+            const judged = await judgeDeliverable({ track, judgeId, job, text, goal, bible, cfg, dirs: { ...dirs, cwd: handle.runDir }, signal: handle.abort.signal, baseCommit, commit: candidateCommit, requireFiles: Boolean(run.repository && !job.readOnly),
               onAction: action => track({ type: 'job_action', jobId: job.id, action: { ...action, label: `Review · ${action.label}` } }),
+              onSubagent: sub => track({ type: sub.phase === 'start' ? 'subagent_start' : 'subagent_done', jobId: job.id, ...sub }),
               onProcess: process => track({ type: 'job_process', jobId: job.id, ...process }),
             });
             const changedByReview = (await execFileAsync('git', ['status', '--porcelain'], { cwd: handle.runDir })).stdout.trim();

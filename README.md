@@ -71,7 +71,7 @@ Læs [opsætning, betalingsregler, datagrænser og verifikation](docs/orbit-auto
 - **Azure DevOps** – to-vejs sync af work items (PAT) – afslut i Orbit, status skrives tilbage
 - **Asynkron standup** – dagens status postes til Teams
 - **Onboarding-tur** ved første start + **?** viser alle genveje
-- **PWA** (offline) + **Tauri Windows-app** (MSI/NSIS fra GitHub Releases)
+- **PWA** (offline app-skal) + **Tauri-desktopskal** (Companion køres separat; se `docs/desktop.md`)
 
 | Team & kapacitet | Integrationer | Outlook & Microsoft 365 |
 |---|---|---|

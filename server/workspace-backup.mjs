@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { normalizeSnapshot } from './workspace-state.mjs';
 
-const ROOTS = ['ai-runs', 'ai-memory', 'ai-uploads', 'ai-artifacts'];
+const ROOTS = ['ai-runs', 'ai-memory', 'ai-uploads', 'ai-artifacts', 'ai-account-checks'];
 const hash = data => createHash('sha256').update(data).digest('hex');
 const MAX_BYTES = 256 * 1024 * 1024;
 

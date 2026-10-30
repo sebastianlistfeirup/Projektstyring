@@ -2,6 +2,8 @@
 
 Målet er, at et eksisterende projekt kan gå fra gældende grundlag til afprøvet leverance med få, tydelige beslutninger fra ejeren. Arbejdet den 30. oktober 2026 etablerer denne kæde, men dokumenterer endnu ikke alle konti, Realmreads spil eller flere døgns modelarbejde. [Implementeret adfærd og kontroller](orbit-autonomy.md) er det aktuelle udgangspunkt.
 
+Opfølgningen tilføjer kontoprøver i Orbits tilslutningspanel og en lokal performancemåling. Én rigtig HeyGen-pluginlevering er verificeret, mens de øvrige konti og den separate Orbit-adapter stadig mangler kontoprøver. Se [kontorapporten](verification/accounts-2026-10-30.json).
+
 ## Prioriteret restarbejde
 
 | Prioritet | Konkret leverance | Hvornår er den færdig? |

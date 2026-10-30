@@ -33,6 +33,12 @@ test('failure blocks dependants but independent work continues; run is partial',
   assert.equal(run.status, 'partial');
   assert.ok(!events.some(e => e.type === 'done'));
   assert.ok(!events.some(e => e.type === 'job_start' && e.job.id === 'b'));
+  const starts = events.filter(event => event.type === 'service_call_start');
+  const ends = events.filter(event => event.type === 'service_call_end');
+  assert.deepEqual(starts.map(event => event.call.jobId), ['a', 'c']);
+  assert.equal(starts.length, ends.length);
+  for (const { call } of starts) assert.ok(ends.some(event => event.callId === call.callId));
+  assert.deepEqual(run.serviceCalls, []);
   assert.equal(run.bible, 'FULL_BIBLE');
   assert.match(run.results[0].commit, /^[a-f0-9]{40}$/);
 });
@@ -255,7 +261,10 @@ test('independent review is tied to a commit and rejects weak scores, serious fi
     writeFileSync(agent, `import fs from 'node:fs'; let p=process.argv.at(-1); const f=p.match(/UTF-8-filen (.*)\\. Filen indeholder/); if(f) p=fs.readFileSync(f[1],'utf8'); if(p.includes('uafhængig reviewer')) { if(fs.readFileSync('game.txt','utf8')!=='fixed') process.exit(4); if('${mode}'==='mutate') fs.writeFileSync('game.txt','reviewer-change'); console.log(JSON.stringify({score:'${mode}'==='low'?7:9,note:'Checked actual game file',examinedFiles:['game.txt'],findings:'${mode}'==='major'?[{severity:'major',file:'game.txt',message:'Missing integration'}]:[]})); } else { fs.writeFileSync('game.txt','fixed'); console.log('Implemented game file'); }`);
     const provider = { cmd: process.execPath, cliTemplate: `"${agent}" {prompt}`, billingMode: 'included', noExtraCharges: true };
     const localCfg = { aiProviders: { codex: provider, claude: provider }, aiPrefs: { selfHeal: false, autoJudge: true } };
-    await start(dirs, { cfg: localCfg, repository: { source }, predefinedJobs: [job('a', 'Implement')] });
+    const calls = [];
+    await start(dirs, { cfg: localCfg, repository: { source }, predefinedJobs: [job('a', 'Implement')], emit: event => { if (event.type.startsWith('service_call_')) calls.push(event); } });
+    assert.deepEqual(calls.map(event => event.type), ['service_call_start', 'service_call_end', 'service_call_start', 'service_call_end']);
+    assert.deepEqual(calls.filter(event => event.call).map(event => [event.call.serviceId, event.call.role]), [['codex', 'execution'], ['claude', 'review']]);
     const run = readRun(dirs, 'test');
     assert.equal(run.status, mode === 'pass' ? 'done' : 'error', JSON.stringify(run.jobs));
     if (mode === 'pass') {

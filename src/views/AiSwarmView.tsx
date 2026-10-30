@@ -1,6 +1,7 @@
+import OrbitPerformanceProbe from '../components/OrbitPerformanceProbe';
 import ServiceConstellation from '../components/ServiceConstellation';
 import { AI_PHASES, normalizePhase, removePlanJob } from '../../shared/ai-plan.mjs';
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -784,11 +785,11 @@ export function AiSwarmView() {
     setToast(msg);
     window.setTimeout(() => setToast(null), 3200);
   };
-  const [, tick] = useReducer((x: number) => x + 1, 0);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     connectSwarm();
-    const id = setInterval(() => tick(), 1000);
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -807,6 +808,7 @@ export function AiSwarmView() {
 
   const shown = replay ? replayEvents(replay.base, replay.events, replay.cursor) : (archived ?? run);
   const active = !archived && !replay && shown?.status === 'running';
+  const liveServices = active && Boolean(shown?.heartbeatAt && now - shown.heartbeatAt <= 35_000);
   const focusedJob = shown?.jobs.find(job => orbSelection?.runId === shown.runId && job.id === orbSelection.jobId) ?? shown?.jobs.find(job => job.status === 'running') ?? shown?.jobs[0];
   const selectedRunId = shown?.runId;
   const selectOrb = useCallback((jobId: string) => { if (selectedRunId) setOrbSelection({ runId: selectedRunId, jobId }); }, [selectedRunId]);
@@ -814,7 +816,7 @@ export function AiSwarmView() {
   const doneCount = jobs.filter((j) => j.status === 'done').length;
   const runCount = jobs.filter((j) => j.status === 'running').length;
   const errCount = jobs.filter((j) => j.status === 'error').length;
-  const elapsed = shown?.startedAt ? (shown.finishedAt ?? (replay?.cursor ?? Date.now())) - shown.startedAt : null;
+  const elapsed = shown?.startedAt ? (shown.finishedAt ?? (replay?.cursor ?? now)) - shown.startedAt : null;
   const avg = jobs.length ? avgJobMs(jobs) : null;
   const remaining = jobs.filter(j => ['queued', 'running'].includes(j.status)).length;
   const eta = active && avg && remaining > 0 ? remaining * avg : null;
@@ -848,7 +850,7 @@ export function AiSwarmView() {
     if (!archived || archivedEvents.length < 2) return;
     const events = archivedEvents;
     // Evidence from the end must not appear before its event in the replay.
-    const base = { ...archived, jobs: [], evidence: undefined, verification: undefined, verificationHistory: [], results: [], projectPlan: undefined, projectPlanError: undefined, heartbeatAt: undefined, finishedAt: null };
+    const base = { ...archived, jobs: [], evidence: undefined, verification: undefined, verificationHistory: [], results: [], projectPlan: undefined, projectPlanError: undefined, heartbeatAt: undefined, serviceCalls: [], finishedAt: null };
     setReplay({ base, events, t0: events[0].at, t1: events.at(-1)!.at, cursor: events[0].at, playing: false, speed: 8 });
   };
 
@@ -1035,16 +1037,17 @@ export function AiSwarmView() {
             {([['both', 'Kugler og arbejdskort'], ['constellation', 'Kun kugler'], ['work', 'Kun arbejdskort']] as const).map(([mode, label]) => <button key={mode} className="btn-ghost text-xs" aria-pressed={mapMode === mode} onClick={() => { setMapMode(mode); localStorage.setItem('orbit-live-view', mode); }}>{label}</button>)}
           </div>
           {mapMode !== 'work' && <section aria-label="Animeret agentunivers" className="rounded-2xl border border-zinc-200 dark:border-white/10 bg-black/5 dark:bg-black/20 overflow-hidden">
-            <header className="px-4 pt-4 flex flex-wrap items-start gap-3"><div className="flex-1"><h2 className="font-semibold text-sm">AI-univers</h2><p className="text-xs opacity-65 mt-1">Én kugle pr. service. Mindre kugler viser dens registrerede underagenter og deres forbindelser. Vælg en kugle for at følge arbejdet.</p></div><button className="btn-ghost text-xs" aria-pressed={!animateOrbs} onClick={() => setAnimateOrbs(value => !value)}>{animateOrbs ? 'Pause animationer' : 'Start animationer'}</button></header>
+            <header className="px-4 pt-4 flex flex-wrap items-start gap-3"><div className="flex-1"><h2 className="font-semibold text-sm">AI-univers</h2><p className="text-xs opacity-65 mt-1">Aktive tjenester i denne kørsel lyser. Mindre kugler viser underagenter og deres forbindelser. Vælg en kugle for at følge arbejdet.</p></div><button className="btn-ghost text-xs" aria-pressed={!animateOrbs} onClick={() => setAnimateOrbs(value => !value)}>{animateOrbs ? 'Pause animationer' : 'Start animationer'}</button></header>
             <div className="relative">
-              <ServiceConstellation run={shown} services={services} active={animateOrbs && (active || Boolean(replay?.playing))} selectedId={focusedJob?.id} onSelect={selectOrb} />
+              <ServiceConstellation run={shown} services={services} active={animateOrbs} live={liveServices} historical={Boolean(archived || replay)} selectedId={focusedJob?.id} onSelect={selectOrb} />
               <MiniMap jobs={jobs} />
             </div>
             <div role="group" aria-label="Vælg agentopgave" className="px-4 pb-3 flex flex-wrap gap-2 max-h-36 overflow-auto">{jobs.map(job => <button key={job.id} className="rounded-full border border-zinc-200 dark:border-white/10 px-3 py-1.5 text-xs text-left" aria-pressed={focusedJob?.id === job.id} onClick={() => selectOrb(job.id)}><span className="inline-block w-2 h-2 rounded-full mr-2" style={{ background: hex(serviceColor(services, job.serviceId)) }} />{serviceName(services, job.serviceId)} · {job.title}</button>)}</div>
             {focusedJob && <div className="px-4 pb-3 text-xs"><p className="font-medium">{serviceName(services, focusedJob.serviceId)} · {focusedJob.title}</p><p className="opacity-65 mt-1">{focusedJob.actions?.at(-1)?.label ?? focusedJob.error ?? 'Ingen registreret værktøjshændelse endnu.'}</p>{!!focusedJob.subagents?.length && <details className="opacity-65 mt-1"><summary className="cursor-pointer">{focusedJob.subagents.length} registrerede underagenter</summary><p className="mt-1">{focusedJob.subagents.map(agent => agent.name).join(', ')}</p></details>}</div>}
+            <OrbitPerformanceProbe />
             <p className="px-4 pb-3 text-[10px] opacity-50">Animation viser aktivitet, ikke en beregnet færdiggørelsesprocent. Reduceret bevægelse følger enhedens indstilling.</p>
           </section>}
-          {mapMode !== 'constellation' && <OrbitWorkMap key={shown.runId} run={shown} services={services} connected={connected} historical={Boolean(archived || replay)} now={replay?.cursor ?? Date.now()} selectedJobId={focusedJob?.id} onSelectJob={selectOrb} />}
+          {mapMode !== 'constellation' && <OrbitWorkMap key={shown.runId} run={shown} services={services} connected={connected} historical={Boolean(archived || replay)} now={replay?.cursor ?? now} selectedJobId={focusedJob?.id} onSelectJob={selectOrb} />}
 
           {/* tidslinje: præcis hvem arbejdede hvornår, inkl. underagenter */}
           <RunTimeline run={shown} services={services} active={active || Boolean(replay?.playing)} />

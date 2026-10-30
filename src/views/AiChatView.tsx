@@ -1,3 +1,4 @@
+import ServiceVerification from '../components/ServiceVerification';
 import ChatMarkdown from '../components/ChatMarkdown';
 import AttachmentPreview from '../components/AttachmentPreview';
 import { useChatDraft } from '../lib/useChatDraft';
@@ -198,6 +199,7 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
         </span>
       </button>
       {s.reason && <div className="px-2.5 pb-1.5 text-[10px] opacity-50 leading-snug">{s.reason}</div>}
+      {open && ['codex', 'claude', 'gemini', 'grok', 'meshy', 'heygen', 'elevenlabs', 'kimi', 'qwen', 'qwen-code'].includes(s.id) && <ServiceVerification service={s} />}
       {open && s.capabilities && <p className="px-2.5 pb-2 text-[10px] opacity-65">{s.capabilities.repository ? 'Adapter: repository, kommandoer, MCP og livehændelser.' : s.capabilities.produces ? `Adapter: ${s.capabilities.produces === 'model3d' ? '3D-modeller' : s.capabilities.produces === 'audio' ? 'lyd' : 'video'}.` : 'Adapter: tekst og analyse. Kan ikke selv ændre projektfiler.'}{s.customTemplate ? ' Egen CLI-skabelon: native flag og liveformat tilføjes ikke automatisk.' : ''}</p>}
       {open && (needsKey || s.kind === 'cli' || s.kind === 'local') && (
         <div className="px-2.5 pb-2.5 pt-1 space-y-1.5 border-t border-white/5">

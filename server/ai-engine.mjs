@@ -1,4 +1,5 @@
 // Orbit AI HTTP-ruter.
+import { registerAccountChecks } from './ai-account-checks.mjs';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, realpathSync, createReadStream } from 'fs';
 import { join, basename, dirname } from 'path';
 import { randomUUID } from 'crypto';
@@ -56,6 +57,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     return [...new Map(runs.flatMap(run => (run.processes ?? []).filter(info => processMayBeWorking(info.pid)).map(info => [info.pid, { pid: info.pid, kind: 'recovered', runId: run.runId, startedAt: info.startedAt }]))).values()];
   };
   const orphanGuard = () => orphanProcesses().length ? 'En proces fra en afbrudt kørsel kan stadig arbejde. Stop den før nye kørsler startes.' : '';
+  registerAccountChecks(app, { APP_DIR, dirs, loadConfig, broadcast, orphanGuard });
   const queue = new DurableRunQueue({ path: join(dirs.runs, 'ai-queue.json'),
     isBusy: () => Boolean(swarmState.active) || app.locals.aiStopping === true, canResume: orphanGuard,
     readRun: runId => readRun(dirs, runId),

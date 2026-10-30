@@ -223,3 +223,18 @@ ORBIT_SOAK_JOB_SECONDS=600 ORBIT_SOAK_JOBS=6 node scripts/soak-ai-execution.mjs
 ```
 
 Den udfører seks lokale prøvejobs, stopper efter den første halvdel, genoptager samme arbejdsgren uden at gentage færdige jobs og kontrollerer de faktiske filer. Rapporten indeholder kodehashes, varighed og testresultater. Den måler kørselsmotorens adfærd, ikke en rigtig models kvalitet.
+
+
+## Opfølgning: faktisk aktivitet, kontoprøver og lokal performance
+
+Kuglerne styres nu af registrerede `service_call_start`/`service_call_end` i den viste kørsel. Et job med status `running` tænder ikke i sig selv en kugle: Git, kontroller og review hos en anden tjeneste må ikke ligne aktivitet hos koderen. Planlægger, udfører, underteam, reviewer og medieproduktion registrerer hvert sit kald. Kaldet fjernes også ved fejl eller afbrydelse. Kald og underagenternes tjeneste/id bevares i journal og snapshot.
+
+Som standard vises kun aktive tjenester. **Vis også inaktive tjenester** viser hele kataloget med slukkede kugler. Afsluttede underagenter og nødvendige inaktive forældre lyser ikke. Historik er mærket som historik og har ingen liveanimationer. Manglende eller over 35 sekunder gammel heartbeat slukker visningen; heartbeat beviser kun, at kørselsmotoren svarer. Pause og reduceret bevægelse fjerner animationerne uden at ændre arbejdsstatus. Liveuniverset gælder den viste Auto-kørsel; det er ikke en global aktivitetsmåler for alle uafhængige chats eller programmer på maskinen.
+
+Under hver tjenestes indstillinger kan **Kør én kontotest** eller **Kør én medietest** starte en enkelt rigtig levering gennem Orbit. Testen har sit eget arbejdsområde og hukommelse, ingen projektbibel, intet modelreview og ingen automatisk gentagelse. Den følger de eksisterende betalings- og tilgængelighedskrav, afviser en optaget motor og kan følges/stoppes i Orbit Live. Tekst skal indeholde en unik kontrolkode; mediefiler registreres med størrelse og SHA256. En ændret forbindelse markerer det tidligere resultat. Kontotest afklarer ikke automatisk kvoten, leverandørens identitet, repository-arbejde, billedforståelse eller MCP. En egen CLI-skabelon kan returnere et svar uden at bruge den påståede leverandør.
+
+**Mål visningens performance** måler i 10 sekunder i den aktuelle browser: frame-intervaller, synlige underagenter, aktive tjenester, animationer og registrerede teksthændelser. Resultatet kan gemmes lokalt som JSON. Skjult fane eller skift af kørsel markeres som ufuldstændigt. Ingen AI-kald startes af målingen. Et resultat uden teksthændelser beviser ikke streamingperformance.
+
+Den rigtige HeyGen-kontoprøve er beskrevet i [kontorapporten](verification/accounts-2026-10-30.json). Den brugte den tilsluttede HeyGen-plugin og ét inkluderet credit. Den verificerer ikke Orbits separate REST-avataradapter. De øvrige otte konti og brugerens Windows-installation var ikke tilgængelige i arbejdsmiljøet.
+
+Hurtige WebSocket-tekstbidder til liveforhåndsvisningen samles i intervaller på højst cirka 100 ms. Bufferen er begrænset til 64 strømme og 400 tegn pr. strøm; status-/værktøjshændelser tømmer den først. Det ændrer ikke den fulde leverance eller serverjournalen. Den nye [streamingmåling](verification/service-streaming-2026-10-30.json) dokumenterer scenarie og resterende frame-udsving; den lover ikke en bestemt Windows-framerate.
