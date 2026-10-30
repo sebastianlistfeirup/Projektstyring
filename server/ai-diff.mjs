@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { realpathSync } from 'node:fs';
+import { relative } from 'node:path';
 
 const exec = promisify(execFile);
 const git = async (cwd, args, maxBuffer = 4 * 1024 * 1024) => (await exec('git', ['--literal-pathspecs', ...args], { cwd, timeout: 30000, maxBuffer })).stdout;
@@ -12,7 +13,9 @@ async function target(run, requestedCommit, wholeBranch = false) {
   if (!recorded.includes(commit)) throw new Error('Commit er ikke registreret som en leverance i denne kørsel.');
   let cwd;
   try { cwd = realpathSync(run.workDir); } catch { throw new Error('Kørslens arbejdsmappe mangler. Gendan den på denne maskine for at se kodeændringerne.'); }
-  if (realpathSync((await git(cwd, ['rev-parse', '--show-toplevel'])).trim()) !== cwd) throw new Error('Kørslens arbejdsmappe er ikke det forventede Git-repository.');
+  // Git for Windows can return a different drive-letter case/path separator.
+  // Compare canonical paths using the platform's path semantics.
+  if (relative(cwd, realpathSync((await git(cwd, ['rev-parse', '--show-toplevel'])).trim())) !== '') throw new Error('Kørslens arbejdsmappe er ikke det forventede Git-repository.');
   await git(cwd, ['merge-base', '--is-ancestor', baseCommit, commit]);
   return { cwd, baseCommit, commit };
 }
