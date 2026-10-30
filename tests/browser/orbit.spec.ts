@@ -383,3 +383,24 @@ test('legacy workshop jobs become canonical work orders without losing dependenc
   await page.getByRole('button', { name: /Afprøv kamp og genopfyldning/ }).first().click();
   await expect(page.getByRole('dialog').getByText('Orbit-arbejdsordre', { exact: false })).toBeVisible();
 });
+
+test('immediate Enter after a work-order selection keeps the task link while navigation is pending', async ({ page, request }) => {
+  const projectId = await setup(page);
+  await page.getByLabel('Arbejdsordre', { exact: true }).selectOption('');
+  await expect(page).not.toHaveURL(/&task=/);
+  await page.getByLabel('Besked til Orbit').fill('Ret tilstanden i den valgte arbejdsordre.');
+  const taskId = await page.evaluate(() => {
+    const select = document.querySelector<HTMLSelectElement>('select[aria-label="Arbejdsordre"]')!;
+    const task = select.options[1].value;
+    select.value = task;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    document.querySelector('textarea[aria-label="Besked til Orbit"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    return task;
+  });
+  await expect.poll(async () => {
+    const run = (await (await request.get(`${base}/api/ai/swarm`)).json()).run;
+    return run?.projectId === projectId ? { status: run.status, taskId: run.taskId } : null;
+  }).toEqual({ status: 'done', taskId });
+  const { snapshot } = await (await request.get(`${base}/api/sync/state`)).json();
+  expect(snapshot.tasks.find((task: { id: string }) => task.id === taskId).status).toBe('inreview');
+});

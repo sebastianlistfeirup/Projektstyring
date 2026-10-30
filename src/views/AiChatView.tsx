@@ -379,13 +379,21 @@ export function AiChatView() {
   const [search, setSearch] = useSearchParams();
   const chatId = search.get('chat') ?? sessionStorage.getItem('orbit-active-chat');
   const taskId = search.get('task') ?? '';
+  // Router navigation can render in a transition. A fast Enter immediately
+  // after selecting a work order must use that selection, not the old URL.
+  const selectedTaskRef = useRef(taskId);
+  useEffect(() => { selectedTaskRef.current = taskId; }, [chatId, taskId]);
   const setChatId = (id: string | null) => {
+    selectedTaskRef.current = '';
     if (id) sessionStorage.setItem('orbit-active-chat', id); else sessionStorage.removeItem('orbit-active-chat');
     setSearch(prev => { const next = new URLSearchParams(prev); if (id) next.set('chat', id); else next.delete('chat'); next.delete('task'); return next; }, { replace: true });
     const selected = useStore.getState().aiChats.find(c => c.id === id);
     if (selected) useStore.getState().setActiveProject(selected.projectId);
   };
-  const setTaskId = (id: string) => setSearch(prev => { const next = new URLSearchParams(prev); if (id) next.set('task', id); else next.delete('task'); return next; }, { replace: true });
+  const setTaskId = (id: string) => {
+    selectedTaskRef.current = id;
+    setSearch(prev => { const next = new URLSearchParams(prev); if (id) next.set('task', id); else next.delete('task'); return next; }, { replace: true });
+  };
   const aiChats = useStore((s) => s.aiChats);
   const addAiChat = useStore((s) => s.addAiChat);
   const deleteAiChat = useStore((s) => s.deleteAiChat);
@@ -498,6 +506,7 @@ export function AiChatView() {
 
   const send = useCallback(async () => {
     const body = text.trim();
+    const selectedTaskId = selectedTaskRef.current;
     if ((!body && pending.length === 0) || !chat || sendingRef.current || uploading || uploadsWaiting.current > 0) return;
     setSendIssue('');
     const atts = pending.map(({ dataUrl: _d, extractedText: _text, ...rest }) => rest);
@@ -513,10 +522,10 @@ export function AiChatView() {
       return;
     }
     if (running) return;
-    if (taskId) {
+    if (selectedTaskId) {
       const store = useStore.getState();
-      const task = store.tasks.find(t => t.id === taskId && t.projectId === chat.projectId);
-      if (!task || (chatProject?.scopeTaskIds && !chatProject.scopeTaskIds.includes(taskId))) { setSendIssue('Opgaven er ikke i projektets aktive scope. Vælg en arbejdsordre fra versionen.'); return; }
+      const task = store.tasks.find(t => t.id === selectedTaskId && t.projectId === chat.projectId);
+      if (!task || (chatProject?.scopeTaskIds && !chatProject.scopeTaskIds.includes(selectedTaskId))) { setSendIssue('Opgaven er ikke i projektets aktive scope. Vælg en arbejdsordre fra versionen.'); return; }
       const reason = workLimitReason(store.tasks, store.rules, task, 'inprogress');
       if (reason) { setSendIssue(reason); return; }
     }
@@ -541,7 +550,7 @@ export function AiChatView() {
       const msgText = () => (useStore.getState().aiChats.find((c) => c.id === chat.id)?.messages ?? []).find((x) => x.id === msg.id)?.text ?? '';
       const jobText: Record<string, string> = {};
       await streamOrchestrate(
-        { goal: body, bible: bible || undefined, projectId: chat.projectId ?? undefined, taskId: taskId || undefined, repositoryPath: chatProject?.repositoryPath, checks: chatProject?.verificationChecks, mode: runMode, pauseAfterPlan: pausePlan, jobs: planDraft ?? undefined, attachments: atts },
+        { goal: body, bible: bible || undefined, projectId: chat.projectId ?? undefined, taskId: selectedTaskId || undefined, repositoryPath: chatProject?.repositoryPath, checks: chatProject?.verificationChecks, mode: runMode, pauseAfterPlan: pausePlan, jobs: planDraft ?? undefined, attachments: atts },
         {
           onEvent: (evt) => {
             if (evt.type === 'run_start') {
@@ -612,7 +621,7 @@ export function AiChatView() {
     abortRef.current = null;
     runningIdRef.current = null;
     textareaRef.current?.focus();
-  }, [text, pending, running, activeRun, uploading, chat, chatProject, taskId, service, services, bible, aiChats, runMode, pausePlan, planDraft, addAiMessage, updateAiMessage, setText, setPending, setPlanDraft]);
+  }, [text, pending, running, activeRun, uploading, chat, chatProject, service, services, bible, aiChats, runMode, pausePlan, planDraft, addAiMessage, updateAiMessage, setText, setPending, setPlanDraft]);
 
   const availableCount = useMemo(() => (services ? Object.values(services).filter((s) => s.available).length : 0), [services]);
 
