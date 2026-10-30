@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { executeRun, activeRuns, swarmState } from '../server/ai-runtime.mjs';
+import { executeRun, activeRuns, swarmState, projectMemoryDirs } from '../server/ai-runtime.mjs';
 import { validatePlan, readRun, saveRun, recoverRuns } from '../server/ai-state.mjs';
 import { billingPolicy } from '../server/ai-billing.mjs';
 import { produceMedia, setSecretsDir } from '../server/ai-services.mjs';
@@ -66,6 +66,17 @@ test('disconnected observer does not stop execution', async () => {
   assert.equal(readRun(dirs, 'test').status, 'done');
 });
 
+test('project memory cannot carry another projects instructions into a run', async () => {
+  const dirs = fixture();
+  const foreign = projectMemoryDirs(dirs, 'foreign');
+  mkdirSync(foreign.memory, { recursive: true });
+  writeFileSync(join(foreign.memory, 'codex.md'), 'FAIL_MARKER: private foreign context');
+  writeFileSync(join(dirs.memory, 'codex.md'), 'FAIL_MARKER: unscoped legacy context');
+  await start(dirs, { projectId: 'own', predefinedJobs: [job('a', 'ok')] });
+  assert.equal(readRun(dirs, 'test').status, 'done');
+  assert.ok(readFileSync(join(projectMemoryDirs(dirs, 'own').memory, 'codex.md'), 'utf8').includes('tegn leveret'));
+});
+
 test('resume keeps completed results, full bible, instructions and work directory', async () => {
   const dirs = fixture();
   await start(dirs, { predefinedJobs: [job('a', 'FIRST'), job('b', 'FAIL_MARKER', [0])] });
@@ -100,6 +111,10 @@ test('billing never infers subscription coverage from name or key', () => {
     assert.equal(billingPolicy({ kind }, { billingMode: 'included', noExtraCharges: true }).allowed, true);
   }
   assert.equal(billingPolicy({ kind: 'local' }).allowed, true);
+  assert.equal(billingPolicy({ kind: 'local' }, { baseUrl: 'https://ollama.com' }).allowed, false);
+  assert.equal(billingPolicy({ kind: 'local' }, { model: 'qwen:cloud' }).allowed, false);
+  assert.equal(billingPolicy({ kind: 'local' }, { model: 'renamed-model', remoteModel: true }).allowed, false);
+  assert.equal(billingPolicy({ kind: 'local' }, { baseUrl: 'https://ollama.com', billingMode: 'included', noExtraCharges: true }).allowed, true);
 });
 
 test('media failure propagates rather than returning an empty success', async () => {

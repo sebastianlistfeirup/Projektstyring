@@ -138,12 +138,12 @@ async function ollamaUp(baseUrl) {
 }
 
 // Hent listen af hentede modeller fra Ollama (tom liste ved fejl).
-async function ollamaModels(baseUrl) {
+async function ollamaInventory(baseUrl) {
   try {
     const r = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(1500) });
     if (!r.ok) return [];
     const data = await r.json();
-    return (data.models ?? []).map((m) => m.name).filter(Boolean);
+    return (data.models ?? []).filter(m => typeof m.name === 'string');
   } catch { return []; }
 }
 
@@ -162,7 +162,7 @@ export async function serviceAvailability(cfg) {
   for (const s of AI_SERVICES) {
     const p = providers[s.id] ?? {};
     let available = false, reason = null;
-    let models = null, resolvedModel = null;
+    let models = null, resolvedModel = null, remoteModel = false;
     if (s.kind === 'cli') {
       let launchError = null;
       if (clis[s.id]) {
@@ -176,9 +176,11 @@ export async function serviceAvailability(cfg) {
     } else if (s.kind === 'local') {
       const baseUrl = p.baseUrl ?? s.baseUrl;
       const up = await ollamaUp(baseUrl);
-      models = up ? await ollamaModels(baseUrl) : [];
+      const inventory = up ? await ollamaInventory(baseUrl) : [];
+      models = inventory.map(m => m.name);
       const wanted = p.model ?? s.model;
       resolvedModel = pickOllamaModel(models, wanted);
+      remoteModel = Boolean(inventory.find(m => m.name === resolvedModel)?.remote_host);
       available = up && models.length > 0 && p.enabled !== false;
       if (!up) {
         reason = `Ollama kører ikke (${baseUrl}) – tjek at Docker-containeren er startet, og at port 11434 er mappet til værten`;
@@ -197,7 +199,7 @@ export async function serviceAvailability(cfg) {
       reason = 'Klar til manuel tilslutning';
     }
     if (s.id === 'heygen' && available && (!p.avatarId || !p.voiceId)) { available = false; reason = 'Angiv avatar-id og stemme-id fra din HeyGen-konto.'; }
-    const billing = billingPolicy(s, p);
+    const billing = billingPolicy(s, { ...p, model: resolvedModel ?? p.model, remoteModel });
     if (!billing.allowed) { available = false; reason = billing.reason; }
     out[s.id] = {
       billing,
@@ -614,8 +616,11 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
     });
   } else if (svc.kind === 'local') {
     const baseUrl = p.baseUrl ?? svc.baseUrl;
-    const models = await ollamaModels(baseUrl);
-    await chatOllama({ baseUrl, model: pickOllamaModel(models, p.model ?? svc.model), messages, onDelta: delta, signal });
+    const inventory = await ollamaInventory(baseUrl);
+    const model = pickOllamaModel(inventory.map(m => m.name), p.model ?? svc.model);
+    const policy = billingPolicy(svc, { ...p, model, remoteModel: Boolean(inventory.find(m => m.name === model)?.remote_host) });
+    if (!policy.allowed) throw new Error(policy.reason);
+    await chatOllama({ baseUrl, model, messages, onDelta: delta, signal });
   } else {
     const args = { baseUrl: p.baseUrl ?? svc.baseUrl, apiKey: p.apiKey, model: p.model ?? svc.model, messages, onDelta: delta, signal };
     if (serviceId === 'anthropic') await chatAnthropic(args);

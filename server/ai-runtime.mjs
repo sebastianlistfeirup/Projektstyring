@@ -6,11 +6,15 @@ import { validatePlan, executeGraph, runOutcome, saveRun } from './ai-state.mjs'
 const execFileAsync = promisify(execFile);
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync } from 'fs';
 import { join } from 'path';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { AI_SERVICES, serviceById, serviceAvailability, runChat, produceMedia, aiCfg } from './ai-services.mjs';
 
 
 // ---- Langtidshukommelse (idé 4 + 17) ----------------------------------------
+export function projectMemoryDirs(dirs, projectId) {
+  const scope = projectId ? createHash('sha256').update(String(projectId)).digest('hex').slice(0, 24) : 'unscoped';
+  return { ...dirs, memory: join(dirs.memory, 'projects', scope) };
+}
 // Per-service hukommelse: hver service husker hvad den tidligere har lavet.
 // Kørsels-hukommelse: tværgående log over afsluttede kørsler der fodres til planlæggeren.
 function serviceMemoryTail(dirs, serviceId) {
@@ -481,6 +485,7 @@ async function runTeamJob({ job, handle, goal, bible, attachments, cfg, dirs, av
         const text = await runChat({ serviceId: sj.serviceId, cfg, dirs, cwd: handle.runDir, signal: handle.abort.signal, readOnly: job.readOnly === true,
           messages: [
             { role: 'system', text: `Overordnet mål: ${goal}\nProjektbibel: ${bible ?? ''}` },
+            { role: 'user', text: `Seneste præciseringer fra brugeren:\n${handle.instructions.join('\n')}` },
             attachmentContext(attachments),
             { role: 'user', text: `Din opgave: ${sj.description}\nTidligere leverancer:\n${sj.dependsOn.map(d => texts.get(subJobs[d].id)).join('\n')}\nUdfør arbejdet og dokumentér faktiske kontroller.` },
           ].filter(Boolean),
@@ -504,6 +509,7 @@ async function runTeamJob({ job, handle, goal, bible, attachments, cfg, dirs, av
 
 // ---- Hovedkørsel --------------------------------------------------------------
 export async function executeRun({ runId, goal, bible, attachments = [], predefinedJobs, cfg, dirs, emit, mode = 'standard', pauseAfterPlan = false, resumeDir = null, previousRun = null, projectId = null, taskId = null, repository = null, checks = [] }) {
+  dirs = projectMemoryDirs(dirs, projectId);
   const run = {
     runId, goal, projectId, taskId, repository, checks,
     verification: { status: 'not_run', checks: [] },

@@ -524,6 +524,7 @@ function TaskCard({
       </div>
 
       <div className="mt-3 flex items-center gap-2.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+        {task.aiDelivery && <span className={cn('rounded px-1.5 py-0.5 text-[10px]', task.aiDelivery.status === 'done' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : ['running', 'awaiting_approval'].includes(task.aiDelivery.status) ? 'bg-indigo-500/10 text-indigo-500' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400')} title={`Orbit-kørsel ${task.aiDelivery.runId}`}>Orbit · {({ running: 'arbejder', awaiting_approval: 'afventer plan', done: 'leveret', error: 'fejlet', blocked: 'blokeret', partial: 'delvist leveret', cancelled: 'stoppet', interrupted: 'afbrudt' } as Record<string, string>)[task.aiDelivery.status] ?? task.aiDelivery.status}</span>}
         <span className="font-mono text-[10px] font-semibold text-zinc-400 dark:text-zinc-500">
           {taskRef(task, projects)}
         </span>

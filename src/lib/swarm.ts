@@ -1,4 +1,3 @@
-import { workLimitReason } from './workLimits';
 import { useStore } from '../store/useStore';
 import { create } from 'zustand';
 import { fetchAiServices, type AiServiceInfo } from './aiApi';
@@ -148,10 +147,6 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
     if (evt.type !== 'run_start' && cur && evt.runId && String(evt.runId) !== cur.runId) return;
     switch (evt.type) {
       case 'run_start':
-        if (evt.taskId && evt.runId) {
-          const store = useStore.getState();
-          if (store.tasks.some(t => t.id === evt.taskId)) store.linkTaskToRun(String(evt.taskId), String(evt.runId), String(evt.goal ?? ''));
-        }
         requestNotifyPermission();
         maybeNotify('start', 'AI-swarm', String(evt.goal ?? ''));
         set({
@@ -424,15 +419,6 @@ function reconcileTask(run: SwarmRun) {
       const delivered = (run.results ?? []).map(r => `### ${r.title}\n\n${r.text.slice(0, 6000)}${r.text.length > 6000 ? '\n\nUddrag — resten findes i den fulde leverance.' : ''}`).join('\n\n');
       store.updateAiMessage(chat.id, msg.id, { runFinishedAt: run.finishedAt, status: run.status === 'done' ? 'done' : 'error', text: `${delivered || msg.text}\n\n${run.status === 'done' ? 'Leveret til gennemgang.' : `Kørselsstatus: ${run.status}. Se Orbit Live for fejl og næste skridt.`}\n\n[Hent fuld leverance](http://127.0.0.1:4310/api/ai/runs/${run.runId}/export)`, artifacts: (run.results ?? []).flatMap(r => r.artifacts ?? []) });
     }
-  }
-  if (!run.taskId || run.status === 'running' || run.status === 'awaiting_approval') return;
-  const store = useStore.getState();
-  if (store.aiTaskLinks[run.taskId]?.runId !== run.runId) return;
-  const task = store.tasks.find(t => t.id === run.taskId);
-  if (task?.status === 'inprogress' && run.status === 'done') {
-    if (workLimitReason(store.tasks, store.rules, task, 'inreview')) return;
-    store.updateTask(task.id, { status: 'inreview' });
-    store.addNotification(store.currentUserId, `AI-leverance klar til gennemgang: ${task.title}`, task.id);
   }
 }
 

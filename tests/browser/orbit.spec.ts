@@ -96,3 +96,40 @@ test('failed execution stays failed in chat and never marks task ready for revie
   }, projectId)).toEqual({ task: 'inprogress', message: 'error' });
   expect((await (await request.get(`${base}/api/ai/swarm`)).json()).run.status).toBe('error');
 });
+
+test('steer from the same composer after reload and finish the work order with the browser closed', async ({ page, request }) => {
+  const projectId = await setup(page);
+  await page.getByLabel('Pause efter plan').check();
+  await page.getByLabel('Besked til Orbit').fill('Ret gemt tilstand med en planpause.');
+  await page.getByLabel('Besked til Orbit').press('Enter');
+  await expect(page.getByRole('button', { name: 'Godkend planen', exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Godkend planen', exact: true })).toBeVisible();
+  await page.locator('input[type=file]').setInputFiles({ name: 'ekstra-krav.txt', mimeType: 'text/plain', buffer: Buffer.from('Bevar save-formatet.') });
+  await page.getByLabel('Besked til Orbit').fill('Bevar kompatibiliteten med eksisterende savegames.');
+  await page.getByRole('button', { name: 'Send præcisering til næste job', exact: true }).click();
+  await expect(page.getByText('Modtaget. Din præcisering og eventuelle vedhæftninger', { exact: false })).toBeVisible();
+  const before = (await (await request.get(`${base}/api/ai/swarm`)).json()).run;
+  expect(before.instructions).toContain('Bevar kompatibiliteten med eksisterende savegames.');
+  expect(before.attachments[0].name).toBe('ekstra-krav.txt');
+  await page.getByRole('button', { name: 'Godkend planen', exact: true }).click();
+  await page.close();
+  await expect.poll(async () => {
+    const result = await (await request.get(`${base}/api/sync/state`)).json();
+    return result.snapshot.tasks.find((t: { projectId: string }) => t.projectId === projectId)?.status;
+  }).toBe('inreview');
+  const result = await (await request.get(`${base}/api/sync/state`)).json();
+  expect(result.snapshot.tasks.find((t: { projectId: string }) => t.projectId === projectId).aiDelivery.verification).toBe('passed');
+});
+
+test('mobile chat can create a project without the desktop sidebar', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => { localStorage.setItem('orbit-toured', '1'); });
+  await page.goto('/#/chat');
+  await page.getByText('Samtaler og forbindelser', { exact: true }).click();
+  await page.getByText('Nyt projekt', { exact: true }).last().click();
+  await page.getByLabel('Projektnavn').last().fill('Mobilprojekt');
+  await page.getByRole('button', { name: 'Opret og åbn samtale' }).last().click();
+  await expect(page.getByLabel('Besked til Orbit')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});

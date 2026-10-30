@@ -20,6 +20,8 @@ Direkte chat med én tjeneste er til læsning/rådgivning. Repositoryændringer 
 - Afhængige jobs starter kun efter vellykkede forgængere. Fejl kan give `partial`, `blocked` eller `error`; de bliver ikke skjult som succes.
 - En plan, der afventer godkendelse, starter aldrig på grund af timeout.
 - Lukning af fanen aflyser ikke Auto. **Stop** sender en særskilt afbrydelse til serveren og den lokale proces.
+- Companion opdaterer arbejdsordrens status og leverancebevis, selv når browseren er lukket. Projektets gemte scope, afhængigheder, WIP-grænse, repository, kontroller og gældende bibel bruges som grundlag.
+- Præciseringer og nye vedhæftninger kan sendes fra den samme chat under arbejdet. De gemmes og gælder fra næste job; en allerede startet agent får ikke efterfølgende instruktioner ind i sin oprindelige prompt.
 - Status og strukturelle hændelser gemmes på disk, med heartbeat hvert tiende sekund. En afbrudt Companion-kørsel markeres som afbrudt ved næste opstart.
 - Genoptagelse bevarer bibel, instruktioner, tidligere resultater, dependencygraf og arbejdsmappe. Der startes ikke et nyt tomt projekt. Genoptagelse er eksplicit, fordi en ekstern handling kan være sket før nedbruddet.
 - Hver repository-kørsel bruger `orbit/<run-id>` i en separat Git-worktree. Den oprindelige mappe bliver ikke ændret af Orbits Git-operationer.
@@ -34,6 +36,8 @@ Grænser: højst 100 jobs i en plan, én CLI-proces højst 60 minutter, hver kon
 ## Tjenester og betaling
 
 Alle eksterne transports kræver `billingMode: included` og `noExtraCharges: true`. Ukendt og særskilt forbrugsbetaling afvises. Den tidligere `allowPaidApis`-genvej giver ikke længere adgang, heller ikke i den ældre opgaveassistent.
+
+Ollama regnes kun som lokal ved en loopback-adresse og en model uden kendt cloudmarkering. Eksterne endpoints, cloudnavne og modeller med `remote_host` kræver samme abonnementsbekræftelse. Dette er ikke en aflæsning af leverandørens faktura eller en kontrol af en vilkårlig lokal proxy.
 
 | Forbindelse | Implementeret transport | Begrænsning |
 |---|---|---|
@@ -60,6 +64,7 @@ Der er endnu ikke en fælles MCP-servermanager eller en universal tool-calling-l
 ## Bibel, billeder og beslutninger
 
 - Den komplette bibel gemmes med kørslen. Tidligere hårde afskæringer på 6.000 tegn er fjernet fra kørselskonteksten.
+- Kørsels- og tjenestehukommelse er adskilt pr. projekt. Ældre global hukommelse importeres ikke automatisk til et projekt.
 - Lange CLI-instruktioner gemmes i en kontekstfil, som agenten instrueres i at læse, så Windows' argumentgrænse ikke skærer teksten af.
 - Bibelkladde og gældende version er adskilt. De seneste 30 publicerede versioner bevares.
 - PDF udtrækkes med sidehenvisninger; DOCX udtrækkes som tekst. Billedbaserede PDF'er kræver OCR, som endnu ikke er implementeret.
@@ -109,7 +114,7 @@ På Windows sættes miljøvariablen med PowerShell: `$env:ORBIT_SOAK_MINUTES='12
 
 ## Verifikation udført under udviklingen
 
-30. oktober 2026: Linux-build, lint uden fejl (eksisterende React-advarsler), 21 importkontroller, 3 workspace-tests og 32 server-/AI-tests bestod. To Playwright-forløb bestod med rigtig Chromium: upload af bibel på over 6.000 tegn, offentliggørelse af bibelversion, repositorytilknytning, reel filkontrol, genindlæsning under udførelse, bevaret kilde-checkout, status til gennemgang samt et fejlet forløb, der forblev fejlet i chatten.
+30. oktober 2026: Linux-build, lint uden fejl (eksisterende React-advarsler), 21 importkontroller, 3 workspace-tests og 36 server-/AI-tests bestod. Fire Playwright-forløb bestod med rigtig Chromium: upload af bibel på over 6.000 tegn, offentliggørelse af bibelversion, repositorytilknytning, reel filkontrol, genindlæsning under udførelse, bevaret kilde-checkout, status til gennemgang, et fejlet forløb, der forblev fejlet i chatten, præcisering og filupload efter genindlæsning, serverafslutning med lukket browser samt projektoprettelse på mobil. Det tidligere checkpoint bestod også GitHub-kontrollerne på Windows efter en rettelse af absolutte programstier.
 
 Godkendelsespausen blev desuden afprøvet i 12 faktiske minutter med 144 stikprøver. Ingen jobstart skete før eksplicit godkendelse. Dette er en afgrænset varighedstest med en lokal prøveagent, ikke dokumentation for flere døgns autonomi med rigtige udbydere.
 

@@ -37,12 +37,18 @@ test('HTTP approval, validation, browser disconnect and persisted results', asyn
   }
   assert.equal(run.status, 'awaiting_approval');
   const id = run.runId;
+  const uploaded = await (await post('/api/ai/upload', { name: 'clarification.txt', mime: 'text/plain', dataBase64: Buffer.from('Preserve saved games').toString('base64') })).json();
+  assert.equal(uploaded.ok, true);
+  assert.equal((await post(`/api/ai/runs/${id}/message`, { text: 'Keep compatibility', attachments: [uploaded.file] })).status, 200);
+  assert.equal((await post(`/api/ai/runs/${id}/message`, { text: 'Invalid attachment', attachments: [{ name: 'outside', path: '/etc/passwd' }] })).status, 400);
   assert.equal((await post(`/api/ai/runs/${id}/approve`, { jobs: [{ ...plan[0], dependsOn: [3] }] })).status, 400);
   assert.equal((await (await fetch(`${base}/api/ai/swarm`)).json()).run.status, 'awaiting_approval');
   assert.equal((await post(`/api/ai/runs/${id}/approve`, { jobs: plan })).status, 200);
   assert.match(await textPromise, /"type":"done"/);
   const saved = (await (await fetch(`${base}/api/ai/runs/${id}`)).json()).run;
   assert.equal(saved.status, 'done'); assert.equal(saved.bible, 'Persistent bible');
+  assert.deepEqual(saved.instructions, ['Keep compatibility']);
+  assert.equal(saved.attachments[0].name, 'clarification.txt');
   assert.equal(saved.processes.length, 0);
   const forbidden = await post('/api/ai/orchestrate', { goal: 'must not run' }, { Origin: 'https://untrusted.example' });
   assert.equal(forbidden.status, 403);

@@ -9,10 +9,22 @@ export function normalizeSnapshot(snapshot) {
 // merging remains the existing client protocol; extra collections have their
 // own timestamps and are preserved when an old client omits them.
 export function acceptSnapshot(previous, incoming) {
-  if (!previous?.workspaceState) return { snapshot: normalizeSnapshot(incoming), merged: false };
+  let merged = false;
+  if (previous) {
+    incoming = { ...incoming };
+    for (const key of core) {
+      if (!Array.isArray(incoming[key])) continue;
+      const old = new Map((previous[key] ?? []).map(item => [item.id, item]));
+      incoming[key] = incoming[key].map(item => {
+        const stored = old.get(item.id);
+        if (stored?.updatedAt && (!item.updatedAt || stored.updatedAt > item.updatedAt)) { merged = true; return stored; }
+        return item;
+      });
+    }
+  }
+  if (!previous?.workspaceState) return { snapshot: normalizeSnapshot(incoming), merged };
   const state = { ...previous.workspaceState, ...incoming.workspaceState };
   const versions = { ...previous.workspaceVersions, ...incoming.workspaceVersions };
-  let merged = false;
   for (const key of Object.keys(previous.workspaceState)) {
     if (core.includes(key)) continue;
     const oldVersion = previous.workspaceVersions?.[key], newVersion = incoming.workspaceVersions?.[key];

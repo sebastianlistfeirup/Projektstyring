@@ -3,13 +3,14 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, realpa
 import { join, basename, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { serviceById, serviceAvailability, runChat, setSecretsDir, loadKeySecrets, saveKeySecrets, aiCfg } from './ai-services.mjs';
-import { extractDocument } from './ai-documents.mjs';
+import { extractDocument, hydrateAttachment } from './ai-documents.mjs';
 import { inspectRepository, validateChecks } from './ai-repository.mjs';
+import { projectExecution } from './task-execution.mjs';
 import { readRun, recoverRuns, validatePlan, runPath } from './ai-state.mjs';
-import { executeRun, swarmState, activeRuns, loadTemplates, saveUserTemplates, startTriggerScheduler, cronMatches, pickOrchestrator, planWithLLM, parseJsonObject } from './ai-runtime.mjs';
+import { executeRun, swarmState, activeRuns, loadTemplates, saveUserTemplates, startTriggerScheduler, cronMatches, pickOrchestrator, planWithLLM, parseJsonObject, projectMemoryDirs } from './ai-runtime.mjs';
 
 // ---- HTTP-ruter --------------------------------------------------------------
-export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR }) {
+export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, getSnapshot }) {
   setSecretsDir(APP_DIR); // nøgleboksen bor ved siden af companion.json i ~/.orbit
   const dirs = {
     uploads: join(APP_DIR, 'ai-uploads'),
@@ -185,12 +186,24 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     const h = activeRuns.get(req.params.runId);
     const text = String(req.body?.text ?? '').trim();
     if (!h) return res.status(409).json({ ok: false, reason: 'Ingen aktiv kørsel.' });
-    if (!text) return res.status(400).json({ ok: false, reason: 'Tom besked.' });
-    h.instructions.push(text);
-    h.persist();
-    h.run.notes = [...(h.run.notes ?? []).slice(-4), `Besked fra dig: ${text.slice(0, 120)}`];
-    broadcast?.({ kind: 'ai', type: 'job_note', jobId: null, note: `Besked fra dig: ${text.slice(0, 120)}`, runId: req.params.runId });
-    res.json({ ok: true, instructions: h.instructions, appliesAt: 'next_job', note: 'Beskeden gælder fra næste job. Igangværende job bruger den kontekst, det startede med.' });
+    try {
+      const attachments = req.body?.attachments ?? [];
+      if (!Array.isArray(attachments) || attachments.length + h.run.attachments.length > 10) throw new Error('En kørsel kan have højst 10 vedhæftninger.');
+      if ((!text && !attachments.length) || text.length > 100000) throw new Error('Skriv en besked på højst 100.000 tegn eller vedhæft en fil.');
+      // Resolve every file before mutating the run; never accept arbitrary local paths.
+      const files = attachments.map(a => {
+        const hydrated = hydrateAttachment(a, dirs);
+        if (!hydrated.path) throw new Error('Vedhæft filen gennem Orbit først.');
+        return { name: String(a.name ?? 'Vedhæftning'), kind: a.kind, mime: a.mime, url: a.url, size: a.size };
+      });
+      const instruction = text || `Se de nye vedhæftninger: ${files.map(a => a.name).join(', ')}`;
+      h.instructions.push(instruction);
+      h.run.attachments.push(...files);
+      h.run.notes = [...(h.run.notes ?? []).slice(-4), `Besked fra dig: ${instruction.slice(0, 120)}`];
+      h.persist();
+      broadcast?.({ kind: 'ai', type: 'job_note', jobId: null, note: `Besked fra dig: ${instruction.slice(0, 120)}`, runId: req.params.runId });
+      res.json({ ok: true, appliesAt: 'next_job', note: 'Beskeden gælder fra næste job. Igangværende job bruger den kontekst, det startede med.' });
+    } catch (e) { res.status(400).json({ ok: false, reason: e.message }); }
   });
 
   app.post('/api/ai/runs/:runId/skip', (req, res) => {
@@ -268,14 +281,14 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
 
   // Selvforbedrende orkestrator (idé 20): foreslå en pipeline ud fra én sætning.
   app.post('/api/ai/templates/suggest', async (req, res) => {
-    const { goal, bible, attachments } = req.body ?? {};
+    const { goal, bible, attachments, projectId } = req.body ?? {};
     if (!goal) return res.status(400).json({ ok: false, reason: 'goal kræves' });
     const cfg = loadConfig();
     try {
       const availability = await serviceAvailability(cfg);
       const orchestratorId = await pickOrchestrator(cfg, availability);
       if (!orchestratorId) return res.status(409).json({ ok: false, reason: 'Ingen orkestrator tilgængelig (installér et CLI).' });
-      const jobs = await planWithLLM({ orchestratorId, goal: String(goal), bible: String(bible ?? ''), attachments, cfg, dirs, availability });
+      const jobs = await planWithLLM({ orchestratorId, goal: String(goal), bible: String(bible ?? ''), attachments, cfg, dirs: projectMemoryDirs(dirs, projectId), availability });
       res.json({ ok: true, jobs, orchestratorId });
     } catch (e) {
       res.status(500).json({ ok: false, reason: e.message });
@@ -359,6 +372,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       const p = runPath(dirs, req.params.runId);
       if (!existsSync(p)) return res.status(404).json({ ok: false, reason: 'Kørsel ikke fundet' });
       const prev = readRun(dirs, req.params.runId);
+      if (getSnapshot && prev.projectId) projectExecution(getSnapshot(), { projectId: prev.projectId, taskId: prev.taskId, goal: prev.goal });
       if (swarmState.active) return res.status(409).json({ ok: false, reason: 'En kørsel er allerede aktiv.' });
       if (prev.schemaVersion !== 2) return res.status(409).json({ ok: false, reason: 'Denne ældre kørsel mangler gemt projektkontekst. Start en ny kørsel med bibel og repository.' });
       if (!prev.jobs?.some(j => j.status !== 'done') && prev.verification?.status !== 'failed') return res.status(400).json({ ok: false, reason: 'Alle jobs leverede — intet at genoptage.' });
@@ -529,8 +543,11 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     // Én aktiv Auto-kørsel ad gangen: ellers kan gamle events og kørselsstatus
     // overskrive den nye kørsel i Swarm, og to agenter kan ændre samme projekt.
     if (swarmState.active) return res.status(409).json({ ok: false, reason: 'En Auto-kørsel er allerede aktiv. Stop den, og vent til den er afsluttet, før du starter en ny.' });
+    let input;
+    try { input = getSnapshot ? projectExecution(getSnapshot(), req.body ?? {}) : req.body ?? {}; }
+    catch (error) { return res.status(409).json({ ok: false, reason: error.message }); }
     const emit = sse(res);
-    const { goal, bible, attachments, jobs, mode, pauseAfterPlan, projectId, taskId, repositoryPath, checks } = req.body ?? {};
+    const { goal, bible, attachments, jobs, mode, pauseAfterPlan, projectId, taskId, repositoryPath, checks } = input;
     const runId = randomUUID().slice(0, 12);
     const cfg = loadConfig();
     try {

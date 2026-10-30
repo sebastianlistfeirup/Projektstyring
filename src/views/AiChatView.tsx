@@ -1,8 +1,10 @@
 import ChatMarkdown from '../components/ChatMarkdown';
 import ProjectScopePanel from '../components/ProjectScopePanel';
 import { workLimitReason } from '../lib/workLimits';
+import { useSwarm } from '../lib/swarm';
 import OrbitRunPanel from '../components/OrbitRunPanel';
 import ProjectExecutionSettings from '../components/ProjectExecutionSettings';
+import CreateProjectChat from '../components/CreateProjectChat';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
@@ -27,6 +29,7 @@ import {
   X,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
+import { useSearchParams } from 'react-router-dom';
 import { useLang, t } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { companionStatus } from '../lib/companion';
@@ -40,6 +43,7 @@ import {
   saveService,
   streamChat,
   cancelRun,
+  sendRunMessage,
   streamOrchestrate,
   suggestTemplate,
   uploadAiFile,
@@ -48,6 +52,7 @@ import {
   type PipelineTemplate,
 } from '../lib/aiApi';
 import type { AiAttachment, AiChat, AiMessage } from '../lib/types';
+import { pushNow } from '../lib/sync';
 
 const BASE_URL = 'http://127.0.0.1:4310';
 
@@ -199,7 +204,7 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
           s.kind === 'sub-api' ? 'border-sky-400/30 text-sky-300' :
           s.kind === 'paid-api' ? 'border-amber-400/30 text-amber-300' : 'border-slate-400/30 text-slate-400',
         )}>
-          {s.kind === 'local' ? 'Lokal' : s.billing?.allowed ? 'Inkluderet · bekræftet af dig' : 'Adgang skal afklares'}
+          {s.billing?.mode === 'local' ? 'Lokal' : s.billing?.allowed ? 'Inkluderet · bekræftet af dig' : 'Adgang skal afklares'}
         </span>
       </button>
       {s.reason && <div className="px-2.5 pb-1.5 text-[10px] opacity-50 leading-snug">{s.reason}</div>}
@@ -214,7 +219,7 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
             />
             {t('chat.enabled')}
           </label>
-          {s.kind !== 'local' && (
+          {(s.kind !== 'local' || s.billing?.mode !== 'local') && (
             <label className="flex items-start gap-2 text-[11px] leading-relaxed">
               <input type="checkbox" className="mt-1 accent-indigo-500"
                 checked={s.billing?.allowed === true}
@@ -358,7 +363,16 @@ export function AiChatView() {
   useLang();
   const projects = useStore((s) => s.projects);
   const tasks = useStore(s => s.tasks);
-  const [taskId, setTaskId] = useState('');
+  const [search, setSearch] = useSearchParams();
+  const chatId = search.get('chat') ?? sessionStorage.getItem('orbit-active-chat');
+  const taskId = search.get('task') ?? '';
+  const setChatId = (id: string | null) => {
+    if (id) sessionStorage.setItem('orbit-active-chat', id); else sessionStorage.removeItem('orbit-active-chat');
+    setSearch(prev => { const next = new URLSearchParams(prev); if (id) next.set('chat', id); else next.delete('chat'); next.delete('task'); return next; }, { replace: true });
+    const selected = useStore.getState().aiChats.find(c => c.id === id);
+    if (selected) useStore.getState().setActiveProject(selected.projectId);
+  };
+  const setTaskId = (id: string) => setSearch(prev => { const next = new URLSearchParams(prev); if (id) next.set('task', id); else next.delete('task'); return next; }, { replace: true });
   const aiChats = useStore((s) => s.aiChats);
   const addAiChat = useStore((s) => s.addAiChat);
   const deleteAiChat = useStore((s) => s.deleteAiChat);
@@ -370,7 +384,6 @@ export function AiChatView() {
   const publishBible = useStore(s => s.publishBible);
   const [sendIssue, setSendIssue] = useState('');
 
-  const [chatId, setChatId] = useState<string | null>(() => sessionStorage.getItem('orbit-active-chat'));
   const [newProjectId, setNewProjectId] = useState<string>(() => useStore.getState().activeProjectId ?? projects[0]?.id ?? '');
   const [services, setServices] = useState<Record<string, AiServiceInfo> | null>(null);
   const [prefs, setPrefs] = useState<{ allowPaidApis: boolean; orchestrator: string; autoJudge?: boolean } | null>(null);
@@ -389,6 +402,9 @@ export function AiChatView() {
   const [uploading, setUploading] = useState(false);
   const [bibleOpen, setBibleOpen] = useState(false);
   const [running, setRunning] = useState(false);
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
+  const swarmRun = useSwarm(s => s.run);
   const abortRef = useRef<AbortController | null>(null);
   const runningIdRef = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -400,6 +416,7 @@ export function AiChatView() {
   const bibleDraft = chat?.projectId ? bibles[chat.projectId] ?? '' : '';
   const publishedBible = chat?.projectId ? bibleVersions[chat.projectId]?.at(-1) : undefined;
   const bible = publishedBible?.text ?? bibleDraft;
+  const activeRun = service === 'auto' && swarmRun && ['running', 'awaiting_approval'].includes(swarmRun.status) && swarmRun.projectId === chat?.projectId ? swarmRun : null;
   useEffect(() => { if (chatId) sessionStorage.setItem('orbit-active-chat', chatId); else sessionStorage.removeItem('orbit-active-chat'); }, [chatId]);
 
   async function prepareTakeover() {
@@ -437,7 +454,7 @@ export function AiChatView() {
     if (!goal || suggestingPlan) return;
     setSuggestingPlan(true);
     const attachments = pending.map(({ dataUrl: _d, ...rest }) => rest);
-    const r = await suggestTemplate(goal, bible || undefined, attachments);
+    const r = await suggestTemplate(goal, bible || undefined, attachments, chat?.projectId);
     setSuggestingPlan(false);
     if (r.ok && r.jobs?.length) setPlanDraft(r.jobs.map((j) => ({ ...j, dependsOn: j.dependsOn ?? [] })));
   };
@@ -460,8 +477,21 @@ export function AiChatView() {
 
   const send = useCallback(async () => {
     const body = text.trim();
-    if ((!body && pending.length === 0) || running || !chat) return;
+    if ((!body && pending.length === 0) || !chat || sendingRef.current || uploading) return;
     setSendIssue('');
+    const atts = pending.map(({ dataUrl: _d, extractedText: _text, ...rest }) => rest);
+    if (activeRun) {
+      sendingRef.current = true; setSending(true);
+      try {
+        const accepted = await sendRunMessage(activeRun.runId, body, atts);
+        if (!accepted) { setSendIssue('Præciseringen kunne ikke sendes. Kontrollér forbindelsen og at kørslen stadig er aktiv (højst 10 vedhæftninger pr. kørsel).'); return; }
+        addAiMessage(chat.id, { role: 'user', text: body, attachments: atts, status: 'done' });
+        addAiMessage(chat.id, { role: 'assistant', text: 'Modtaget. Din præcisering og eventuelle vedhæftninger gælder fra næste job. Det igangværende job fortsætter med sin oprindelige kontekst.', status: 'done' });
+        setText(''); setPending([]);
+      } finally { sendingRef.current = false; setSending(false); }
+      return;
+    }
+    if (running) return;
     if (taskId) {
       const store = useStore.getState();
       const task = store.tasks.find(t => t.id === taskId && t.projectId === chat.projectId);
@@ -469,8 +499,11 @@ export function AiChatView() {
       const reason = workLimitReason(store.tasks, store.rules, task, 'inprogress');
       if (reason) { setSendIssue(reason); return; }
     }
+    sendingRef.current = true; setSending(true);
+    try {
+      if (service === 'auto' && chat.projectId && !await pushNow()) { setSendIssue('Projektet kunne ikke gemmes på Companion. Prøv igen, når forbindelsen er tilbage.'); return; }
+    } finally { sendingRef.current = false; setSending(false); }
     setText('');
-    const atts = pending.map(({ dataUrl: _d, extractedText: _text, ...rest }) => rest); // undgå store dataUrls i localStorage
     setPending([]);
     addAiMessage(chat.id, { role: 'user', text: body, attachments: atts, status: 'done' });
     if (aiChats.find((c) => c.id === chat.id)?.title === t('chat.untitled') && body) {
@@ -486,17 +519,12 @@ export function AiChatView() {
       const msgText = () => (useStore.getState().aiChats.find((c) => c.id === chat.id)?.messages ?? []).find((x) => x.id === msg.id)?.text ?? '';
       const jobText: Record<string, string> = {};
       await streamOrchestrate(
-        { goal: taskId ? `${chatProject?.releaseGoal ? `Versionsmål: ${chatProject.releaseGoal}\n` : ''}${body}\n\nArbejdsordre: ${tasks.find(t => t.id === taskId)?.title ?? ''}\n${tasks.find(t => t.id === taskId)?.description ?? ''}` : body, bible: bible || undefined, projectId: chat.projectId ?? undefined, taskId: taskId || undefined, repositoryPath: chatProject?.repositoryPath, checks: chatProject?.verificationChecks, mode: runMode, pauseAfterPlan: pausePlan, jobs: planDraft ?? undefined, attachments: atts },
+        { goal: body, bible: bible || undefined, projectId: chat.projectId ?? undefined, taskId: taskId || undefined, repositoryPath: chatProject?.repositoryPath, checks: chatProject?.verificationChecks, mode: runMode, pauseAfterPlan: pausePlan, jobs: planDraft ?? undefined, attachments: atts },
         {
           onEvent: (evt) => {
             if (evt.type === 'run_start') {
               runningIdRef.current = String(evt.runId);
               updateAiMessage(chat.id, msg.id, { runId: String(evt.runId) });
-              if (taskId) {
-                const store = useStore.getState();
-                store.linkTaskToRun(taskId, String(evt.runId), body);
-                store.updateTask(taskId, { status: 'inprogress' });
-              }
             }
             let out = msgText();
             if (evt.type === 'orchestrator') {
@@ -562,7 +590,7 @@ export function AiChatView() {
     abortRef.current = null;
     runningIdRef.current = null;
     textareaRef.current?.focus();
-  }, [text, pending, running, chat, chatProject, taskId, tasks, service, services, bible, aiChats, runMode, pausePlan, planDraft, addAiMessage, updateAiMessage]);
+  }, [text, pending, running, activeRun, uploading, chat, chatProject, taskId, service, services, bible, aiChats, runMode, pausePlan, planDraft, addAiMessage, updateAiMessage]);
 
   const availableCount = useMemo(() => (services ? Object.values(services).filter((s) => s.available).length : 0), [services]);
 
@@ -580,18 +608,19 @@ export function AiChatView() {
             {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           <button
-            onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); setTaskId(''); }}
+            onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); }}
             className="rounded-xl btn-primary px-2.5 py-1.5 text-[12px] flex items-center gap-1"
           >
             <Plus size={13} /> {t('chat.newChat')}
           </button>
         </div>
+        <CreateProjectChat onCreate={(projectId, id) => { setNewProjectId(projectId); setChatId(id); }} />
         <div className="space-y-1">
           <h3 className="text-[11px] font-semibold uppercase tracking-wider opacity-60 px-1">{t('chat.chats')}</h3>
           {aiChats.length === 0 && <p className="text-[11px] opacity-40 px-1">{t('chat.noChats')}</p>}
           {aiChats.map((c: AiChat) => (
             <div key={c.id} className={cn('group flex items-center gap-1 rounded-lg px-2 py-1.5 cursor-pointer transition', c.id === chatId ? 'bg-indigo-500/20 border border-indigo-400/30' : 'hover:bg-white/5 border border-transparent')}>
-              <button className="flex-1 min-w-0 text-left" onClick={() => { setChatId(c.id); setTaskId(''); }}>
+              <button className="flex-1 min-w-0 text-left" onClick={() => { setChatId(c.id); }}>
                 <div className="text-[12px] truncate">{c.title}</div>
                 <div className="text-[10px] opacity-40 truncate">{projects.find((p) => p.id === c.projectId)?.name ?? '—'}</div>
               </button>
@@ -613,9 +642,10 @@ export function AiChatView() {
         <details className="lg:hidden rounded-xl border border-current/10 p-3 text-xs">
           <summary className="cursor-pointer font-medium">Samtaler og forbindelser</summary>
           <div className="mt-3 space-y-3">
+            <CreateProjectChat onCreate={(projectId, id) => { setNewProjectId(projectId); setChatId(id); }} />
             <label className="block">Projekt<select aria-label="Projekt til ny mobil-samtale" className="input w-full mt-1" value={newProjectId} onChange={e => setNewProjectId(e.target.value)}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-            <button className="btn-primary text-xs" onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); setTaskId(''); }}>{t('chat.newChat')}</button>
-            <div className="max-h-48 overflow-auto">{aiChats.map(c => <button key={c.id} className="block w-full text-left rounded-lg p-2 hover:bg-indigo-500/10" onClick={() => { setChatId(c.id); setTaskId(''); }}>{c.title}</button>)}</div>
+            <button className="btn-primary text-xs" onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); }}>{t('chat.newChat')}</button>
+            <div className="max-h-48 overflow-auto">{aiChats.map(c => <button key={c.id} className="block w-full text-left rounded-lg p-2 hover:bg-indigo-500/10" onClick={() => { setChatId(c.id); }}>{c.title}</button>)}</div>
             <details><summary className="cursor-pointer">Forbindelser · {availableCount} klar</summary><ConnectionPanel services={services} prefs={prefs} onChanged={refresh} /></details>
           </div>
         </details>
@@ -639,7 +669,7 @@ export function AiChatView() {
             <h2 className="text-xl font-bold">{t('chat.emptyTitle')}</h2>
             <p className="text-[13px] opacity-60 max-w-sm leading-relaxed">{t('chat.emptyHint')}</p>
             <button
-              onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); setTaskId(''); }}
+              onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); }}
               className="btn-primary rounded-xl px-4 py-2 text-[13px] flex items-center gap-1.5"
             >
               <Plus size={14} /> {t('chat.newChat')}
@@ -739,13 +769,13 @@ export function AiChatView() {
                   onPaste={onPaste}
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
                   rows={Math.min(6, Math.max(1, text.split('\n').length))}
-                  placeholder={t('chat.placeholder')}
+                  placeholder={activeRun ? 'Præcisér arbejdet — gælder fra næste job…' : t('chat.placeholder')}
                   className="flex-1 min-w-0 bg-transparent outline-none resize-none text-[13px] py-2 placeholder:opacity-40"
                 />
                 <select
                   value={service}
                   onChange={(e) => setService(e.target.value)}
-                  disabled={running}
+                  disabled={running || Boolean(activeRun)}
                   className="rounded-xl bg-black/20 dark:bg-black/30 border border-white/10 px-2 py-2 text-[12px] outline-none shrink-0 max-w-[130px] disabled:opacity-60"
                 >
                   <option value="auto">⚡ {t('chat.serviceAuto')}</option>
@@ -760,18 +790,19 @@ export function AiChatView() {
                     </optgroup>
                   )}
                 </select>
-                {running ? (
-                  <button onClick={async () => { if (service === 'auto' && !runningIdRef.current) { setSendIssue('Afventer kørsels-id fra serveren. Prøv Stop igen om et øjeblik.'); return; } if (runningIdRef.current) { const stopped = await cancelRun(runningIdRef.current); if (!stopped) return; } abortRef.current?.abort(); }} className="p-2.5 rounded-xl bg-rose-500/80 hover:bg-rose-500 text-white transition shrink-0" title={t('chat.stop')}>
+                {(running || activeRun) && (
+                  <button onClick={async () => { const id = activeRun?.runId ?? runningIdRef.current; if (service === 'auto' && !id) { setSendIssue('Afventer kørsels-id fra serveren. Prøv Stop igen om et øjeblik.'); return; } if (id) { const stopped = await cancelRun(id); if (!stopped) return; } abortRef.current?.abort(); }} className="p-2.5 rounded-xl bg-rose-500/80 hover:bg-rose-500 text-white transition shrink-0" title={t('chat.stop')}>
                     <Square size={15} />
                   </button>
-                ) : (
+                )}
+                {(!running || activeRun) && (
                   <button
                     onClick={send}
-                    disabled={(!text.trim() && pending.length === 0) || (service !== 'auto' && !services?.[service]?.available)}
+                    disabled={sending || uploading || (!text.trim() && pending.length === 0) || (service !== 'auto' && !services?.[service]?.available)}
                     className={cn('p-2.5 rounded-xl text-white transition shrink-0', service === 'auto' ? 'bg-gradient-to-br from-indigo-500 to-violet-600 hover:opacity-90 shadow-lg shadow-indigo-500/30' : 'bg-slate-600 hover:bg-slate-500', 'disabled:opacity-30')}
-                    title={service === 'auto' ? t('chat.runHint') : t('chat.send')}
+                    title={activeRun ? 'Send præcisering til næste job' : service === 'auto' ? t('chat.runHint') : t('chat.send')}
                   >
-                    {service === 'auto' ? <Play size={15} /> : <ArrowUp size={15} />}
+                    {service === 'auto' && !activeRun ? <Play size={15} /> : <ArrowUp size={15} />}
                   </button>
                 )}
               </div>

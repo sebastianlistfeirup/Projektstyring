@@ -14,6 +14,7 @@ import { createWorkspaceBackup, restoreWorkspaceBackup } from './workspace-backu
 import { writeAtomicJson } from './atomic-json.mjs';
 import { acceptSnapshot, normalizeSnapshot } from './workspace-state.mjs';
 import { listRepositoryIssues, repositoryIdentity } from './git-issues.mjs';
+import { applyRunToWorkspace } from './task-execution.mjs';
 import { runChat, serviceAvailability } from './ai-services.mjs';
 import { activeRuns, swarmState, pickOrchestrator } from './ai-runtime.mjs';
 import { registerAiRoutes } from './ai-engine.mjs';
@@ -59,6 +60,14 @@ function openExportFolder() {
 }
 
 function broadcast(payload) {
+  if (payload.kind === 'ai' && ['run_start', 'plan', 'run_finished'].includes(payload.type)) {
+    const run = activeRuns.get(payload.runId)?.run;
+    const snapshot = run ? applyRunToWorkspace(lastSnapshot?.snapshot, run, payload.type) : null;
+    if (snapshot) {
+      lastSnapshot = { ...lastSnapshot, snapshot, updatedAt: new Date().toISOString() };
+      broadcast({ type: 'sync', from: 'orbit-runtime', updatedAt: lastSnapshot.updatedAt });
+    }
+  }
   if (payload.type === 'sync' && lastSnapshot) {
     lastSnapshot.snapshot = normalizeSnapshot(lastSnapshot.snapshot);
     writeAtomicJson(SNAPSHOT_PATH, lastSnapshot);
@@ -1664,7 +1673,7 @@ app.post('/api/economic/draft', async (req, res) => {
 });
 
 // ---- AI-motor (abonnement-first orkestrering) ----
-registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, EXPORT_DIR });
+registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, EXPORT_DIR, getSnapshot: () => lastSnapshot?.snapshot });
 
 server.listen(PORT, '0.0.0.0', () => {
   startTelegram();

@@ -306,9 +306,9 @@ export async function deleteTemplate(id: string): Promise<boolean> {
   }
 }
 
-export async function suggestTemplate(goal: string, bible?: string, attachments?: AiAttachment[]): Promise<{ ok: boolean; jobs?: PipelineTemplate['jobs']; reason?: string }> {
+export async function suggestTemplate(goal: string, bible?: string, attachments?: AiAttachment[], projectId?: string | null): Promise<{ ok: boolean; jobs?: PipelineTemplate['jobs']; reason?: string }> {
   try {
-    const r = await fetch(`${BASE}/api/ai/templates/suggest`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal, bible, attachments }) });
+    const r = await fetch(`${BASE}/api/ai/templates/suggest`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal, bible, attachments, projectId }) });
     const j = await r.json();
     return j?.ok ? { ok: true, jobs: j.jobs } : { ok: false, reason: j?.reason };
   } catch (e) {
@@ -333,9 +333,9 @@ export async function fetchCosts(): Promise<CostSummary | null> {
   }
 }
 
-export async function sendRunMessage(runId: string, text: string): Promise<boolean> {
+export async function sendRunMessage(runId: string, text: string, attachments: AiAttachment[] = []): Promise<boolean> {
   try {
-    const r = await fetch(`${BASE}/api/ai/runs/${runId}/message`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+    const r = await fetch(`${BASE}/api/ai/runs/${runId}/message`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, attachments }) });
     return r.ok;
   } catch {
     return false;

@@ -73,6 +73,7 @@ export interface Task {
     plannerId?: string;
     plannerEtag?: string;
   }; // eksterne systemer
+  aiDelivery?: { runId: string; status: string; verification: string; commit?: string; updatedAt: string };
   approval?: Approval | null; // kundegodkendelse via offentligt link
   emoji?: string; // lille visuel markør på kortet
   pinnedDay?: string | null; // fastgjort til "Min dag" (ISO-dato, ryddes automatisk)
