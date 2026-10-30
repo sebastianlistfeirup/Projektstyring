@@ -329,6 +329,12 @@ function ConnectionPanel({ services, prefs, onChanged }: {
   onChanged: () => void;
 }) {
   const list = useMemo(() => (services ? Object.values(services) : []), [services]);
+  const [prefsFeedback, setPrefsFeedback] = useState('');
+  async function savePrefs(patch: Parameters<typeof saveAiPrefs>[0]) {
+    const result = await saveAiPrefs(patch);
+    setPrefsFeedback(result.ok ? 'Indstillingerne er gemt.' : result.reason ?? 'Indstillingerne kunne ikke gemmes.');
+    onChanged();
+  }
   const cliIds = list.filter((s) => (s.kind === 'cli' || s.kind === 'local') && s.available).map((s) => s.id);
   return (
     <div className="space-y-1.5">
@@ -344,7 +350,7 @@ function ConnectionPanel({ services, prefs, onChanged }: {
             <span className="opacity-60 shrink-0">{t('chat.orchestrator')}:</span>
             <select
               value={prefs.orchestrator}
-              onChange={async (e) => { await saveAiPrefs({ orchestrator: e.target.value }); onChanged(); }}
+              onChange={async (e) => { await savePrefs({ orchestrator: e.target.value }); }}
               className="flex-1 min-w-0 rounded-lg bg-black/20 dark:bg-black/30 border border-white/10 px-1.5 py-0.5 text-[11px] outline-none"
             >
               {cliIds.map((id) => <option key={id} value={id}>{services?.[id]?.name ?? id}</option>)}
@@ -354,17 +360,18 @@ function ConnectionPanel({ services, prefs, onChanged }: {
             <input
               type="checkbox"
               checked={prefs.autoJudge !== false}
-              onChange={async (e) => { await saveAiPrefs({ autoJudge: e.target.checked }); onChanged(); }}
+              onChange={async (e) => { await savePrefs({ autoJudge: e.target.checked }); }}
               className="accent-emerald-500"
             />
             <span className="text-emerald-300 flex items-center gap-1"><Gavel size={11} /> {t('chat.autoJudge')}</span>
           </label>
           <p className="text-[10px] opacity-50 leading-snug">{t('chat.autoJudgeHint')}</p>
-          {prefs.autoJudge !== false && <label className="flex items-center gap-2 text-[11px]"><span>Minimumscore</span><select aria-label="Minimumscore for review" className="input text-xs" value={prefs.minimumReviewScore ?? 8} onChange={async e => { await saveAiPrefs({ minimumReviewScore: Number(e.target.value) }); onChanged(); }}>{[6, 7, 8, 9, 10].map(score => <option key={score} value={score}>{score}/10</option>)}</select></label>}
-          <label className="flex items-start gap-2 text-[11px]"><input type="checkbox" className="mt-0.5 accent-indigo-500" checked={prefs.selfHeal !== false} onChange={async e => { await saveAiPrefs({ selfHeal: e.target.checked }); onChanged(); }} /><span>Afgrænsede rettelsesforsøg</span></label>
+          {prefs.autoJudge !== false && <label className="flex items-center gap-2 text-[11px]"><span>Minimumscore</span><select aria-label="Minimumscore for review" className="input text-xs" value={prefs.minimumReviewScore ?? 8} onChange={async e => { await savePrefs({ minimumReviewScore: Number(e.target.value) }); }}>{[6, 7, 8, 9, 10].map(score => <option key={score} value={score}>{score}/10</option>)}</select></label>}
+          <label className="flex items-start gap-2 text-[11px]"><input type="checkbox" className="mt-0.5 accent-indigo-500" checked={prefs.selfHeal !== false} onChange={async e => { await savePrefs({ selfHeal: e.target.checked }); }} /><span>Afgrænsede rettelsesforsøg</span></label>
           <p className="text-[10px] opacity-50 leading-snug">Højst ét genforsøg ved en agentfejl og én rettelse efter en faktisk testfejl. Testresultater bevares. Der tilkøbes ikke ekstra forbrug.</p>
         </div>
       )}
+      {prefsFeedback && <p role="status" className="px-2 py-1 text-xs">{prefsFeedback}</p>}
       {list.map((s) => <ServiceRow key={s.id} s={s} onChanged={onChanged} />)}
     </div>
   );

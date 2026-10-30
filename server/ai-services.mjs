@@ -91,7 +91,7 @@ export function aiCfg(cfg) {
   }
   return {
     providers,
-    prefs: { allowPaidApis: false, orchestrator: 'claude', selfHeal: true, minimumReviewScore: 8, ...(cfg.aiPrefs ?? {}) },
+    prefs: { orchestrator: 'claude', selfHeal: true, minimumReviewScore: 8, ...(cfg.aiPrefs ?? {}), allowPaidApis: false },
   };
 }
 

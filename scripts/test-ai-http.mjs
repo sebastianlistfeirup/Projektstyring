@@ -24,6 +24,12 @@ test('HTTP approval, validation, browser disconnect and persisted results', asyn
   globalThis.fetch = (url, options) => String(url).startsWith(base) ? nativeFetch(url, options) : Promise.reject(new Error('External network disabled'));
   t.after(() => { globalThis.fetch = nativeFetch; });
   const post = (path, body, extra = {}) => fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...extra }, body: JSON.stringify(body) });
+  for (const patch of [{ allowPaidApis: true }, { autoJudge: 'false' }, { selfHeal: 1 }, { minimumReviewScore: '10' }, { minimumReviewScore: 11 }, { orchestrator: 'meshy' }, { undocumented: true }]) {
+    assert.equal((await post('/api/ai/prefs', patch)).status, 400);
+    assert.equal(cfg.aiPrefs.autoJudge, false); assert.equal(cfg.aiPrefs.selfHeal, false);
+  }
+  assert.equal((await post('/api/ai/prefs', { minimumReviewScore: 9 })).status, 200);
+  assert.equal(cfg.aiPrefs.minimumReviewScore, 9);
   const plan = [{ id: 'a', title: 'One', serviceId: 'codex', description: 'Execute', dependsOn: [], phase: 'test' }];
   const response = await post('/api/ai/orchestrate', { goal: 'HTTP test', bible: 'Persistent bible', pauseAfterPlan: true, jobs: plan });
   const textPromise = response.text();

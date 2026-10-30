@@ -124,6 +124,11 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   app.post('/api/ai/prefs', (req, res) => {
     const cfg = loadConfig();
     const patch = req.body ?? {};
+    if (typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(key => !['allowPaidApis', 'orchestrator', 'autoJudge', 'selfHeal', 'minimumReviewScore'].includes(key))) return res.status(400).json({ ok: false, reason: 'AI-indstillingerne indeholder et ukendt felt.' });
+    if (patch.allowPaidApis !== undefined && patch.allowPaidApis !== false) return res.status(400).json({ ok: false, reason: 'Særskilt forbrugsbetaling kan ikke aktiveres. Orbit bruger kun inkluderet abonnementsforbrug.' });
+    if (['autoJudge', 'selfHeal'].some(key => patch[key] !== undefined && typeof patch[key] !== 'boolean')) return res.status(400).json({ ok: false, reason: 'Review og rettelsesforsøg skal være slået til eller fra.' });
+    if (patch.minimumReviewScore !== undefined && (!Number.isFinite(patch.minimumReviewScore) || patch.minimumReviewScore < 1 || patch.minimumReviewScore > 10)) return res.status(400).json({ ok: false, reason: 'Minimumscore skal være et tal mellem 1 og 10.' });
+    if (patch.orchestrator !== undefined && !['cli', 'local'].includes(serviceById(patch.orchestrator)?.kind)) return res.status(400).json({ ok: false, reason: 'Vælg en kendt planlæggende AI-tjeneste.' });
     cfg.aiPrefs = { ...(cfg.aiPrefs ?? {}), ...patch, allowPaidApis: false };
     try {
       saveConfig(cfg);
@@ -132,8 +137,8 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     }
     // Bekræft fra disken, så UI aldrig viser en tilladelse som ikke er gemt.
     const persisted = loadConfig();
-    if (patch.allowPaidApis !== undefined && persisted.aiPrefs?.allowPaidApis !== patch.allowPaidApis) {
-      return res.status(500).json({ ok: false, reason: 'Betalingsindstillingen kunne ikke genlæses fra companion.json. Genstart companion-serveren og prøv igen.' });
+    if (Object.entries(patch).some(([key, value]) => persisted.aiPrefs?.[key] !== value)) {
+      return res.status(500).json({ ok: false, reason: 'AI-indstillingerne kunne ikke genlæses efter gemning. Kontrollér Companion-forbindelsen.' });
     }
     res.json({ ok: true, prefs: aiCfg(persisted).prefs });
   });
