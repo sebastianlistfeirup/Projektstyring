@@ -29,7 +29,7 @@ export const AI_SERVICES = [
   { id: 'gemini',     name: 'Gemini CLI',     kind: 'cli',      cmd: 'gemini', cliTemplate: '-p {prompt}',                        color: 'sky',      strengths: ['multimodal', 'research', 'design-feedback'] },
   { id: 'qwen',       name: 'Qwen (lokal)',   kind: 'local',    baseUrl: 'http://127.0.0.1:11434', model: 'qwen2.5-coder:7b',     color: 'slate',    strengths: ['privat', 'hurtig kode', 'gratis'] },
   { id: 'qwen-code',  name: 'Qwen Code',      kind: 'cli',      cmd: 'qwen', cliTemplate: '-p {prompt}', color: 'slate', strengths: ['kode', 'MCP', 'underagenter', 'test'] },
-  { id: 'meshy',      name: 'Meshy',          kind: 'sub-api',  baseUrl: 'https://api.meshy.ai/v1',                            color: 'teal',     strengths: ['3D-modeller', 'teksturer'] },
+  { id: 'meshy',      name: 'Meshy',          kind: 'sub-api',  baseUrl: 'https://api.meshy.ai/openapi/v2',                    color: 'teal',     strengths: ['3D-modeller', 'teksturer'] },
   { id: 'elevenlabs', name: 'ElevenLabs',     kind: 'sub-api',  baseUrl: 'https://api.elevenlabs.io/v1',                       color: 'rose',     strengths: ['stemmer', 'lyd', 'TTS'] },
   { id: 'heygen',     name: 'HeyGen',         kind: 'sub-api',  baseUrl: 'https://api.heygen.com/v2',                          color: 'violet',   strengths: ['avatar-video', 'præsentation'] },
   { id: 'deepseek',   name: 'DeepSeek Flash', kind: 'paid-api', baseUrl: 'https://api.deepseek.com/v1',  model: 'deepseek-chat', color: 'cyan',    strengths: ['hurtig kode', 'billig chat'] },
@@ -37,7 +37,7 @@ export const AI_SERVICES = [
   { id: 'anthropic',  name: 'Anthropic (API)',kind: 'paid-api', baseUrl: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-5', color: 'orange', strengths: ['skrivning', 'kode'] },
   { id: 'moonshot',   name: 'Moonshot (API)', kind: 'paid-api', baseUrl: 'https://api.moonshot.ai/v1',   model: 'kimi-k2',       color: 'blue',    strengths: ['lang kontekst'] },
   { id: 'xai',        name: 'xAI (API)',      kind: 'paid-api', baseUrl: 'https://api.x.ai/v1',          model: 'grok-3-mini',   color: 'orange',  strengths: ['hurtig chat'] },
-  { id: 'grok',       name: 'Grok',           kind: 'cli',      cmd: 'grok',   cliTemplate: '-p {prompt}',                               color: 'orange',   strengths: ['chat'] },
+  { id: 'grok',       name: 'Grok Build',     kind: 'cli',      cmd: 'grok',   cliTemplate: '-p {prompt}',                               color: 'orange',   strengths: ['kode', 'analyse'] },
 ];
 
 export const serviceById = (id) => AI_SERVICES.find((s) => s.id === id);
@@ -215,7 +215,6 @@ export async function serviceAvailability(cfg) {
       reason = 'Klar til manuel tilslutning';
     }
     if (s.id === 'heygen' && available && (!p.avatarId || !p.voiceId)) { available = false; reason = 'Angiv avatar-id og stemme-id fra din HeyGen-konto.'; }
-    if (s.id === 'grok' && !p.cliTemplate) { available = false; reason = 'Grok kræver en konkret, verificeret CLI-skabelon. Der antages ingen officiel abonnementsdækket Grok-CLI.'; }
     const billing = billingPolicy(s, { ...p, model: resolvedModel ?? p.model, remoteModel });
     if (!billing.allowed) { available = false; reason = billing.reason; }
     out[s.id] = {
@@ -238,7 +237,6 @@ export async function serviceAvailability(cfg) {
 export function assertUsable(svc, cfg) {
   const { providers } = aiCfg(cfg);
   const p = providers[svc.id] ?? {};
-  if (svc.id === 'grok' && !p.cliTemplate) throw new Error('Konfigurér en konkret Grok-CLI-skabelon før brug. Orbit antager ikke en officiel abonnementsintegration.');
   const billing = billingPolicy(svc, p);
   if (!billing.allowed) throw new Error(`${svc.name}: ${billing.reason}`);
   if ((svc.kind === 'sub-api' || svc.kind === 'paid-api') && !p.apiKey) {
@@ -527,7 +525,7 @@ export function cliArguments(template, prompt, extraArgs = []) {
   return parts;
 }
 
-export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, onProcess, jsonl, claude = false, extraArgs = [], signal }) {
+export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, onProcess, jsonl, claude = false, grok = false, extraArgs = [], signal }) {
   signal?.throwIfAborted();
   const resolvedCmd = await resolveCliCommand(cmd);
   if (!resolvedCmd) throw new Error(`Kunne ikke starte '${cmd}': CLI'en blev ikke fundet`);
@@ -535,7 +533,8 @@ export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent,
   const launch = cliSpawnSpec(resolvedCmd, parts);
   return new Promise((resolve, reject) => {
     const env = cliChildEnv({ ...process.env, NO_COLOR: '1' }, { claude });
-    for (const key of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'MOONSHOT_API_KEY', 'DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'KIMI_API_KEY']) delete env[key];
+    for (const key of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'MOONSHOT_API_KEY', 'DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'KIMI_API_KEY', 'XAI_API_KEY', 'GROK_API_KEY', 'GROK_DEPLOYMENT_KEY']) delete env[key];
+    if (grok) { env.GROK_DISABLE_AUTOUPDATER = '1'; env.GROK_MEMORY = '0'; }
     const child = spawn(launch.cmd, launch.args, { cwd: cwd ?? process.cwd(), env, detached: process.platform !== 'win32' });
     let terminationTimer, windowsStop, callbackError, stopped = false, out = '', lineBuf = '', bytes = 0;
     const kill = () => {
@@ -630,6 +629,7 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
       cwd: cwd ?? dirs.cwd,
       jsonl: native.jsonl,
       claude: serviceId === 'claude',
+      grok: serviceId === 'grok',
       onDelta: delta,
       onProcess,
       onEvent: native.jsonl ? agentEvents(serviceId, { onText: delta, onSubagent: event => onSubagent?.({ ...event, subId: `${callId}:${event.subId}`, parentSubId: event.parentSubId ? `${callId}:${event.parentSubId}` : undefined }), onAction: action => onAction?.({ ...action, id: `${callId}:${action.id}` }) }) : undefined,
@@ -658,6 +658,21 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
 function requestSignal(signal) { return signal ? AbortSignal.any([signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000); }
 
 // ---- Medie-produktion (sub-api) ---------------------------------------------
+const MESHY_TEXT_TO_3D = 'https://api.meshy.ai/openapi/v2/text-to-3d';
+
+async function mediaHttpError(provider, response, apiKey) {
+  const raw = await response.text();
+  let data;
+  try { data = JSON.parse(raw); } catch { /* Some gateways return plain text. */ }
+  const code = data?.detail?.code ?? data?.detail?.status;
+  if (provider === 'ElevenLabs' && code === 'invalid_api_key') {
+    return new Error(`ElevenLabs fejl ${response.status}: API-nøglen blev afvist. Indsæt selve den hemmelige API-nøgle i Orbit, ikke nøglens ID eller navn. Nye nøgler starter med sk_ og vises ved oprettelsen. Opret en ny nøgle i ElevenLabs, hvis du kun har ID'et, og gem den under ElevenLabs i Orbit.`);
+  }
+  // Never echo a credential even if a provider includes it in its error response.
+  const detail = (apiKey ? raw.split(apiKey).join('[skjult]') : raw).slice(0, 500);
+  return new Error(`${provider} fejl ${response.status}: ${detail}`);
+}
+
 async function elevenTts({ text, cfg, dirs, signal }) {
   const { providers } = aiCfg(cfg);
   const p = providers.elevenlabs ?? {};
@@ -667,7 +682,7 @@ async function elevenTts({ text, cfg, dirs, signal }) {
     headers: { 'Content-Type': 'application/json', 'xi-api-key': p.apiKey },
     body: JSON.stringify({ text, model_id: 'eleven_multilingual_v2' }),
   });
-  if (!r.ok) throw new Error(`ElevenLabs fejl ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  if (!r.ok) throw await mediaHttpError('ElevenLabs', r, p.apiKey);
   const buf = Buffer.from(await r.arrayBuffer());
   const name = ` tale-${Date.now()}.mp3`;
   return saveArtifact(buf, name, dirs);
@@ -678,26 +693,30 @@ async function meshyTextTo3d({ prompt, cfg, dirs, onStatus, signal, existingId, 
   const p = providers.meshy ?? {};
   let result = existingId;
   if (!result) {
-  const r = await fetch('https://api.meshy.ai/v1/text-to-3d', {
+  const r = await fetch(MESHY_TEXT_TO_3D, {
     method: 'POST', signal: requestSignal(signal),
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${p.apiKey}` },
     body: JSON.stringify({ mode: 'preview', prompt, art_style: 'realistic' }),
   });
-  if (!r.ok) throw new Error(`Meshy fejl ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  if (!r.ok) throw await mediaHttpError('Meshy', r, p.apiKey);
   ({ result } = await r.json());
   if (!result) throw new Error('Meshy returnerede ikke et job-id.');
   onSubmitted(result);
   }
   for (let i = 0; i < 60; i++) {
     if (i > 0) await delay(5000, undefined, { signal });
-    const st = await (await fetch(`https://api.meshy.ai/v1/text-to-3d/${result}`, { signal: requestSignal(signal), headers: { Authorization: `Bearer ${p.apiKey}` } })).json();
+    const response = await fetch(`${MESHY_TEXT_TO_3D}/${encodeURIComponent(result)}`, { signal: requestSignal(signal), headers: { Authorization: `Bearer ${p.apiKey}` } });
+    if (!response.ok) throw await mediaHttpError('Meshy', response, p.apiKey);
+    const st = await response.json();
     onStatus?.(`Meshy: ${st.status}`);
     if (st.status === 'SUCCEEDED') {
+      if (!st.model_urls?.glb) throw new Error('Meshy meldte færdig, men leverede ingen GLB-downloadadresse.');
       const glb = await downloadMedia(st.model_urls.glb, signal);
       if (glb.subarray(0, 4).toString() !== 'glTF') throw new Error('Meshy returnerede ikke en gyldig GLB-fil.');
       return saveArtifact(glb, ` model-${Date.now()}.glb`, dirs);
     }
-    if (st.status === 'FAILED') throw new Error('Meshy 3D-generering slog fejl');
+    if (['FAILED', 'CANCELED', 'CANCELLED', 'EXPIRED'].includes(st.status)) throw new Error(`Meshy 3D-generering stoppede (${st.status}). Kontrollér jobbet ${result} på din Meshy-konto før en ny bestilling.`);
+    if (!['PENDING', 'IN_PROGRESS'].includes(st.status)) throw new Error(`Meshy returnerede en ukendt jobstatus: ${String(st.status).slice(0, 80)}`);
   }
   throw new Error('Meshy: timeout efter 5 minutter');
 }

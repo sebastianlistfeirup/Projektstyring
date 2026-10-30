@@ -1,0 +1,46 @@
+{
+  "checkedAt": "2026-10-30T19:26:56.985Z",
+  "platform": "linux",
+  "version": "grok 1.0.70 (f50904eaee6c)",
+  "source": "https://x.ai/cli/grok-1.0.70-linux-x86_64.gz",
+  "documentation": [
+    "https://docs.x.ai/build/overview",
+    "https://docs.x.ai/build/cli/reference",
+    "https://docs.x.ai/grok/faq"
+  ],
+  "flags": [
+    "--output-format",
+    "--no-plan",
+    "--permission-mode",
+    "--add-dir",
+    "--tools",
+    "--no-subagents",
+    "--disable-web-search",
+    "--allow",
+    "--deny",
+    "--model"
+  ],
+  "missing": [],
+  "nativeTransport": {
+    "executable": "Official Grok Build binary",
+    "model": "Local deterministic HTTP fixture; no provider model or account",
+    "checks": [
+      "Read a real fixture file through Orbit runChat",
+      "Return assistant text and public tool events",
+      "Refuse a forced bash write in read-only analysis",
+      "Refuse a forced write-tool edit in read-only analysis",
+      "Write and read back an actual delivery file in coding mode"
+    ]
+  },
+  "regression": {
+    "serverTestsPassed": 98,
+    "build": "passed"
+  },
+  "notVerified": [
+    "User Windows installation",
+    "User login and subscription coverage",
+    "Real Grok model response and quota",
+    "Real native subagent execution",
+    "Real Meshy and ElevenLabs account delivery"
+  ]
+}

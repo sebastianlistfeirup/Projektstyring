@@ -68,7 +68,7 @@ Ollama regnes kun som lokal ved en loopback-adresse og en model uden kendt cloud
 | Kimi | Lokal Kimi CLI | Installeret, konfigureret CLI kræves. |
 | Qwen Code | Lokal Qwen Code CLI | Repositoryværktøjer og native MCP; egen konto og betaling skal valideres. |
 | Qwen lokal | Lokal Ollama | Tekstgenerering; ingen generel fil-/kommando-værktøjsløkke. |
-| Grok | Konfigurerbar CLI / særskilt xAI API-adapter | Katalogposten er ikke dokumentation for en officiel abonnementsdækket CLI. Skal valideres konkret; API er ikke automatisk inkluderet i Grok-abonnementet. |
+| Grok Build | Native officiel CLI med browserlogin; særskilt xAI API-adapter | 1.0.70 er afprøvet mod lokal model-fixture. Rigtig konto og inkluderet Build-kvote skal stadig verificeres på brugerens maskine. |
 | Meshy | API-job med gemt provider-id og GLB | Inkluderede API-credits og stop for ekstraforbrug skal kontrolleres på kontoen. |
 | HeyGen | API-job med avatar-/stemme-id og lokal MP4 | Kontoens API-adgang og credits skal kontrolleres. |
 | ElevenLabs | API-lydproduktion | Kontoens inkluderede credits og overage-indstillinger skal kontrolleres. |

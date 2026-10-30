@@ -176,7 +176,7 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
     const result = await saveService(s.id, { apiKey: value, model: model || undefined });
     if (result.ok && result.hasKey) {
       setKey('');
-      setKeyFeedback({ ok: true, text: 'API-nøglen er gemt og bekræftet.' });
+      setKeyFeedback({ ok: true, text: 'API-nøglen er gemt lokalt. Kør en kontotest for at kontrollere, at tjenesten accepterer den.' });
     } else {
       // Behold nøglen i feltet ved fejl, så brugeren ikke skal indtaste den igen.
       setKeyFeedback({ ok: false, text: result.reason ?? 'Nøglen blev ikke gemt. Prøv igen.' });
@@ -227,6 +227,7 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
           )}
           {needsKey && (
             <>
+              {s.id === 'elevenlabs' && <p className="text-[11px] opacity-70">Indsæt den hemmelige API-nøgle fra ElevenLabs, ikke nøglens ID eller navn. Nye nøgler starter med sk_ og vises ved oprettelsen. Nøglen skal have adgang til tekst-til-tale.</p>}
               <div className="flex gap-1.5">
                 <input
                   type="password"
@@ -261,7 +262,8 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
             <label className="block text-[11px]">Stemme-id<input className="input w-full" defaultValue={s.voiceId ?? ''} onBlur={async e => { await saveService(s.id, { voiceId: e.target.value.trim() }); onChanged(); }} /></label>
           </div>}
           {s.kind === 'cli' && <div className="space-y-2 text-[11px]">
-            <p className="opacity-70">Log ind med leverandørens eget værktøj på denne maskine. Orbit genbruger den lokale opsætning.</p>
+            <p className="opacity-70">{s.id === 'grok' ? 'Installer officiel Grok Build, og kør grok login i PowerShell. Orbit genbruger dit lokale login. Lad argumentskabelonen være tom for standardadapteren. Kontrollér Build-adgang og stop for ekstraforbrug på din Grok-konto; et login alene beviser ikke abonnementsdækning.' : 'Log ind med leverandørens eget værktøj på denne maskine. Orbit genbruger den lokale opsætning.'}</p>
+            {s.id === 'grok' && <a className="underline" href="https://docs.x.ai/build/overview" target="_blank" rel="noreferrer">Officiel installation af Grok Build</a>}
             <button className="btn-ghost text-xs" disabled={checkingCli} onClick={async () => {
               setCheckingCli(true);
               try {
@@ -451,7 +453,7 @@ export function AiChatView() {
   useEffect(() => { if (chatId) sessionStorage.setItem('orbit-active-chat', chatId); else sessionStorage.removeItem('orbit-active-chat'); }, [chatId]);
 
   async function prepareTakeover() {
-    const serviceId = ['codex', 'claude', 'gemini', 'kimi', 'qwen-code'].find(id => services?.[id]?.available && services[id].capabilities?.repository);
+    const serviceId = ['codex', 'claude', 'gemini', 'kimi', 'qwen-code', 'grok'].find(id => services?.[id]?.available && services[id].capabilities?.repository);
     if (!serviceId) { setSendIssue('Tilslut en coding-agent først, så projektets kode kan læses.'); return; }
     if (!chatProject?.repositoryPath) { setSendIssue('Tilknyt projektets repository under Repository og kvalitetskontroller først.'); return; }
     const template = (await fetchTemplates()).find(t => t.id === 'tpl-project-takeover');

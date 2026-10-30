@@ -54,7 +54,7 @@ test('Gemini, Kimi and Qwen native streams expose tool status and fail on termin
 
 test('native CLI options preserve prompt values and Kimi analysis uses a read-only tool profile', () => {
   const contextDir = mkdtempSync(join(tmpdir(), 'orbit-options-'));
-  for (const id of ['codex', 'claude', 'gemini', 'qwen-code', 'kimi']) {
+  for (const id of ['codex', 'claude', 'gemini', 'qwen-code', 'kimi', 'grok']) {
     const options = nativeCliOptions(id, { readOnly: true, accessDirs: ['a path'], contextDir });
     const args = cliArguments(id === 'codex' ? 'exec --skip-git-repo-check {prompt}' : '-p {prompt}', 'actual prompt', options.args);
     assert.equal(options.jsonl, true);

@@ -32,7 +32,7 @@ Alle ni ønskede tjenester skal kunne indgå, når de tilbyder en egnet, underst
 | Gemini | Native Gemini CLI | Konto, modeladgang og relevant arbejde med de konkrete værktøjstilladelser. |
 | Kimi | Native Kimi Code CLI | Konto, inkluderet adgang og rigtig udførelse; analyseprofilens begrænsninger skal passe til opgaven. |
 | Qwen | Native Qwen Code eller lokal Ollama | Adskilt prøve af coding-adapteren og tekst/vision via Ollama. Lokal tekstgenerering giver ikke i sig selv filværktøjer. |
-| Grok | Brugerdefineret CLI eller API-adapter | En understøttet automatiseringsvej med dokumenteret abonnementsdækning. Der er ikke verificeret en native abonnementsbaseret coding-adapter. |
+| Grok Build | Native officiel CLI; transport afprøvet med 1.0.70 og lokal model-fixture | Windows-login, kontotest og inkluderet Build-kvote skal verificeres på brugerens konto. |
 | Meshy | Medie-API med gemt indsendelsesstatus | Faktisk konto og om API-kald trækker på de ønskede inkluderede credits, plus validering af en rigtig 3D-leverance. |
 | HeyGen | Medie-API med gemt indsendelsesstatus | Faktisk konto, API-adgangens forhold til abonnementet og gennemført video med download. |
 | ElevenLabs | Medie-API og lokal lagring af lyd | Faktisk konto, inkluderede credits, stemmeadgang og gennemført lydleverance. |

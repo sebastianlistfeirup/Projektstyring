@@ -9,7 +9,7 @@ import { cliSpawnSpec, cliChildEnv } from '../server/ai-services.mjs';
 import { nativeCliOptions } from '../server/ai-cli-options.mjs';
 
 const exec = promisify(execFile), contextDir = mkdtempSync(join(tmpdir(), 'orbit-cli-help-'));
-const providers = [{ id: 'codex', command: 'codex' }, { id: 'claude', command: 'claude' }, { id: 'gemini', command: 'gemini' }, { id: 'kimi', command: 'kimi' }, { id: 'qwen-code', command: 'qwen' }];
+const providers = [{ id: 'codex', command: 'codex' }, { id: 'claude', command: 'claude' }, { id: 'gemini', command: 'gemini' }, { id: 'kimi', command: 'kimi' }, { id: 'qwen-code', command: 'qwen' }, { id: 'grok', command: 'grok' }];
 const results = [];
 try {
   for (const provider of providers) {

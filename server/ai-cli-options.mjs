@@ -28,7 +28,21 @@ export function nativeCliOptions(provider, { readOnly, accessDirs = [], contextD
       writeFileSync(path, '---\nname: orbit-reader\ndescription: Read-only Orbit project analyst\ntools:\n  - Read\n  - Grep\n  - Glob\nsubagents: []\n---\n\nRead relevant project files and answer the assigned question. Do not change files or perform external actions. Distinguish observations from untested assumptions.\n');
       args.push('--agent-file', path);
     }
+  } else if (provider === 'grok') {
+    // Verified against Grok Build 1.0.70. Message JSON mirrors the public
+    // assistant/tool-result schema; omit partial thinking/text events.
+    args.push('--output-format', 'streaming-messages-json', '--no-plan', '--permission-mode', readOnly ? 'dontAsk' : 'acceptEdits');
+    for (const path of accessDirs) args.push('--add-dir', path);
+    if (readOnly) {
+      args.push('--tools', 'Read,Grep,Glob', '--no-subagents', '--disable-web-search');
+      for (const tool of ['Read', 'Grep', 'Glob']) args.push('--allow', tool);
+      for (const tool of ['Bash', 'Edit', 'MCPTool', 'Task', 'Agent']) args.push('--deny', tool);
+    } else {
+      // File operations within the authorized work order may run headlessly.
+      // Shell/MCP permissions remain governed by the user's Grok configuration.
+      for (const tool of ['Read', 'Grep', 'Glob', 'Edit']) args.push('--allow', tool);
+    }
   }
-  if (model && ['codex', 'claude', 'gemini', 'qwen-code', 'kimi'].includes(provider)) args.push('--model', model);
-  return { args, jsonl: ['codex', 'claude', 'gemini', 'qwen-code', 'kimi'].includes(provider) };
+  if (model && ['codex', 'claude', 'gemini', 'qwen-code', 'kimi', 'grok'].includes(provider)) args.push('--model', model);
+  return { args, jsonl: ['codex', 'claude', 'gemini', 'qwen-code', 'kimi', 'grok'].includes(provider) };
 }

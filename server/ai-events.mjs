@@ -5,9 +5,9 @@ export function agentEvents(provider, { onText, onAction, onSubagent }) {
   const action = (id, kind, label, status, detail = '') => onAction?.({ id, kind, label: String(label).slice(0, 300), status, detail: String(detail).slice(-3000), at: Date.now() });
   const beginTool = (id, name, input = {}, parentSubId) => {
     input = input && typeof input === 'object' ? input : {};
-    const sub = ['Task', 'Agent', 'AgentSwarm'].includes(name);
-    const command = ['Bash', 'run_shell_command', 'shell'].includes(name);
-    const label = sub ? input.description ?? 'Underagent' : command ? input.command ?? name : input.file_path ?? input.path ?? name;
+    const sub = ['Task', 'Agent', 'AgentSwarm', 'task'].includes(name);
+    const command = ['Bash', 'run_shell_command', 'shell', 'bash'].includes(name);
+    const label = sub ? input.description ?? 'Underagent' : command ? input.command ?? name : input.file_path ?? input.path ?? input.target_file ?? name;
     tools.set(id, { sub, label, kind: name?.startsWith('mcp__') ? 'mcp' : command ? 'command' : 'tool' });
     if (sub) onSubagent?.({ phase: 'start', subId: id, parentSubId: typeof parentSubId === 'string' ? parentSubId : undefined, name: String(label).slice(0, 180) });
     else action(id, tools.get(id).kind, label, 'running');
@@ -68,7 +68,7 @@ export function agentEvents(provider, { onText, onAction, onSubagent }) {
       }
       return;
     }
-    if (!['claude', 'qwen-code'].includes(provider)) return;
+    if (!['claude', 'qwen-code', 'grok'].includes(provider)) return;
     if (ev.type === 'result' && ev.is_error) throw new Error(String(ev.result ?? ev.errors?.join('\n') ?? 'Agenten kunne ikke afslutte turen.'));
     for (const b of ev.message?.content ?? []) {
       if (ev.type === 'assistant' && b.type === 'text' && b.text) onText?.(b.text);

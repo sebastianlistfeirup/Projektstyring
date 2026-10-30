@@ -1,5 +1,5 @@
 import { normalizePhase } from '../shared/ai-plan.mjs';
-const coding = new Set(['codex', 'claude', 'kimi', 'gemini', 'qwen-code']);
+const coding = new Set(['codex', 'claude', 'kimi', 'gemini', 'qwen-code', 'grok']);
 const media = { meshy: 'model3d', elevenlabs: 'audio', heygen: 'video' };
 
 // Adapter support, not a claim that the installed account/version is verified.
