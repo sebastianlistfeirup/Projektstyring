@@ -43,6 +43,7 @@ export interface SwarmJob {
 }
 
 export interface SwarmRun {
+  repository?: { source: string; baseCommit: string; branch?: string; workDir?: string } | null;
   eventsJournal?: boolean;
   eventCount?: number;
   eventsTruncated?: boolean;

@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { Bot, ExternalLink } from 'lucide-react';
 import type { Task } from '../lib/types';
 import { useStore } from '../store/useStore';
+import CodeChanges from './CodeChanges';
 
 const labels: Record<string, string> = { running: 'Arbejder', awaiting_approval: 'Plan afventer godkendelse', done: 'Leveret til gennemgang', error: 'Fejlet', partial: 'Delvist leveret', blocked: 'Blokeret', cancelled: 'Stoppet', interrupted: 'Afbrudt' };
 export default function TaskExecutionPanel({ task }: { task: Task }) {
@@ -31,6 +32,7 @@ export default function TaskExecutionPanel({ task }: { task: Task }) {
     <h3 className="font-semibold flex gap-2 items-center"><Bot size={15} />Orbit-arbejdsordre</h3>
     {delivery ? <><p>{labels[delivery.status] ?? delivery.status} · Kontroller: {delivery.verification === 'passed' ? 'bestået' : delivery.verification === 'failed' ? 'fejlet' : 'ikke kørt / ikke valgt'}</p>{delivery.commit && <p className="font-mono break-all opacity-70">{delivery.commit}</p>}{delivery.status === 'done' && task.status === 'inprogress' && <p className="text-amber-500">Leverancen er klar, men opgaven er stadig i gang. Kontrollér grænsen i review-kolonnen.</p>}</> : <p className="opacity-70">Åbn opgaven i Orbit med projektbibel, repository og acceptkriterier.</p>}
     <div className="flex flex-wrap gap-2"><button type="button" className="btn-primary text-xs" onClick={open}>Åbn i Orbit</button>{!['done', 'canceled'].includes(task.status) && <button type="button" className="btn-ghost text-xs" disabled={queueBusy} onClick={() => void enqueue()}>Læg i AI-kø</button>}{link && <a className="btn-ghost text-xs" href={`http://127.0.0.1:4310/api/ai/runs/${encodeURIComponent(link.runId)}/export`} target="_blank" rel="noreferrer"><ExternalLink size={13} />Leverance og kontroller</a>}</div>
+    {delivery?.commit && <CodeChanges key={delivery.runId} runId={delivery.runId} commit={delivery.commit} />}
     {queueFeedback && <p role="status">{queueFeedback}</p>}
   </section>;
 }

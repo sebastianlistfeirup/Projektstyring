@@ -7,6 +7,7 @@ import ProjectPlanReview from './ProjectPlanReview';
 import RunContextPanel from './RunContextPanel';
 import VerificationHistory from './VerificationHistory';
 import JobReview from './JobReview';
+import CodeChanges from './CodeChanges';
 import { verificationLabels } from '../lib/runPresentation';
 
 const labels: Record<string, string> = { running: 'Arbejder', awaiting_approval: 'Afventer din planbeslutning', done: 'Leveret til gennemgang', error: 'Fejlet', blocked: 'Blokeret', partial: 'Delvist leveret', cancelled: 'Stoppet', interrupted: 'Afbrudt ved genstart', queued: 'I kø', skipped: 'Sprunget over' };
@@ -49,6 +50,7 @@ export default function OrbitRunPanel({ projectId }: { projectId?: string | null
     <RunContextPanel run={run} />
     <VerificationHistory run={run} />
     {run.evidence && <p className="text-xs break-all flex gap-2"><GitBranch size={14} className="shrink-0" />Commit {run.evidence.commit} · {run.evidence.changedFiles.length} ændrede filer</p>}
+    {run.repository && Boolean(run.evidence?.commit || run.results?.length) && <CodeChanges key={`${run.runId}:${run.evidence?.commit ?? ""}`} runId={run.runId} commit={run.evidence?.commit} />}
     {run.verification && <details className="text-xs"><summary className="cursor-pointer flex items-center gap-2"><ShieldCheck size={14} />Kontroller: {verificationLabels[run.verification.status] ?? run.verification.status}</summary><div className="mt-2 space-y-2">{run.verification.checks.map((c, i) => <div key={i}><b>{c.name}: {verificationLabels[c.status] ?? c.status} (exit {c.exitCode ?? 'ukendt'})</b><pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-black/10 p-2 rounded">{c.output}</pre></div>)}</div></details>}
     {run.status === 'done' && run.projectId && run.projectPlan && <ProjectPlanReview key={run.runId} runId={run.runId} plan={run.projectPlan} />}
     {run.projectPlanError && <p className="text-amber-500 text-xs">{run.projectPlanError} Gennemgå tekstleverancen; ingen opgaver er oprettet.</p>}

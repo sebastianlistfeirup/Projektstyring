@@ -7,6 +7,21 @@ import { execFileSync } from 'node:child_process';
 const base = 'http://127.0.0.1:4310';
 let source: string;
 
+test.afterEach(async ({ request }, info) => {
+  if (info.status === info.expectedStatus) return;
+  // A failed assertion at a plan pause must not leave the next test's server
+  // occupied. Preserve the failure/trace, then clean up this isolated fixture.
+  await request.post(`${base}/api/ai/queue/control`, { data: { action: 'pause' } });
+  const state = await (await request.get(`${base}/api/ai/swarm`)).json();
+  if (state.run && ['running', 'awaiting_approval'].includes(state.run.status)) {
+    await request.post(`${base}/api/ai/runs/${state.run.runId}/cancel`);
+    await expect.poll(async () => (await (await request.get(`${base}/api/ai/swarm`)).json()).run?.status).not.toMatch(/^(running|awaiting_approval)$/);
+  }
+  const { queue } = await (await request.get(`${base}/api/ai/queue`)).json();
+  for (const entry of queue.entries.filter((entry: { status: string }) => entry.status === 'queued')) await request.delete(`${base}/api/ai/queue/${entry.id}`);
+  await request.post(`${base}/api/ai/queue/control`, { data: { action: 'resume' } });
+});
+
 test.beforeAll(async ({ request }) => {
   const root = mkdtempSync(join(tmpdir(), 'orbit-e2e-'));
   source = join(root, 'game'); mkdirSync(source);
@@ -84,6 +99,18 @@ test('upload bible → work order → isolated code → reload → real test evi
   await expect(page.getByText('Projektbibel', { exact: false }).last()).toBeVisible();
   expect(run.verification.checks[0].exitCode).toBe(0);
   expect(run.evidence.changedFiles).toContain('game.txt');
+  await page.getByRole('button', { name: 'Gennemse kodeændringer', exact: true }).click();
+  const review = page.getByRole('dialog', { name: 'Kodegennemgang', exact: true });
+  await expect(review.getByLabel('Diff: game.txt', { exact: true })).toContainText('+fixed');
+  await expect(review.getByLabel('Diff: game.txt', { exact: true })).toContainText('-original');
+  const patchUrl = await review.getByRole('link', { name: 'Hent samlet Git-patch' }).getAttribute('href');
+  const patchResponse = await request.get(patchUrl!);
+  expect(patchResponse.ok()).toBeTruthy(); expect(await patchResponse.text()).toContain('+fixed');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await review.evaluate(element => element.getBoundingClientRect().right <= window.innerWidth)).toBe(true);
+  await review.getByRole('button', { name: 'Luk kodegennemgang' }).click();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(review).not.toBeVisible();
   await expect(page.locator('table').filter({ hasText: 'game.txt' })).toBeVisible();
   expect(errors).toEqual([]);
   await testInfo.attach('Orbit completion', { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });

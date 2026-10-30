@@ -10,6 +10,7 @@ import { importProjectPlan } from './project-plan.mjs';
 import { DurableRunQueue } from './ai-queue.mjs';
 import { readRun, recoverRuns, validatePlan, runPath, withRunEvents, eventJournalPath, liveRunView } from './ai-state.mjs';
 import { importWorkshopJobs } from './ai-workshop.mjs';
+import { repositoryChanges, repositoryPatch } from './ai-diff.mjs';
 import { executeRun, swarmState, activeRuns, loadTemplates, saveUserTemplates, startTriggerScheduler, validateCron, pickOrchestrator, planWithLLM, parseJsonObject, projectMemoryDirs } from './ai-runtime.mjs';
 
 // ---- HTTP-ruter --------------------------------------------------------------
@@ -251,6 +252,22 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     try {
       res.json({ ok: true, run: withRunEvents(dirs, activeRuns.get(req.params.runId)?.run ?? readRun(dirs, req.params.runId)) });
     } catch (e) { res.status(404).json({ ok: false, reason: e.message }); }
+  });
+
+  app.get('/api/ai/runs/:runId/changes', async (req, res) => {
+    try {
+      if (req.query.file !== undefined && typeof req.query.file !== 'string') throw new Error('Vælg én fil.');
+      const run = activeRuns.get(req.params.runId)?.run ?? readRun(dirs, req.params.runId);
+      res.json({ ok: true, ...await repositoryChanges(run, req.query.file, req.query.commit) });
+    } catch (error) { res.status(400).json({ ok: false, reason: error.message }); }
+  });
+  app.get('/api/ai/runs/:runId/changes.patch', async (req, res) => {
+    try {
+      const run = activeRuns.get(req.params.runId)?.run ?? readRun(dirs, req.params.runId);
+      const patch = await repositoryPatch(run, req.query.commit);
+      res.setHeader('Content-Disposition', `attachment; filename="orbit-${run.runId}.patch"`);
+      res.type('text/x-diff').send(patch);
+    } catch (error) { res.status(400).json({ ok: false, reason: error.message }); }
   });
 
   app.get('/api/ai/runs/:runId/events', (req, res) => {

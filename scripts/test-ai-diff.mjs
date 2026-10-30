@@ -1,0 +1,34 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { repositoryChanges, repositoryPatch } from '../server/ai-diff.mjs';
+
+test('review compares recorded commits, preserves literal filenames and explains binary and truncated files', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-diff-'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  git('init', '-q'); writeFileSync(join(root, '[a].txt'), 'original\n'); writeFileSync(join(root, 'a.txt'), 'other original\n'); git('add', '.');
+  git('-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'base'); const baseCommit = git('rev-parse', 'HEAD');
+  writeFileSync(join(root, '[a].txt'), 'saved delivery\n'); writeFileSync(join(root, 'a.txt'), 'unrelated file\n');
+  writeFileSync(join(root, 'binary.bin'), Buffer.from([0, 1, 2, 3])); writeFileSync(join(root, 'large.txt'), 'changed line\n'.repeat(20000));
+  git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'delivery');
+  const commit = git('rev-parse', 'HEAD'), run = { repository: { baseCommit }, evidence: { commit }, workDir: root };
+  writeFileSync(join(root, '[a].txt'), 'unsaved subsequent edit\n');
+  const overview = await repositoryChanges(run); assert.equal(overview.totalFiles, 4);
+  assert.equal(overview.files.find(file => file.path === 'binary.bin').binary, true);
+  const file = await repositoryChanges(run, '[a].txt');
+  assert.match(file.patch, /\+saved delivery/); assert.ok(!file.patch.includes('unrelated file')); assert.ok(!file.patch.includes('unsaved subsequent edit'));
+  await assert.rejects(repositoryChanges(run, '../outside'), /findes ikke/);
+  const large = await repositoryChanges(run, 'large.txt'); assert.equal(large.truncated, true); assert.ok(large.patch.length <= 128000);
+  const binary = await repositoryChanges(run, 'binary.bin'); assert.equal(binary.patch, ''); assert.equal(binary.file.binary, true);
+  const patch = await repositoryPatch(run); assert.match(patch, /GIT binary patch/); assert.match(patch, /saved delivery/);
+  await assert.rejects(repositoryPatch(run, baseCommit), /ikke registreret/);
+  git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'later repair');
+  const later = { ...run, evidence: { commit: git('rev-parse', 'HEAD') }, results: [{ commit }] };
+  const historical = await repositoryChanges(later, '[a].txt', commit);
+  assert.equal(historical.commit, commit); assert.match(historical.patch, /saved delivery/); assert.ok(!historical.patch.includes('unsaved subsequent edit'));
+  await assert.rejects(repositoryChanges({ ...run, workDir: join(root, 'missing') }), /arbejdsmappe mangler/);
+  await assert.rejects(repositoryChanges({ ...run, evidence: { commit: '--help' } }), /ingen gemt/);
+});

@@ -7,6 +7,7 @@ import ChatMarkdown from './ChatMarkdown';
 import RunContextPanel from './RunContextPanel';
 import VerificationHistory from './VerificationHistory';
 import JobReview from './JobReview';
+import CodeChanges from './CodeChanges';
 
 const tones: Record<string, string> = {
   running: 'border-indigo-400 bg-indigo-500/10', done: 'border-emerald-500/40 bg-emerald-500/5',
@@ -88,6 +89,7 @@ export default function OrbitWorkMap({ run, services, connected, historical = fa
         </div>
       </div>}
     </>}
+    {run.repository && Boolean(run.evidence?.commit || run.results?.length) && <div className="px-4 pb-3"><CodeChanges key={`${run.runId}:${run.evidence?.commit ?? ""}`} runId={run.runId} commit={run.evidence?.commit} /></div>}
     {!!run.verificationHistory?.length && <div className="px-4 pb-4"><VerificationHistory run={run} /></div>}
     {run.contextManifest && <div className="px-4 pb-4"><RunContextPanel run={run} /></div>}
     <div className="border-t border-current/10 p-4 grid sm:grid-cols-2 gap-4 text-xs">
