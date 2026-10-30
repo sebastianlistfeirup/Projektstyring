@@ -11,7 +11,7 @@ import { DurableRunQueue } from './ai-queue.mjs';
 import { readRun, recoverRuns, validatePlan, runPath, withRunEvents, eventJournalPath, liveRunView } from './ai-state.mjs';
 import { importWorkshopJobs } from './ai-workshop.mjs';
 import { repositoryChanges, repositoryPatch } from './ai-diff.mjs';
-import { aiProcessSnapshot, stopAiProcesses } from './ai-processes.mjs';
+import { aiProcessSnapshot, stopAiProcesses, processMayBeWorking } from './ai-processes.mjs';
 import { listRunSummaries } from './ai-history.mjs';
 import { summarizeAnalysis, summarizeUsage } from './ai-analytics.mjs';
 import { executeRun, swarmState, activeRuns, loadTemplates, saveUserTemplates, startTriggerScheduler, validateCron, pickOrchestrator, planWithLLM, parseJsonObject, projectMemoryDirs } from './ai-runtime.mjs';
@@ -33,6 +33,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   for (const d of Object.values(dirs)) if (typeof d === 'string') mkdirSync(d, { recursive: true });
 
   const recovered = recoverRuns(dirs);
+  const recoveryCandidates = listRunSummaries(dirs, { limit: Number.MAX_SAFE_INTEGER }).runs.filter(run => run.status === 'interrupted').flatMap(run => { try { const saved = readRun(dirs, run.runId); return [{ runId: saved.runId, processes: saved.processes ?? [] }]; } catch { return []; } });
   if (recovered.length) swarmState.last = recovered.at(-1);
   const queueInput = body => {
     const input = { goal: String(body.goal ?? '').trim(), projectId: body.projectId || null, taskId: body.taskId || null,
@@ -49,12 +50,12 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     if (!input.projectId) input.bible = String(body.bible ?? '');
     return input;
   };
-  const orphanGuard = () => {
-    const runs = [...recovered];
+  const orphanProcesses = () => {
+    const runs = [...recoveryCandidates];
     for (const entry of queue.state.entries.filter(entry => entry.status === 'interrupted' && entry.runId)) { try { runs.push(readRun(dirs, entry.runId)); } catch { /* no process identity available */ } }
-    const live = runs.some(run => (run.processes ?? []).some(processInfo => { try { process.kill(processInfo.pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } }));
-    return live ? 'En proces fra en afbrudt kørsel kan stadig arbejde. Stop den før køen fortsættes.' : '';
+    return [...new Map(runs.flatMap(run => (run.processes ?? []).filter(info => processMayBeWorking(info.pid)).map(info => [info.pid, { pid: info.pid, kind: 'recovered', runId: run.runId, startedAt: info.startedAt }]))).values()];
   };
+  const orphanGuard = () => orphanProcesses().length ? 'En proces fra en afbrudt kørsel kan stadig arbejde. Stop den før nye kørsler startes.' : '';
   const queue = new DurableRunQueue({ path: join(dirs.runs, 'ai-queue.json'),
     isBusy: () => Boolean(swarmState.active) || app.locals.aiStopping === true, canResume: orphanGuard,
     readRun: runId => readRun(dirs, runId),
@@ -64,6 +65,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     onUpdate: state => broadcast?.({ kind: 'ai_queue', type: 'queue_updated', updatedAt: state.updatedAt }),
   });
   app.locals.orbitQueue = queue;
+  app.locals.orphanProcesses = orphanProcesses;
   app.locals.prepareAiShutdown = () => {
     app.locals.aiStopping = true;
     try { if (!queue.storageError) queue.pause('Companion lukkes. Fortsæt køen, når Orbit er startet igen.'); }
@@ -73,12 +75,12 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     }
   };
   app.post('/api/ai/prepare-shutdown', (req, res) => {
-    if (req.body?.refuseActive === true && (activeRuns.size || aiProcessSnapshot().length)) return res.status(409).json({ ok: false, reason: 'En AI-kørsel eller samtale er aktiv. Afslut den før opdatering.' });
+    if (req.body?.refuseActive === true && (activeRuns.size || aiProcessSnapshot().length || orphanProcesses().length)) return res.status(409).json({ ok: false, reason: 'En AI-kørsel eller samtale er aktiv. Afslut den før opdatering.' });
     app.locals.prepareAiShutdown();
-    res.json({ ok: true, processes: aiProcessSnapshot() });
+    res.json({ ok: true, processes: [...aiProcessSnapshot(), ...orphanProcesses()] });
   });
   queue.recover();
-  if (!queue.storageError && recovered.some(run => run.status === 'interrupted' && run.processes?.length)) queue.pause('Companion genstartede under en kørsel. Kontrollér processer og leverance før arbejdskøen fortsættes.');
+  if (!queue.storageError && (recovered.some(run => run.status === 'interrupted') || orphanGuard())) queue.pause('Companion genstartede under en kørsel. Kontrollér processer og leverance før arbejdskøen fortsættes.');
   startTriggerScheduler({ loadConfig, broadcast, enqueue: (body, options) => queue.enqueue(queueInput(body), options), pump: () => queue.pump() });
 
   app.get('/api/ai/queue', (_req, res) => res.json({ ok: true, queue: queue.snapshot() }));
@@ -263,7 +265,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   // Live swarm-tilstand: aktiv kørsel eller seneste afsluttede.
   app.get('/api/ai/swarm', (req, res) => {
     const run = swarmState.active ?? swarmState.last;
-    res.json({ ok: true, run: req.query.view === 'live' ? liveRunView(run) : run, processes: aiProcessSnapshot() });
+    res.json({ ok: true, run: req.query.view === 'live' ? liveRunView(run) : run, processes: [...aiProcessSnapshot(), ...orphanProcesses()] });
   });
 
   app.get('/api/ai/runs', (req, res) => {
@@ -525,10 +527,10 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       if (swarmState.active) return res.status(409).json({ ok: false, reason: 'En kørsel er allerede aktiv.' });
       if (prev.schemaVersion !== 2) return res.status(409).json({ ok: false, reason: 'Denne ældre kørsel mangler gemt projektkontekst. Start en ny kørsel med bibel og repository.' });
       if (!prev.jobs?.some(j => j.status !== 'done') && !['failed', 'interrupted', 'cancelled'].includes(prev.verification?.status)) return res.status(400).json({ ok: false, reason: 'Alle jobs leverede — intet at genoptage.' });
-      const liveProcesses = (prev.processes ?? []).filter(p => {
-        try { process.kill(p.pid, 0); return true; } catch (e) { return e.code !== 'ESRCH'; }
-      });
+      const liveProcesses = (prev.processes ?? []).filter(p => processMayBeWorking(p.pid));
       if (liveProcesses.length) return res.status(409).json({ ok: false, reason: 'En proces fra den afbrudte kørsel kan stadig arbejde. Stop den på maskinen før genoptagelse.', pids: liveProcesses.map(p => p.pid) });
+      const recoveryBlock = orphanGuard();
+      if (recoveryBlock) return res.status(409).json({ ok: false, reason: recoveryBlock });
       if (!existsSync(prev.workDir)) return res.status(409).json({ ok: false, reason: 'Den oprindelige arbejdsmappe mangler. Gendan den før genoptagelse.' });
       const jobs = validatePlan(prev.jobs);
       const runId = randomUUID().slice(0, 12);
@@ -672,6 +674,8 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     // Én aktiv Auto-kørsel ad gangen: ellers kan gamle events og kørselsstatus
     // overskrive den nye kørsel i Swarm, og to agenter kan ændre samme projekt.
     if (swarmState.active) return res.status(409).json({ ok: false, reason: 'En Auto-kørsel er allerede aktiv. Stop den, og vent til den er afsluttet, før du starter en ny.' });
+    const recoveryBlock = orphanGuard();
+    if (recoveryBlock) return res.status(409).json({ ok: false, reason: recoveryBlock });
     let input;
     try { input = getSnapshot ? projectExecution(getSnapshot(), req.body ?? {}) : req.body ?? {}; validateAttachmentList(input.attachments); }
     catch (error) { return res.status(409).json({ ok: false, reason: error.message }); }

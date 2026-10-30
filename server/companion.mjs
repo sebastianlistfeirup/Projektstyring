@@ -813,7 +813,7 @@ app.get('/api/backup/list', (_req, res) => {
 
 app.post('/api/backup/restore', (req, res) => {
   const { name } = req.body ?? {};
-  if (activeRuns.size || aiProcessSnapshot().length) return res.status(409).json({ ok: false, reason: 'Stop aktive AI-kørsler og samtaler før gendannelse.' });
+  if (activeRuns.size || aiProcessSnapshot().length || app.locals.orphanProcesses?.().length) return res.status(409).json({ ok: false, reason: 'Stop aktive AI-kørsler og samtaler før gendannelse.' });
   if (!name || !/^[\w.-]+\.json$/.test(String(name))) {
     return res.status(400).json({ ok: false, reason: 'Ugyldigt backup-navn' });
   }
@@ -1699,7 +1699,7 @@ async function shutdown() {
   for (const client of wss.clients) client.close(1001, 'Companion stopper');
   const deadline = Date.now() + 20000;
   while ((activeRuns.size || aiProcessSnapshot().length) && Date.now() < deadline) await delay(100);
-  const remaining = activeRuns.size || aiProcessSnapshot().length;
+  const remaining = activeRuns.size || aiProcessSnapshot().length || app.locals.orphanProcesses?.().length;
   if (remaining) console.error('Companion stoppes med uafsluttet arbejde. Kontrollér gendannede kørsler ved næste start.');
   process.exit(remaining ? 1 : 0);
 }

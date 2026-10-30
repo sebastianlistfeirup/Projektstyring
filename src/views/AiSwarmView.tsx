@@ -1093,6 +1093,7 @@ const MODE_KEYS: Record<string, string> = {
 export function AiSwarmView() {
   useLang();
   const connected = useSwarm((s) => s.connected);
+  const recoveredProcesses = useSwarm(s => s.processes).filter(process => process.kind === 'recovered');
   const run = useSwarm((s) => s.run);
   const services = useSwarm((s) => s.services);
   const approval = useSwarm((s) => s.approval);
@@ -1211,6 +1212,12 @@ export function AiSwarmView() {
 
       {shown?.eventsJournal && <div className="text-xs opacity-65 flex flex-wrap gap-2"><a className="underline" href={`${BASE_URL}/api/ai/runs/${encodeURIComponent(shown.runId)}/events`} target="_blank" rel="noreferrer">Hent fuld aktivitetslog · {shown.eventCount ?? '—'} hændelser</a>{shown.eventsTruncated && <span>Loggen kan ikke indlæses komplet til genafspilning. Brug den fulde aktivitetslog.</span>}</div>}
       <RunQueuePanel />
+      {recoveredProcesses.length > 0 && <section aria-label="Processer fra afbrudte kørsler" className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm space-y-2">
+        <h2 className="font-semibold flex items-center gap-2"><AlertTriangle size={16} />En tidligere agent kan stadig arbejde</h2>
+        <p className="text-xs opacity-75">Nye Auto-kørsler og opdatering er blokeret, indtil de registrerede processer er afsluttet. Kontrollér proces-id'et i maskinens procesoversigt, og luk den relevante agent. Orbit afslutter ikke en ukendt proces automatisk efter genstart.</p>
+        <ul className="space-y-2">{recoveredProcesses.map(process => <li key={process.pid} className="flex flex-wrap items-center gap-3 text-xs"><span className="font-mono">Proces {process.pid}</span>{process.runId && <button className="btn-ghost text-xs" onClick={() => void openArchived({ runId: process.runId!, file: `${process.runId}.json`, goal: '' })}>Gennemse den afbrudte kørsel</button>}</li>)}</ul>
+      </section>}
+
 
       {/* pulserende banner når en plan afventer godkendelse */}
       {approval && (

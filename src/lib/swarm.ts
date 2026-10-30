@@ -81,6 +81,7 @@ export interface SwarmApproval {
 
 interface SwarmStore {
   connected: boolean;
+  processes: { pid: number; kind: string; runId?: string; startedAt?: number }[];
   run: SwarmRun | null;
   services: Record<string, AiServiceInfo> | null;
   approval: SwarmApproval | null;
@@ -150,6 +151,7 @@ export function requestNotifyPermission(): void {
 
 export const useSwarm = create<SwarmStore>()((set, get) => ({
   connected: false,
+  processes: [],
   run: null,
   services: null,
   approval: null,
@@ -460,7 +462,7 @@ async function syncState() {
   try {
     const r = await fetch(`${API}/api/ai/swarm?view=live`);
     const j = await r.json();
-    if (j?.ok) { useSwarm.getState().setRun(j.run ? presentRun(j.run) : null); if (j.run) reconcileTask(j.run); }
+    if (j?.ok) { useSwarm.setState({ processes: Array.isArray(j.processes) ? j.processes : [] }); useSwarm.getState().setRun(j.run ? presentRun(j.run) : null); if (j.run) reconcileTask(j.run); }
   } catch { /* companion offline */ }
 }
 

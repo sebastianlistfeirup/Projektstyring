@@ -565,3 +565,19 @@ test('plan editing retains read-only context, dependency identities and visible 
   expect(run.jobs[1].dependsOn).toEqual([0]); expect(run.jobs[0].readOnly).toBe(true);
   expect(run.jobs[0].context).toEqual(['missing-context.md']);
 });
+
+
+test('surviving recovery processes are visible with their interrupted run and disappear after refreshed evidence', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.setItem('orbit-toured', '1'); localStorage.setItem('swarm-sound', 'off'); });
+  let working = true;
+  const run = { runId: 'recovered-fixture', goal: 'Afbrudt udviklingsopgave', status: 'interrupted', jobs: [], results: [], notes: [], events: [], startedAt: Date.parse('2026-10-01T09:00:00Z') };
+  await page.route(`${base}/api/ai/swarm*`, route => route.fulfill({ json: { ok: true, run, processes: working ? [{ pid: 43210, kind: 'recovered', runId: run.runId }] : [] } }));
+  await page.route(`${base}/api/ai/runs/recovered-fixture`, route => route.fulfill({ json: { ok: true, run } }));
+  await page.goto('/#/swarm');
+  const recovery = page.getByRole('region', { name: 'Processer fra afbrudte kørsler', exact: true });
+  await expect(recovery).toContainText('Proces 43210');
+  await recovery.getByRole('button', { name: 'Gennemse den afbrudte kørsel', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Arbejdskort', exact: true })).toContainText('Gemt forløb');
+  working = false;
+  await expect(recovery).not.toBeVisible({ timeout: 10000 });
+});
