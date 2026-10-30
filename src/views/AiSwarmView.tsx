@@ -1154,7 +1154,7 @@ export function AiSwarmView() {
   const modeKey = shown?.mode ? MODE_KEYS[shown.mode] : null;
 
   return (
-    <div className="flex flex-col h-full gap-3 p-3 md:p-6 max-w-[1500px] mx-auto w-full">
+    <div className="flex flex-col h-full overflow-y-auto [&>*]:shrink-0 gap-3 p-3 md:p-6 max-w-[1500px] mx-auto w-full">
       {/* header */}
       <div className="flex flex-wrap items-center gap-3">
         <div>

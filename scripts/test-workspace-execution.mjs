@@ -32,3 +32,26 @@ test('failures and review capacity preserve honest task status; old runs cannot 
   assert.equal(full.tasks[0].status, 'inprogress'); assert.equal(full.tasks[0].aiDelivery.status, 'done');
   assert.equal(applyRunToWorkspace(active, { ...run, runId: 'old', status: 'done' }, 'run_finished'), null);
 });
+
+
+test('project context pins full published bible and project decisions with verifiable identities', async () => {
+  const { createHash } = await import('node:crypto');
+  const snapshot = fixture();
+  snapshot.workspaceState.bibleVersions.p[0] = { id: 'b1', version: 1, text: 'A'.repeat(9000), createdAt: '2026-10-01' };
+  snapshot.workspaceState.notes = [
+    { id: 'decision', projectId: 'p', kind: 'decision', title: 'Keep XP', body: 'B'.repeat(8000) + 'DECISION_END', updatedAt: '2026-10-02' },
+    { id: 'foreign', projectId: 'other', kind: 'decision', title: 'FOREIGN', body: 'Do not include' },
+    { id: 'note', projectId: 'p', kind: 'note', title: 'UNDECIDED', body: 'Do not turn notes into mandates' },
+  ];
+  const captured = projectExecution(snapshot, { projectId: 'p', taskId: 't', goal: 'Fix' });
+  assert.match(captured.bible, /DECISION_END/); assert.ok(captured.bible.startsWith('A'.repeat(9000)));
+  assert.ok(!captured.bible.includes('FOREIGN')); assert.ok(!captured.bible.includes('UNDECIDED'));
+  assert.equal(captured.contextManifest.documents.length, 3);
+  assert.equal(captured.contextManifest.documents[0].sha256, createHash('sha256').update('A'.repeat(9000)).digest('hex'));
+  assert.equal(captured.contextManifest.documents[0].state, 'published');
+  snapshot.workspaceState.bibleVersions.p[0].text = 'Changed';
+  snapshot.projects[0].scopeTaskIds.push('new');
+  assert.ok(captured.bible.startsWith('A'.repeat(9000))); assert.deepEqual(captured.contextManifest.scopeTaskIds, ['t']);
+  const draft = fixture(); delete draft.workspaceState.bibleVersions;
+  assert.equal(projectExecution(draft, { projectId: 'p' }).contextManifest.documents[0].state, 'draft');
+});

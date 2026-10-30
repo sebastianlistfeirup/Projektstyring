@@ -1,3 +1,5 @@
+import { captureProjectContext } from './project-context.mjs';
+
 export function projectExecution(snapshot, input) {
   if (!input.projectId) {
     if (input.taskId) throw new Error('En arbejdsordre skal tilhøre et projekt.');
@@ -16,8 +18,8 @@ export function projectExecution(snapshot, input) {
     const count = snapshot.tasks.filter(t => t.projectId === project.id && t.id !== task.id && t.status === 'inprogress').length;
     if (task.status !== 'inprogress' && Number.isFinite(limit) && count >= limit) throw new Error('Projektets grænse for igangværende arbejde er nået.');
   }
-  const bible = state.bibleVersions?.[project.id]?.at(-1)?.text ?? state.bibles?.[project.id] ?? input.bible ?? '';
-  return { ...input, bible, repositoryPath: project.repositoryPath || undefined, checks: project.verificationChecks ?? [],
+  const context = captureProjectContext(project, task, state, input.bible ?? '');
+  return { ...input, ...context, repositoryPath: project.repositoryPath || undefined, checks: project.verificationChecks ?? [],
     goal: [project.releaseGoal ? `Versionsmål: ${project.releaseGoal}` : '', input.goal, task ? `Autoritativ arbejdsordre: ${task.title}\n${task.description ?? ''}` : ''].filter(Boolean).join('\n\n') };
 }
 

@@ -66,6 +66,8 @@ Der er endnu ikke en fælles MCP-servermanager eller en universal tool-calling-l
 
 ## Bibel, billeder og beslutninger
 
+- Hver projektkørsel gemmer identiteten på bibelversion, arbejdsordre og projektets beslutningsnoter med SHA-256, versionsmål og scope. Beslutningsnoter medsendes i fuld længde; øvrige notetyper bliver ikke automatisk til krav. Genoptagelse bevarer dette grundlag.
+- Jobkontekstfiler læses kun fra kørselsmappen, inklusive kontrol af symlinks. Hele UTF-8-filer medsendes inden for dokumenterede grænser (20 filer, 1 MB pr. fil, 4 MB i alt); manglende, binære og større filer forklares eksplicit til agenten og vises på arbejdskortet.
 - Den komplette bibel gemmes med kørslen. Tidligere hårde afskæringer på 6.000 tegn er fjernet fra kørselskonteksten.
 - Kørsels- og tjenestehukommelse er adskilt pr. projekt. Ældre global hukommelse importeres ikke automatisk til et projekt.
 - Lange CLI-instruktioner gemmes i en kontekstfil, som agenten instrueres i at læse, så Windows' argumentgrænse ikke skærer teksten af.
@@ -119,7 +121,7 @@ På Windows sættes miljøvariablen med PowerShell: `$env:ORBIT_SOAK_MINUTES='12
 
 ## Verifikation udført under udviklingen
 
-30. oktober 2026: Linux-build, lint uden fejl (eksisterende React-advarsler), 21 importkontroller, 4 workspace-tests og 43 server-/AI-tests bestod. Syv Playwright-forløb er afprøvet med rigtig Chromium: upload af bibel på over 6.000 tegn, offentliggørelse af bibelversion, repositorytilknytning, reel filkontrol, genindlæsning under udførelse, bevaret kilde-checkout, status til gennemgang, et fejlet forløb, der forblev fejlet i chatten, præcisering og filupload efter genindlæsning, serverafslutning med lukket browser, projektoprettelse på mobil, projektgennemgang med import uden dubletter samt sletning og gendannelse på tværs af åbne faner samt arbejdskortets afhængigheder, historik, tastatur og mobilvisning. Det tidligere checkpoint bestod også GitHub-kontrollerne på Windows efter en rettelse af absolutte programstier.
+30. oktober 2026: Linux-build, lint uden fejl (eksisterende React-advarsler), 21 importkontroller, 4 workspace-tests og 46 server-/AI-tests bestod. Syv Playwright-forløb er afprøvet med rigtig Chromium: upload af bibel på over 6.000 tegn, offentliggørelse af bibelversion, repositorytilknytning, reel filkontrol, genindlæsning under udførelse, bevaret kilde-checkout, status til gennemgang, et fejlet forløb, der forblev fejlet i chatten, præcisering og filupload efter genindlæsning, serverafslutning med lukket browser, projektoprettelse på mobil, projektgennemgang med import uden dubletter samt sletning og gendannelse på tværs af åbne faner samt arbejdskortets afhængigheder, historik, tastatur og mobilvisning. Det tidligere checkpoint bestod også GitHub-kontrollerne på Windows efter en rettelse af absolutte programstier.
 
 Godkendelsespausen blev desuden afprøvet i 12 faktiske minutter med 144 stikprøver. Ingen jobstart skete før eksplicit godkendelse. Dette er en afgrænset varighedstest med en lokal prøveagent, ikke dokumentation for flere døgns autonomi med rigtige udbydere.
 

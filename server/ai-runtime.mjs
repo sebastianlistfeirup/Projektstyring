@@ -5,6 +5,7 @@ import { createRunWorktree, verifyRepository, repositoryEvidence } from './ai-re
 import { validatePlan, executeGraph, runOutcome, saveRun } from './ai-state.mjs';
 import { validateProjectPlan, PROJECT_PLAN_FORMAT } from './project-plan.mjs';
 import { serviceCapabilities } from './ai-capabilities.mjs';
+import { loadJobContext } from './ai-job-context.mjs';
 const execFileAsync = promisify(execFile);
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync } from 'fs';
 import { join } from 'path';
@@ -339,26 +340,6 @@ async function judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs, si
   return { score: Math.max(0, Math.min(10, Number(j.score) || 0)), note: String(j.note ?? '').slice(0, 300) };
 }
 
-// ---- Begrænset kontekst-grep: læs brugerudpegede filer ind som kontekst ----
-function readContextFiles(runDir, cwd, files) {
-  if (!Array.isArray(files) || !files.length) return [];
-  const out = [];
-  for (const f of files.slice(0, 3)) {
-    const rel = String(f ?? '').trim();
-    if (!rel || rel.includes('..')) continue;
-    for (const base of [runDir, cwd]) {
-      const p = join(base, rel);
-      if (existsSync(p) && p.startsWith(base)) {
-        try {
-          out.push({ role: 'user', text: `Kontekst fra filen "${rel}" (brugeren har udpeget den):\n\`\`\`\n${readFileSync(p, 'utf8').slice(0, 4000)}\n\`\`\`` });
-        } catch { /* fil kunne ikke læses */ }
-        break;
-      }
-    }
-  }
-  return out;
-}
-
 // ---- live swarm-tilstand (deles til alle WS-klienter) ----------------------
 export const swarmState = { active: null, last: null };
 // Aktive kørsler med kontrol-håndtag: beskedindsprøjtning, skip, godkendelse, aflysning.
@@ -511,10 +492,11 @@ async function runTeamJob({ job, handle, goal, bible, attachments, cfg, dirs, av
 }
 
 // ---- Hovedkørsel --------------------------------------------------------------
-export async function executeRun({ runId, goal, bible, attachments = [], predefinedJobs, cfg, dirs, emit, mode = 'standard', pauseAfterPlan = false, resumeDir = null, previousRun = null, projectId = null, taskId = null, repository = null, checks = [] }) {
+export async function executeRun({ runId, goal, bible, attachments = [], predefinedJobs, cfg, dirs, emit, mode = 'standard', pauseAfterPlan = false, resumeDir = null, previousRun = null, projectId = null, taskId = null, repository = null, checks = [], contextManifest = null }) {
   dirs = projectMemoryDirs(dirs, projectId);
   const run = {
     runId, goal, projectId, taskId, repository, checks,
+    contextManifest: previousRun?.contextManifest ?? contextManifest,
     verification: { status: 'not_run', checks: [] },
     bible: String(bible ?? ''),
     parentRunId: previousRun?.runId ?? null,
@@ -630,6 +612,9 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       ? [{ role: 'user', text: `INSTRUKTIONER FRA BRUGEREN (gælder for resten af kørslen — følg dem):\n${run.instructions.map((x, i) => `${i + 1}. ${x}`).join('\n')}` }]
       : [];
     const deliverables = readDeliverables(run.auditDir, jobs, job.dependsOn, doneText);
+    const fileContext = loadJobContext(handle.runDir, job.context);
+    const trackedJob = run.jobs.find(j => j.id === job.id);
+    if (trackedJob) trackedJob.contextDocuments = fileContext.documents;
     const baseCtx = [
       bible ? { role: 'system', text: `Projektets bibel:\n${bible}` } : null,
       serviceMemory ? { role: 'system', text: `Hvad du tidligere har lavet for denne bruger (din hukommelse):\n${serviceMemory}` } : null,
@@ -637,7 +622,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       attachmentContext(run.attachments),
       { role: 'user', text: `EKSEKVERINGSFASE — udfør din tildelte opgave nu. Returnér ikke blot en plan eller en beskrivelse af, hvad der bør gøres. Eventuelle planlægningsinstruktioner i det oprindelige projektmål gjaldt kun orkestratorens tidligere planfase.\n\nProjektmål: ${goal}\n\nDin opgave (${job.phase}): ${job.title}\n${job.description}\n\nLav et konkret, færdigt resultat. Svar på dansk.` },
       ...deliverables.map((d) => ({ role: 'user', text: d })),
-      ...readContextFiles(handle.runDir, dirs.cwd, job.context),
+      ...fileContext.messages,
     ].filter(Boolean);
 
     const attempt = async (extra) => {

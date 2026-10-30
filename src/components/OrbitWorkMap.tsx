@@ -4,6 +4,7 @@ import { serviceName, type SwarmRun } from '../lib/swarm';
 import type { AiServiceInfo } from '../lib/aiApi';
 import { jobStages, runLabels, waitingReason } from '../lib/runPresentation';
 import ChatMarkdown from './ChatMarkdown';
+import RunContextPanel from './RunContextPanel';
 
 const tones: Record<string, string> = {
   running: 'border-indigo-400 bg-indigo-500/10', done: 'border-emerald-500/40 bg-emerald-500/5',
@@ -72,6 +73,7 @@ export default function OrbitWorkMap({ run, services, connected, historical = fa
           <dl className="grid grid-cols-2 gap-3 text-xs"><div><dt className="opacity-50">Startet</dt><dd>{clock(selected.startedAt)}</dd></div><div><dt className="opacity-50">Afsluttet</dt><dd>{clock(selected.finishedAt)}</dd></div></dl>
           {!!selected.dependsOn.length && <div className="text-xs"><p className="opacity-50 mb-1">Kræver en leverance fra</p>{selected.dependsOn.map(index => run.jobs[index] && <button key={index} onClick={() => setSelectedId(run.jobs[index].id)} className="flex items-center gap-1 text-indigo-600 dark:text-indigo-300 py-1"><ChevronRight size={12} />{run.jobs[index].title} · {runLabels[run.jobs[index].status]}</button>)}</div>}
           {selected.description && <details className="text-xs"><summary className="cursor-pointer opacity-70">Arbejdsbeskrivelse</summary><p className="whitespace-pre-wrap mt-2 opacity-70">{selected.description}</p></details>}
+          {!!selected.contextDocuments?.length && <details className="text-xs"><summary className="cursor-pointer opacity-70">Filer indsat som kontekst</summary><ul className="mt-2 space-y-2">{selected.contextDocuments.map((doc, i) => <li key={i}><p className="font-mono break-all">{doc.path}</p><p className="opacity-60">{doc.status === 'included' ? `Hele filen · ${doc.bytes} bytes` : doc.reason}</p></li>)}</ul></details>}
           {!!selected.subagents?.length && <div><h4 className="text-xs font-semibold flex items-center gap-1.5"><Bot size={14} />Underagenter</h4><ul className="mt-2 border-l border-indigo-400/30 pl-3 space-y-2">{selected.subagents.map(agent => <li key={agent.subId} className="text-xs"><p className="font-medium">{agent.name} · {runLabels[agent.status]}</p><p className="opacity-55">{clock(agent.startedAt)}{agent.finishedAt ? ` → ${clock(agent.finishedAt)}` : ''}</p>{agent.text && <p className="mt-1 opacity-70 whitespace-pre-wrap">{agent.text}</p>}</li>)}</ul></div>}
           {selected.text && <details className="text-sm"><summary className="cursor-pointer flex items-center gap-2 text-xs font-semibold"><FileText size={14} />Leverance fra opgaven</summary><div className="mt-3 max-h-96 overflow-auto"><ChatMarkdown text={selected.text} /></div></details>}
           {!!selected.artifacts.length && <ul className="text-xs space-y-1">{selected.artifacts.map((artifact, i) => <li key={i}>{artifact.url && /^(https?:|\/)/.test(artifact.url) ? <a className="underline text-indigo-600 dark:text-indigo-300" href={artifact.url} target="_blank" rel="noreferrer">{artifact.name}</a> : artifact.name}</li>)}</ul>}
@@ -83,6 +85,7 @@ export default function OrbitWorkMap({ run, services, connected, historical = fa
         </div>
       </div>}
     </>}
+    {run.contextManifest && <div className="px-4 pb-4"><RunContextPanel run={run} /></div>}
     <div className="border-t border-current/10 p-4 grid sm:grid-cols-2 gap-4 text-xs">
       <div><h3 className="font-semibold flex gap-2 items-center"><GitBranch size={14} />Kodeleverance</h3>{run.evidence ? <><p className="font-mono break-all mt-2">{run.evidence.commit}</p><p className="opacity-65 mt-1">{run.evidence.changedFiles.length} ændrede filer på kørselsgrenen</p><details className="mt-2"><summary className="cursor-pointer opacity-65">Filer og ændringsoversigt</summary><pre className="whitespace-pre-wrap break-all mt-2">{run.evidence.changedFiles.join('\n')}\n{run.evidence.diffStat}</pre></details></> : <p className="opacity-55 mt-2">Ingen Git-leverance registreret endnu.</p>}</div>
       <div><h3 className="font-semibold flex gap-2 items-center"><ShieldCheck size={14} />Faktiske kontroller</h3>{run.verification?.checks.length ? <ul className="mt-2 space-y-2">{run.verification.checks.map((check, index) => <li key={index}><details><summary className="cursor-pointer flex gap-2 items-center">{check.status === 'passed' && <CheckCircle2 size={12} className="text-emerald-500" />}{check.name}: {check.status === 'passed' ? 'Bestået' : check.status} · exit {check.exitCode ?? 'ukendt'}</summary><pre className="whitespace-pre-wrap break-all max-h-48 overflow-auto mt-2 p-2 bg-black/5 rounded">{check.output}</pre></details></li>)}</ul> : <p className="opacity-55 mt-2">Ingen udførte kontroller registreret. Leverancen er ikke dokumenteret testet.</p>}</div>

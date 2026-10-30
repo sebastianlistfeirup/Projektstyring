@@ -78,6 +78,9 @@ test('upload bible → work order → isolated code → reload → real test evi
   expect(readFileSync(join(source, 'game.txt'), 'utf8')).toBe('original');
   const run = (await (await request.get(`${base}/api/ai/swarm`)).json()).run;
   expect(run.bible.length).toBeGreaterThan(6000);
+  expect(run.contextManifest.documents[0].version).toBe(1);
+  await page.getByText('Anvendt projektgrundlag', { exact: false }).first().click();
+  await expect(page.getByText('Projektbibel', { exact: false }).last()).toBeVisible();
   expect(run.verification.checks[0].exitCode).toBe(0);
   expect(run.evidence.changedFiles).toContain('game.txt');
   await expect(page.locator('table').filter({ hasText: 'game.txt' })).toBeVisible();
@@ -240,6 +243,12 @@ test('work map explains dependencies and preserves historical tool evidence and 
   await page.screenshot({ path: testInfo.outputPath('work-map-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(map).toBeVisible();
+  await map.getByRole('heading', { name: 'Faktiske kontroller' }).scrollIntoViewIfNeeded();
+  await expect(map.getByRole('heading', { name: 'Faktiske kontroller' })).toBeInViewport();
+  await map.getByRole('button', { name: 'Opgave 1: Læs den gældende bibel' }).scrollIntoViewIfNeeded();
+  await map.getByRole('button', { name: 'Opgave 1: Læs den gældende bibel' }).click();
+  await map.getByRole('heading', { name: 'Seneste værktøjshændelser' }).scrollIntoViewIfNeeded();
+  await expect(map.getByRole('heading', { name: 'Seneste værktøjshændelser' })).toBeInViewport();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await testInfo.attach('Arbejdskort mobile', { body: await page.screenshot({ path: testInfo.outputPath('work-map-mobile.png'), fullPage: true }), contentType: 'image/png' });
 });

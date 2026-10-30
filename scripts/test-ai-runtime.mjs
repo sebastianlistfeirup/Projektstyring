@@ -82,12 +82,14 @@ test('resume keeps completed results, full bible, instructions and work director
   await start(dirs, { predefinedJobs: [job('a', 'FIRST'), job('b', 'FAIL_MARKER', [0])] });
   const previousRun = readRun(dirs, 'test');
   previousRun.instructions = ['Retain this instruction'];
+  previousRun.contextManifest = { version: 1, documents: [{ id: 'old-bible' }] };
   previousRun.jobs[1].description = 'SECOND';
   await start(dirs, { runId: 'resumed', previousRun, resumeDir: previousRun.workDir, bible: previousRun.bible, predefinedJobs: previousRun.jobs });
   const resumed = readRun(dirs, 'resumed');
   assert.equal(resumed.status, 'done');
   assert.equal(resumed.results.length, 2);
   assert.equal(resumed.workDir, previousRun.workDir);
+  assert.deepEqual(resumed.contextManifest, previousRun.contextManifest);
   assert.ok(!resumed.events.some(e => e.type === 'job_start' && e.job.id === 'a'));
   assert.match(resumed.results[1].text, /FIRST/);
   assert.match(resumed.results[1].text, /FULL_BIBLE/);

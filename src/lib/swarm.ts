@@ -15,6 +15,7 @@ export interface SwarmSubagent {
 }
 
 export interface SwarmJob {
+  contextDocuments?: { path: string; status: string; bytes?: number; sha256?: string; reason?: string }[];
   actions?: { id: string; kind: string; label: string; status: 'running' | 'done' | 'error'; detail: string; at: number }[];
   id: string;
   title: string;
@@ -39,6 +40,10 @@ export interface SwarmJob {
 }
 
 export interface SwarmRun {
+  contextManifest?: {
+    version: number; capturedAt: string; projectId: string; projectName: string; releaseGoal: string; scopeTaskIds: string[] | null;
+    documents: { kind: string; id: string; title: string; sha256: string; characters: number; version?: number | null; state?: string; updatedAt?: string | null }[];
+  };
   projectPlan?: import('./types').ProjectPlan;
   projectPlanError?: string;
   heartbeatAt?: number;

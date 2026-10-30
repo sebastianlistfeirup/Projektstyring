@@ -433,6 +433,11 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       const run = JSON.parse(readFileSync(p, 'utf8'));
       const lines = [`# ${run.goal ?? run.runId}`, '', `Kørsel: \`${run.runId}\` · Status: ${run.status ?? 'ukendt'} · Tilstand: ${run.mode ?? 'standard'}`, ''];
       if (run.repository) lines.push(`Repository: ${run.repository.source}`, `Arbejdsgren: ${run.repository.branch}`, `Commit: ${run.evidence?.commit ?? 'Ingen samlet verificeret leverance'}`, '');
+      if (run.contextManifest) {
+        lines.push('## Anvendt projektgrundlag', '', `Fastlagt: ${run.contextManifest.capturedAt}`, `Versionsmål: ${run.contextManifest.releaseGoal || 'Ikke fastlagt'}`, '');
+        for (const doc of run.contextManifest.documents) lines.push(`- ${doc.title} (${doc.kind}${doc.version ? `, version ${doc.version}` : ''}${doc.state ? `, ${doc.state}` : ''}) · ${doc.characters} tegn · SHA-256: ${doc.sha256}`);
+        lines.push('');
+      }
       lines.push(`Verifikation: ${run.verification?.status ?? 'ikke kørt'}`, '');
       for (const check of run.verification?.checks ?? []) lines.push(`### ${check.name}`, '', `Status: ${check.status} · Exitkode: ${check.exitCode ?? 'ukendt'}`, '', '~~~~text', String(check.output ?? ''), '~~~~', '');
       for (const job of (run.jobs ?? []).filter(j => j.status !== 'done')) lines.push(`### ${job.title} — ${job.status}`, '', job.error ?? 'Ingen godkendt leverance.', '');
@@ -575,7 +580,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     try { input = getSnapshot ? projectExecution(getSnapshot(), req.body ?? {}) : req.body ?? {}; }
     catch (error) { return res.status(409).json({ ok: false, reason: error.message }); }
     const emit = sse(res);
-    const { goal, bible, attachments, jobs, mode, pauseAfterPlan, projectId, taskId, repositoryPath, checks } = input;
+    const { goal, bible, attachments, jobs, mode, pauseAfterPlan, projectId, taskId, repositoryPath, checks, contextManifest } = input;
     const runId = randomUUID().slice(0, 12);
     const cfg = loadConfig();
     try {
@@ -583,7 +588,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
         runId,
         goal: String(goal ?? ''),
         bible: String(bible ?? ''),
-        attachments, projectId, taskId,
+        attachments, projectId, taskId, contextManifest,
         repository: repositoryPath ? { source: String(repositoryPath) } : null,
         checks: validateChecks(checks ?? []),
         predefinedJobs: jobs,
