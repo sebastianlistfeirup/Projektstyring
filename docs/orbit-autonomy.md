@@ -176,6 +176,7 @@ På Windows sættes miljøvariablen med PowerShell: `$env:ORBIT_SOAK_MINUTES='12
 | Workspace-tests | 4 bestået |
 | Server-/AI-tests | 87 bestået |
 | Chromium-forløb | 17 bestået |
+| Produktionsafhængigheder | Fire kendte sårbarheder rettet med kompatible opdateringer; efterfølgende audit: 0 kendte |
 | Fem native CLI-distributioner | Version og alle anvendte flag fundet i hjælpen; ingen modelkald |
 
 Browserforløbene dækker:
@@ -198,6 +199,7 @@ Varighedsprøver bruger lokale prøveagenter, faktiske ventetider og rigtige fil
 - [180 minutters godkendelsespause](verification/approval-180-minutes-2026-10-30.json): 2.159 stikprøver uden automatisk start; gennemført efter eksplicit godkendelse. Ældre checkpoint uden modulhashes.
 - [90 minutters godkendelsespause](verification/approval-90-minutes-2026-10-30.json): 1.080 stikprøver, ingen jobstart før eksplicit godkendelse, derefter gennemført.
 - [60 minutters aktiv udførelse med seks jobs](verification/execution-60-minutes-six-jobs-2026-10-30.json): stop efter tre, genoptagelse af samme worktree, ingen gentagelse af afsluttede jobs og bestået kontrol af alle seks filer.
+- [Afhængighedskontrol](verification/dependencies-2026-10-30.json): MSAL Node 7.1.2, body-parser 2.4.0, qs 6.17.1 og postcss-selector-parser 6.1.5. Dette er registerets kendte advisories, ikke en komplet sikkerhedsrevision.
 - [Native CLI-kontrol](verification/native-cli-2026-10-30.json): Codex 0.166.0, Claude Code 2.1.314, Gemini CLI 0.66.0, Kimi Code 2.4.1 og Qwen Code 0.26.4.
 
 Browserkontroller: `npx playwright install chromium` efterfulgt af `npm run test:browser`. De starter isolerede testservere på 5173/4310 og kræver ledige porte. Lokale testdata ligger i en separat midlertidig mappe.

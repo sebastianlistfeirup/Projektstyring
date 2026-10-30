@@ -8,7 +8,7 @@ Et moderne, dansksproget projektstyringsværktøj til Windows – inspireret af 
 
 Chatten kan knytte en arbejdsordre til en isoleret Git-gren, vise agenternes faktiske arbejde og gemme commit, leverance og kontrolresultater. Plan-godkendelse, dependencyfejl, genoptagelse og backup er gjort eksplicitte. PDF/DOCX, billeder, versioneret projektbibel, WIP-grænser og afgrænset versionsscope understøtter arbejdet.
 
-Læs [opsætning, betalingsregler, datagrænser og verifikation](docs/orbit-autonomy.md) og [Realmreads første pilotforløb](docs/realmread-onboarding.md). Krav: Node.js 22.13+ (24 LTS anbefales), Git og `npm ci`. Flere dages autonomi og alle leverandørkonti er endnu ikke verificeret i et rigtigt projekt.
+Læs [opsætning, betalingsregler, datagrænser og verifikation](docs/orbit-autonomy.md), [Realmreads første pilotforløb](docs/realmread-onboarding.md) og [det prioriterede restarbejde](docs/orbit-next.md). Krav: Node.js 22.13+ (24 LTS anbefales), Git og `npm ci`. Flere dages autonomi og alle leverandørkonti er endnu ikke verificeret i et rigtigt projekt.
 
 ## Funktioner
 
