@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeAtomicJson } from './atomic-json.mjs';
 
-const VERSION = 1;
+const VERSION = 2;
 const validId = id => /^[a-zA-Z0-9_-]{1,100}$/.test(id);
 const text = (value, limit = 200) => String(value ?? '').slice(0, limit);
 const time = value => typeof value === 'number' ? value : Date.parse(value ?? '') || 0;
@@ -12,6 +12,7 @@ export function summarizeRun(run) {
     file: `${run.runId}.json`, runId: run.runId, goal: text(run.goal, 500), goalTruncated: String(run.goal ?? '').length > 500,
     projectId: run.projectId ?? null, taskId: run.taskId ?? null, status: run.status,
     startedAt: run.startedAt, finishedAt: run.finishedAt, orchestratorId: run.orchestratorId, mode: run.mode,
+    usage: run.usage ? { jobs: run.usage.jobs, byService: Object.fromEntries(Object.entries(run.usage.byService ?? {}).map(([id, usage]) => [id, { jobs: usage.jobs, kind: usage.kind }])) } : undefined,
     eventCount: run.eventCount ?? run.events?.length ?? 0,
     jobs: (run.jobs ?? []).map(job => ({ id: job.id, title: text(job.title), serviceId: job.serviceId,
       status: job.status, startedAt: job.startedAt, finishedAt: job.finishedAt })),

@@ -1049,6 +1049,8 @@ function CostsPanel() {
                 <span className="opacity-60">{t('swarm.costJobs')}: <b>{costs.totalJobs}</b></span>
                 <span className="text-emerald-400">{t('swarm.costEst')}: <b>{costs.estKr?.toFixed(2) ?? 'Ukendt'} kr</b></span>
               </div>
+              <p className="text-xs opacity-65 mb-2">Seneste {costs.windowRuns ?? costs.totalRuns} af {costs.totalAvailable ?? costs.totalRuns} gemte kørsler. Antal hovedjobs er aktivitet, ikke provider-kald eller fakturering.</p>
+              {!!costs.unreadable && <p className="text-xs text-amber-500 mb-2">{costs.unreadable} historikfiler kunne ikke læses.</p>}
               <div className="space-y-1">
                 {costs.byService.map((u) => (
                   <div key={u.id} className="flex items-center gap-2 text-[10.5px]">

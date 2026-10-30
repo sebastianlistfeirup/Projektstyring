@@ -64,6 +64,10 @@ test('HTTP approval, validation, browser disconnect and persisted results', asyn
   const history = await (await fetch(`${base}/api/ai/runs?limit=1&q=HTTP`)).json();
   assert.equal(history.total, 1); assert.equal(history.runs[0].runId, id);
   assert.equal(history.runs[0].bible, undefined); assert.equal(history.runs[0].results[0].text, undefined);
+  const costs = await (await fetch(`${base}/api/ai/costs`)).json();
+  assert.equal(costs.totalJobs, 1); assert.equal(costs.windowRuns, 1); assert.equal(costs.estKr, null);
+  const analysis = await (await fetch(`${base}/api/ai/analysis`)).json();
+  assert.equal(analysis.runs, 1); assert.equal(analysis.services[0].attempts, 1); assert.equal(analysis.services[0].errorRate, 0);
   for (const query of ['limit=0', 'limit=101', 'offset=-1', 'offset=1.5', 'q=a&q=b']) assert.equal((await fetch(`${base}/api/ai/runs?${query}`)).status, 400);
   const activityLog = await (await fetch(`${base}/api/ai/runs/${id}/events`)).text();
   assert.ok(activityLog.split('\n').filter(Boolean).map(line => JSON.parse(line)).some(event => event.type === 'run_finished'));

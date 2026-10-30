@@ -1,5 +1,5 @@
 // Orbit AI HTTP-ruter.
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, realpathSync, createReadStream } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, realpathSync, createReadStream } from 'fs';
 import { join, basename, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { serviceById, serviceAvailability, runChat, setSecretsDir, loadKeySecrets, saveKeySecrets, aiCfg, inspectCliInstallation, parseCliTemplate } from './ai-services.mjs';
@@ -13,6 +13,7 @@ import { importWorkshopJobs } from './ai-workshop.mjs';
 import { repositoryChanges, repositoryPatch } from './ai-diff.mjs';
 import { aiProcessSnapshot, stopAiProcesses } from './ai-processes.mjs';
 import { listRunSummaries } from './ai-history.mjs';
+import { summarizeAnalysis, summarizeUsage } from './ai-analytics.mjs';
 import { executeRun, swarmState, activeRuns, loadTemplates, saveUserTemplates, startTriggerScheduler, validateCron, pickOrchestrator, planWithLLM, parseJsonObject, projectMemoryDirs } from './ai-runtime.mjs';
 
 // ---- HTTP-ruter --------------------------------------------------------------
@@ -396,27 +397,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   // ---- omkostningsregnskab ----
   app.get('/api/ai/costs', (_req, res) => {
     try {
-      const byService = {};
-      let totalJobs = 0, totalRuns = 0;
-      for (const f of readdirSync(dirs.runs).filter((f) => f.endsWith('.json')).slice(0, 60)) {
-        let run;
-        try { run = JSON.parse(readFileSync(join(dirs.runs, f), 'utf8')); } catch { continue; }
-        if (!run.usage) continue;
-        totalRuns += 1;
-        totalJobs += run.usage.jobs ?? 0;
-        for (const [id, u] of Object.entries(run.usage.byService ?? {})) {
-          const cur = byService[id] ?? { id, jobs: 0, kind: u.kind };
-          cur.jobs += u.jobs;
-          byService[id] = cur;
-        }
-      }
-      const services = Object.values(byService).map((u) => ({
-        ...u,
-        name: serviceById(u.id)?.name ?? u.id,
-        subscriptionCovered: false, // Historical counts cannot establish an account entitlement.
-        estKr: null,
-      })).sort((a, b) => b.jobs - a.jobs);
-      res.json({ ok: true, totalRuns, totalJobs, estKr: null, byService: services });
+      res.json({ ok: true, ...summarizeUsage(listRunSummaries(dirs, { limit: 60 }), id => serviceById(id)?.name ?? id) });
     } catch (e) {
       res.status(500).json({ ok: false, reason: e.message });
     }
@@ -664,36 +645,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   // ---- fejl- og mønsteranalyse på tværs af kørsler ----
   app.get('/api/ai/analysis', (_req, res) => {
     try {
-      const byTitle = {};
-      const byService = {};
-      let runs = 0, errors = 0, totalMs = 0, timed = 0;
-      for (const f of readdirSync(dirs.runs).filter((f) => f.endsWith('.json')).slice(0, 60)) {
-        let run;
-        try { run = JSON.parse(readFileSync(join(dirs.runs, f), 'utf8')); } catch { continue; }
-        runs += 1;
-        for (const j of run.jobs ?? []) {
-          const svc = serviceById(j.serviceId);
-          const s = byService[j.serviceId] ?? { id: j.serviceId, jobs: 0, errors: 0, ms: 0 };
-          s.jobs += 1;
-          if (j.startedAt && j.finishedAt) { s.ms += j.finishedAt - j.startedAt; totalMs += j.finishedAt - j.startedAt; timed += 1; }
-          if (j.status === 'error') { s.errors += 1; errors += 1; const t = byTitle[j.title] ?? { title: j.title, count: 0 }; t.count += 1; byTitle[j.title] = t; }
-          byService[j.serviceId] = s;
-          void svc;
-        }
-      }
-      const errorTitles = Object.values(byTitle).sort((a, b) => b.count - a.count).slice(0, 5);
-      const services = Object.values(byService).map((s) => ({
-        ...s,
-        name: serviceById(s.id)?.name ?? s.id ?? '—',
-        avgMs: s.jobs ? Math.round(s.ms / Math.max(1, s.jobs - s.errors)) : 0,
-        errorRate: s.jobs ? Math.round((s.errors / s.jobs) * 100) : 0,
-      })).sort((a, b) => b.jobs - a.jobs);
-      const insights = [];
-      if (errorTitles.length) insights.push(`Hyppigste fejlende jobtype: "${errorTitles[0].title}" (${errorTitles[0].count}×). Overvej en skabelon med et ekstra review-job foran.`);
-      const worst = services.find((s) => s.errorRate >= 25 && s.jobs >= 3);
-      if (worst) insights.push(`"${worst.name}" fejler i ${worst.errorRate}% af jobbene — overvej at skifte tjeneste eller give jobbene mere kontekst.`);
-      if (timed > 3) insights.push(`Gennemsnitlig jobtid: ${Math.round(totalMs / timed / 1000)}s. Langsomme jobs med dommer-score under 6 kan med fordel races mod en anden tjeneste.`);
-      res.json({ ok: true, runs, errors, avgJobMs: timed ? Math.round(totalMs / timed) : 0, errorTitles, services, insights });
+      res.json({ ok: true, ...summarizeAnalysis(listRunSummaries(dirs, { limit: 60 }), id => serviceById(id)?.name ?? id) });
     } catch (e) {
       res.status(500).json({ ok: false, reason: e.message });
     }

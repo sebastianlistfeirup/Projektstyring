@@ -325,6 +325,7 @@ export async function suggestTemplate(goal: string, bible?: string, attachments?
 }
 
 export interface CostSummary {
+  windowRuns?: number; totalAvailable?: number; unreadable?: number;
   totalRuns: number;
   totalJobs: number;
   estKr: number | null;
@@ -489,6 +490,7 @@ export async function prioritizeTasks(tasks: { ref: string; title: string; dueDa
 }
 
 export interface AiAnalysis {
+  windowRuns?: number; totalAvailable?: number; unreadable?: number;
   runs: number;
   errors: number;
   avgJobMs: number;
