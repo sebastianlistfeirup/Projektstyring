@@ -16,7 +16,6 @@ import {
   FastForward,
   Flame,
   Gavel,
-  History,
   LayoutTemplate,
   Pause,
   Play,
@@ -67,6 +66,8 @@ import {
 import type { AiServiceInfo } from '../lib/aiApi';
 import OrbitWorkMap from '../components/OrbitWorkMap';
 import RunQueuePanel from '../components/RunQueuePanel';
+import RunHistory from '../components/RunHistory';
+import type { RunHistoryItem } from '../lib/aiApi';
 import { useStore } from '../store/useStore';
 import { presentRun, timestamp } from '../lib/runPresentation';
 import { AnalysisPanel, CompareRunsPanel, CopyDeliverableButton, JudgePanel, MiniMap, RunActionsBar } from './AiSwarmExtras';
@@ -1044,20 +1045,6 @@ function CostsPanel() {
 }
 /* ================= hovedvisning ================= */
 
-interface RunSummary {
-  status?: SwarmRun['status'];
-  startedAt?: number;
-  file: string;
-  runId: string;
-  goal: string;
-  finishedAt?: string | number;
-  results?: { jobId: string; title: string; text?: string; artifacts?: SwarmJob['artifacts'] }[];
-  jobs?: unknown[];
-  orchestratorId?: string | null;
-  mode?: string;
-  events?: SwarmEvent[];
-}
-
 interface ReplayState {
   base: SwarmRun;
   events: SwarmEvent[];
@@ -1081,7 +1068,6 @@ export function AiSwarmView() {
   const run = useSwarm((s) => s.run);
   const services = useSwarm((s) => s.services);
   const approval = useSwarm((s) => s.approval);
-  const [history, setHistory] = useState<RunSummary[]>([]);
   const [archived, setArchived] = useState<SwarmRun | null>(null);
   const [replay, setReplay] = useState<ReplayState | null>(null);
   const [archivedEvents, setArchivedEvents] = useState<SwarmEvent[]>([]);
@@ -1113,10 +1099,6 @@ export function AiSwarmView() {
     return () => clearInterval(id);
   }, [replay?.playing]);
 
-  useEffect(() => {
-    fetch('http://127.0.0.1:4310/api/ai/runs').then((r) => r.json()).then((j) => setHistory((j?.runs ?? []).slice(0, 6))).catch(() => undefined);
-  }, [run?.status]);
-
   const shown = replay ? replayEvents(replay.base, replay.events, replay.cursor) : (archived ?? run);
   const active = !archived && !replay && shown?.status === 'running';
   const jobs = shown?.jobs ?? [];
@@ -1140,7 +1122,7 @@ export function AiSwarmView() {
     return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
   }, [jobs]);
 
-  const openArchived = async (r: RunSummary) => {
+  const openArchived = async (r: RunHistoryItem) => {
     const request = ++historyRequest.current;
     try {
       const response = await fetch(`${BASE_URL}/api/ai/runs/${encodeURIComponent(r.runId)}`);
@@ -1375,28 +1357,7 @@ export function AiSwarmView() {
 
       </details>
 
-      {/* historik */}
-      {history.length > 0 && (
-        <div className="rounded-2xl border border-white/10 glass-panel p-3">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider opacity-60 flex items-center gap-1.5 mb-2"><History size={12} /> {t('swarm.history')}</h3>
-          <div className="flex flex-wrap gap-1.5">
-            {history.map((h) => (
-              <button
-                key={h.file}
-                onClick={() => void openArchived(h)}
-                className="rounded-xl border border-white/10 bg-black/10 dark:bg-white/5 px-2.5 py-1.5 text-left hover:border-indigo-400/40 transition max-w-[240px]"
-              >
-                <div className="text-[11px] truncate font-medium">{h.goal || h.runId}</div>
-                <div className="text-[9.5px] opacity-45">
-                  {h.finishedAt ? new Date(h.finishedAt).toLocaleString('da-DK', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
-                  {' '}· {(h.results?.length ?? 0)} {t('swarm.delivered')}
-                  {(h.events?.length ?? 0) > 1 ? ` · ▶ ${t('swarm.replay')}` : ''}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      <RunHistory refreshKey={`${run?.runId ?? ''}:${run?.status ?? ''}`} onOpen={r => void openArchived(r)} />
 
       {/* godkendelsesmodal til plan-pause */}
       {approval && <ApprovalModal services={services} onClose={() => undefined} />}

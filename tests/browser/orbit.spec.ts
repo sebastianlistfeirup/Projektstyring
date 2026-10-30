@@ -246,7 +246,7 @@ test('work map explains dependencies and preserves historical tool evidence and 
   };
   await page.addInitScript(() => { localStorage.setItem('orbit-toured', '1'); localStorage.setItem('swarm-sound', 'off'); });
   await page.route(`${base}/api/ai/swarm*`, route => route.fulfill({ json: { ok: true, run } }));
-  await page.route(`${base}/api/ai/runs`, route => route.fulfill({ json: { ok: true, runs: [{ ...run, file: 'map-fixture.json' }] } }));
+  await page.route(`${base}/api/ai/runs?*`, route => route.fulfill({ json: { ok: true, runs: [{ ...run, file: 'map-fixture.json' }] } }));
   await page.route(`${base}/api/ai/runs/map-fixture`, route => route.fulfill({ json: { ok: true, run } }));
   await page.goto('/#/swarm');
   const map = page.getByRole('region', { name: 'Arbejdskort', exact: true });
@@ -474,4 +474,48 @@ test('dependent work orders continue on verified code while their human review a
   const branchChanges = await (await request.get(`${base}/api/ai/runs/${run.runId}/changes?scope=project`)).json();
   expect(branchChanges.files.map((file: { path: string }) => file.path)).toEqual(['first-delivery.txt', 'game.txt', 'second-delivery.txt']);
   expect(readFileSync(join(source, 'game.txt'), 'utf8')).toBe('original');
+});
+
+
+test('run history searches, filters and pages without fetching full deliveries until opened', async ({ page }) => {
+  const projectId = await setup(page);
+  const startedAt = Date.parse('2026-10-01T09:00:00Z');
+  const records = Array.from({ length: 29 }, (_, index) => ({ runId: `history-${index}`, file: `history-${index}.json`,
+    goal: index === 24 ? 'Unik genopfyldning' : `Historisk arbejdsordre ${index}`, projectId: index % 2 ? 'other-project' : projectId,
+    startedAt: startedAt - index * 60000, finishedAt: startedAt - index * 60000 + 1000, status: 'done', jobs: [], results: [], eventCount: 2 }));
+  let detailRequests = 0;
+  await page.route(`${base}/api/ai/swarm*`, route => route.fulfill({ json: { ok: true, run: null } }));
+  await page.route(`${base}/api/ai/runs?*`, route => {
+    const params = new URL(route.request().url()).searchParams;
+    const q = (params.get('q') ?? '').toLowerCase(), project = params.get('projectId'), offset = Number(params.get('offset') ?? 0), limit = Number(params.get('limit') ?? 20);
+    const selected = records.filter(run => (!project || run.projectId === project) && run.goal.toLowerCase().includes(q));
+    return route.fulfill({ json: { ok: true, runs: selected.slice(offset, offset + limit), total: selected.length, nextOffset: offset + limit < selected.length ? offset + limit : null, unreadable: 0 } });
+  });
+  await page.route(`${base}/api/ai/runs/history-*`, route => {
+    detailRequests++;
+    const run = records.find(run => route.request().url().endsWith(run.runId));
+    return route.fulfill({ json: { ok: true, run: { ...run, bible: 'Full document fetched only on demand', events: [], notes: [] } } });
+  });
+  await page.goto('/#/swarm');
+  const history = page.getByRole('region', { name: 'Kørselshistorik', exact: true });
+  await expect(history).toContainText('Viser 1–12 af 29');
+  await history.getByRole('button', { name: 'Ældre', exact: true }).click();
+  await expect(history).toContainText('Viser 13–24 af 29');
+  await history.getByRole('button', { name: 'Ældre', exact: true }).click();
+  await expect(history).toContainText('Viser 25–29 af 29');
+  await expect(history.getByRole('button', { name: 'Ældre', exact: true })).toBeDisabled();
+  await history.getByRole('searchbox', { name: 'Søg i kørselshistorik' }).fill('genopfyldning');
+  await expect(history).toContainText('Viser 1–1 af 1');
+  expect(detailRequests).toBe(0);
+  await history.getByRole('button').filter({ hasText: 'Unik genopfyldning' }).click();
+  await expect(page.getByRole('region', { name: 'Arbejdskort', exact: true })).toContainText('Gemt forløb');
+  expect(detailRequests).toBe(1);
+  await history.getByRole('searchbox', { name: 'Søg i kørselshistorik' }).fill('');
+  await history.getByLabel('Projekt i kørselshistorik').selectOption(projectId);
+  await expect(history).toContainText('Viser 1–12 af 15');
+  await history.getByRole('searchbox', { name: 'Søg i kørselshistorik' }).fill('Findes ikke');
+  await expect(history).toContainText('Ingen kørsler matcher dit valg.');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await history.scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

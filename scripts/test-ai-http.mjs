@@ -60,6 +60,10 @@ test('HTTP approval, validation, browser disconnect and persisted results', asyn
   const live = (await (await fetch(`${base}/api/ai/swarm?view=live`)).json()).run;
   assert.equal(live.bible, undefined); assert.equal(live.runId, saved.runId);
   assert.equal(saved.bible, 'Persistent bible');
+  const history = await (await fetch(`${base}/api/ai/runs?limit=1&q=HTTP`)).json();
+  assert.equal(history.total, 1); assert.equal(history.runs[0].runId, id);
+  assert.equal(history.runs[0].bible, undefined); assert.equal(history.runs[0].results[0].text, undefined);
+  for (const query of ['limit=0', 'limit=101', 'offset=-1', 'offset=1.5', 'q=a&q=b']) assert.equal((await fetch(`${base}/api/ai/runs?${query}`)).status, 400);
   const activityLog = await (await fetch(`${base}/api/ai/runs/${id}/events`)).text();
   assert.ok(activityLog.split('\n').filter(Boolean).map(line => JSON.parse(line)).some(event => event.type === 'run_finished'));
   const forbidden = await post('/api/ai/orchestrate', { goal: 'must not run' }, { Origin: 'https://untrusted.example' });

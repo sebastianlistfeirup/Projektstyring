@@ -12,6 +12,7 @@ import { readRun, recoverRuns, validatePlan, runPath, withRunEvents, eventJourna
 import { importWorkshopJobs } from './ai-workshop.mjs';
 import { repositoryChanges, repositoryPatch } from './ai-diff.mjs';
 import { aiProcessSnapshot, stopAiProcesses } from './ai-processes.mjs';
+import { listRunSummaries } from './ai-history.mjs';
 import { executeRun, swarmState, activeRuns, loadTemplates, saveUserTemplates, startTriggerScheduler, validateCron, pickOrchestrator, planWithLLM, parseJsonObject, projectMemoryDirs } from './ai-runtime.mjs';
 
 // ---- HTTP-ruter --------------------------------------------------------------
@@ -264,11 +265,12 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     res.json({ ok: true, run: req.query.view === 'live' ? liveRunView(run) : run, processes: aiProcessSnapshot() });
   });
 
-  app.get('/api/ai/runs', (_req, res) => {
-    const runs = readdirSync(dirs.runs).filter((f) => f.endsWith('.json')).map((f) => {
-      try { const run = JSON.parse(readFileSync(join(dirs.runs, f), 'utf8')); return run.runId ? { file: f, ...run } : null; } catch { return null; }
-    }).filter(Boolean).sort((a, b) => String(b.finishedAt).localeCompare(String(a.finishedAt))).slice(0, 20);
-    res.json({ ok: true, runs });
+  app.get('/api/ai/runs', (req, res) => {
+    const limit = Number(req.query.limit ?? 20), offset = Number(req.query.offset ?? 0);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0 ||
+      (req.query.q !== undefined && (typeof req.query.q !== 'string' || req.query.q.length > 200)) ||
+      (req.query.projectId !== undefined && typeof req.query.projectId !== 'string')) return res.status(400).json({ ok: false, reason: 'Ugyldigt historikfilter.' });
+    res.json({ ok: true, ...listRunSummaries(dirs, { limit, offset, query: req.query.q, projectId: req.query.projectId }) });
   });
 
   app.get('/api/ai/runs/:runId', (req, res) => {

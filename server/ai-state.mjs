@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync, readFileSync, statSync, readdirSync, openSync, fsyncSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeAtomicJson } from './atomic-json.mjs';
+import { saveRunSummary } from './ai-history.mjs';
 
 export const TERMINAL = new Set(['done', 'error', 'partial', 'cancelled', 'blocked', 'interrupted']);
 
@@ -74,6 +75,7 @@ export function runPath(dirs, runId) {
 export function saveRun(dirs, run) {
   mkdirSync(dirs.runs, { recursive: true });
   writeAtomicJson(runPath(dirs, run.runId), { ...run, schemaVersion: 2 });
+  try { saveRunSummary(dirs, run); } catch { /* Derived index; full run is saved. */ }
 }
 
 export function eventJournalPath(dirs, runId) {

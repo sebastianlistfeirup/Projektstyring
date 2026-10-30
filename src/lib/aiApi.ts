@@ -509,7 +509,11 @@ export interface RunHistoryItem {
   file: string;
   runId: string;
   goal: string;
-  finishedAt?: string;
+  finishedAt?: string | number;
+  startedAt?: number;
+  status?: string;
+  eventCount?: number;
+  goalTruncated?: boolean;
   results?: { jobId: string; title: string; text?: string; artifacts?: unknown[]; score?: number | null }[];
   jobs?: { id: string; title: string; serviceId: string | null; phase: string; dependsOn: number[]; description: string; team?: boolean; startedAt?: number | null; finishedAt?: number | null; status?: string }[];
   orchestratorId?: string | null;
@@ -519,7 +523,7 @@ export interface RunHistoryItem {
 
 export async function fetchRunHistory(limit = 20): Promise<RunHistoryItem[]> {
   try {
-    const r = await fetch(`${BASE}/api/ai/runs`);
+    const r = await fetch(`${BASE}/api/ai/runs?limit=${Math.max(1, Math.min(100, limit))}`);
     const j = await r.json();
     return j?.ok ? (j.runs ?? []).slice(0, limit) : [];
   } catch {
