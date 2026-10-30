@@ -35,6 +35,10 @@ Direkte chat med én tjeneste er til læsning/rådgivning. Repositoryændringer 
 
 Grænser: højst 100 jobs i en plan, én CLI-proces højst 60 minutter, hver konfigureret kontrol højst 10 minutter og højst 20 MB stdout pr. CLI-job. Store opgaver skal opdeles. Der er ikke implementeret en generel døgnkørende multiworker-platform, automatisk kvotefornyelse eller automatisk merge/deploy.
 
+## Tidligere AI-værksted
+
+AI-værkstedets separate startknap er erstattet af en gennemgået overførsel til almindelige arbejdsordrer. Vælg ét projekt og de ønskede jobs. Beskrivelser, spørgsmål/svar, historiske resultater og afhængigheder bevares; manglende eller cirkulære forgængere blokerer overførslen. Gentagelse skaber ikke dubletter. Alle nye arbejdsordrer begynder i backlog, også når et gammelt job var markeret færdigt. Versionens scope ændres ikke. De oprindelige jobs bevares, og overførte kort åbner arbejdsordren med dens aktuelle status.
+
 ## Tjenester og betaling
 
 Alle eksterne transports kræver `billingMode: included` og `noExtraCharges: true`. Ukendt og særskilt forbrugsbetaling afvises. Den tidligere `allowPaidApis`-genvej giver ikke længere adgang, heller ikke i den ældre opgaveassistent.
@@ -137,7 +141,7 @@ På Windows sættes miljøvariablen med PowerShell: `$env:ORBIT_SOAK_MINUTES='12
 
 ## Verifikation udført under udviklingen
 
-30. oktober 2026: Linux-build, lint uden fejl (eksisterende React-advarsler), 21 importkontroller, 4 workspace-tests og 67 server-/AI-tests bestod. Ti Playwright-forløb er afprøvet med rigtig Chromium: upload af bibel på over 6.000 tegn, offentliggørelse af bibelversion, repositorytilknytning, reel filkontrol, genindlæsning under udførelse, bevaret kilde-checkout, status til gennemgang, et fejlet forløb, der forblev fejlet i chatten, præcisering og filupload efter genindlæsning, serverafslutning med lukket browser, projektoprettelse på mobil, projektgennemgang med import uden dubletter samt sletning og gendannelse på tværs af åbne faner samt arbejdskortets afhængigheder, historik, tastatur og mobilvisning samt en reel testfejl med afgrænset automatisk rettelse og bevaret kontrolhistorik samt to arbejdsordrer fra den gemte kø, udført i rækkefølge med lukket browser samt billedvisning og samtaleadskilte kladder efter genindlæsning. Det tidligere checkpoint bestod også GitHub-kontrollerne på Windows efter en rettelse af absolutte programstier.
+30. oktober 2026: Linux-build, lint uden fejl (eksisterende React-advarsler), 21 importkontroller, 4 workspace-tests og 69 server-/AI-tests bestod. Elleve Playwright-forløb er afprøvet med rigtig Chromium: upload af bibel på over 6.000 tegn, offentliggørelse af bibelversion, repositorytilknytning, reel filkontrol, genindlæsning under udførelse, bevaret kilde-checkout, status til gennemgang, et fejlet forløb, der forblev fejlet i chatten, præcisering og filupload efter genindlæsning, serverafslutning med lukket browser, projektoprettelse på mobil, projektgennemgang med import uden dubletter samt sletning og gendannelse på tværs af åbne faner samt arbejdskortets afhængigheder, historik, tastatur og mobilvisning samt en reel testfejl med afgrænset automatisk rettelse og bevaret kontrolhistorik samt to arbejdsordrer fra den gemte kø, udført i rækkefølge med lukket browser samt billedvisning og samtaleadskilte kladder efter genindlæsning samt overførsel fra det tidligere AI-værksted med afhængigheder og uden dubletter. Det tidligere checkpoint bestod også GitHub-kontrollerne på Windows efter en rettelse af absolutte programstier.
 
 Godkendelsespausen blev desuden afprøvet i 12 faktiske minutter med 144 stikprøver. Ingen jobstart skete før eksplicit godkendelse. Dette er en afgrænset varighedstest med en lokal prøveagent, ikke dokumentation for flere døgns autonomi med rigtige udbydere.
 

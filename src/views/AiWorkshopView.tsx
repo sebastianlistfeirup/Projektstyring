@@ -17,8 +17,8 @@ import {
 import { useStore } from '../store/useStore';
 import { useLang, t } from '../lib/i18n';
 import { cn } from '../lib/utils';
-import { streamOrchestrate } from '../lib/aiApi';
-import { connectSwarm, useSwarm } from '../lib/swarm';
+import WorkshopImport from '../components/WorkshopImport';
+import { useSwarm } from '../lib/swarm';
 import type { AiAgent, AiJob, AiJobStatus, AiPhase } from '../lib/types';
 
 /* ---------- metadata ---------- */
@@ -390,16 +390,22 @@ export default function AiWorkshopView() {
   useLang();
   const projects = useStore((s) => s.projects);
   const agents = useStore((s) => s.aiAgents);
-  const jobs = useStore((s) => s.aiJobs);
+  const legacyJobs = useStore((s) => s.aiJobs);
+  const tasks = useStore((s) => s.tasks);
+  const selectTask = useStore((s) => s.selectTask);
+  const jobs = useMemo(() => legacyJobs.map(job => {
+    const task = tasks.find(task => task.projectId === job.projectId && task.aiWorkshopSource?.jobId === job.id);
+    if (!task) return job;
+    const status: AiJobStatus = task.status === 'done' ? 'done' : task.status === 'inprogress' ? 'inprogress' : task.status === 'inreview' ? 'review' : task.status === 'canceled' ? 'blocked' : 'queued';
+    return { ...job, title: task.title, status };
+  }), [legacyJobs, tasks]);
   const orchestratorId = useStore((s) => s.orchestratorId);
   const setOrchestrator = useStore((s) => s.setOrchestrator);
   const toggleAiAgent = useStore((s) => s.toggleAiAgent);
-  const updateAiJob = useStore((s) => s.updateAiJob);
-  const bibles = useStore((s) => s.bibles);
 
   const [projectFilter, setProjectFilter] = useState<string>('all');
   const [modal, setModal] = useState<{ job: AiJob | null; phase: AiPhase } | null>(null);
-  const [pipelineRunning, setPipelineRunning] = useState(false);
+  const [showImport, setShowImport] = useState(false);
 
   const filteredJobs = useMemo(
     () => jobs.filter((j) => projectFilter === 'all' || j.projectId === projectFilter),
@@ -413,43 +419,10 @@ export default function AiWorkshopView() {
   const doneCount = filteredJobs.filter((j) => j.status === 'done').length;
   const pct = filteredJobs.length ? Math.round((doneCount / filteredJobs.length) * 100) : 0;
 
-  // Kør alle kø-jobs i pipelinen via AI-motoren (companion).
-  const runPipeline = async () => {
-    const queued = filteredJobs.filter((j) => j.status === 'queued' && j.agentId);
-    if (!queued.length || pipelineRunning) return;
-    setPipelineRunning(true);
-    connectSwarm(); // så swarm-visningen kan følge med live, mens pipelinen kører
-    const serviceOf = (agentId: string | null) => agentId?.replace(/^ai-/, '') ?? null;
-    const idx = new Map(queued.map((j, i) => [j.id, i]));
-    const predefinedJobs = queued.map((j, i) => ({
-      id: `job-${i}`,
-      title: j.title,
-      serviceId: serviceOf(j.agentId),
-      phase: j.phase,
-      dependsOn: j.dependsOn.map((d) => idx.get(d)).filter((n): n is number => n !== undefined),
-      description: j.description || j.title,
-    }));
-    const goal = `Pipeline: ${queued.map((j) => j.title).join('; ')}`;
-    const bible = projectFilter !== 'all' ? bibles[projectFilter] ?? '' : '';
-    queued.forEach((j) => updateAiJob(j.id, { status: 'inprogress' }));
-    await streamOrchestrate(
-      { goal, bible: bible || undefined, jobs: predefinedJobs },
-      {
-        onEvent: (evt) => {
-          if (evt.type === 'job_done') {
-            const r = evt.result as { jobId: string; text: string };
-            const local = queued[Number(String(r.jobId).replace('job-', ''))];
-            if (local) updateAiJob(local.id, { status: 'review', result: r.text.slice(0, 4000) });
-          } else if (evt.type === 'job_error') {
-            const local = queued[Number(String((evt as { jobId?: string }).jobId ?? '').replace('job-', ''))];
-            if (local) updateAiJob(local.id, { status: 'blocked', question: String(evt.error ?? '') });
-          }
-        },
-        onError: () => queued.forEach((j) => updateAiJob(j.id, { status: 'blocked' })),
-      },
-      new AbortController().signal,
-    );
-    setPipelineRunning(false);
+  const openJob = (job: AiJob) => {
+    const task = tasks.find(task => task.projectId === job.projectId && task.aiWorkshopSource?.jobId === job.id);
+    if (task) selectTask(task.id);
+    else setModal({ job, phase: job.phase });
   };
 
   return (
@@ -465,6 +438,7 @@ export default function AiWorkshopView() {
           </div>
           <div className="flex items-center gap-2">
             <select
+              aria-label="Projekt i AI-værksted"
               value={projectFilter}
               onChange={(e) => setProjectFilter(e.target.value)}
               className="input w-auto rounded-xl text-xs"
@@ -474,14 +448,8 @@ export default function AiWorkshopView() {
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
-            <button
-              onClick={runPipeline}
-              disabled={pipelineRunning || !filteredJobs.some((j) => j.status === 'queued' && j.agentId)}
-              className="btn-primary rounded-xl disabled:opacity-40"
-              title={t('ai.runPipelineHint')}
-            >
-              {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              {t('ai.runPipeline')}
+            <button onClick={() => setShowImport(value => !value)} disabled={projectFilter === 'all' || !filteredJobs.length} className="btn-primary rounded-xl disabled:opacity-40" title="Vælg ét projekt og saml dets AI-jobs som almindelige arbejdsordrer">
+              Overfør til arbejdsordrer
             </button>
             <button onClick={() => setModal({ job: null, phase: 'concept' })} className="btn-primary rounded-xl">
               <Plus className="h-4 w-4" />
@@ -491,7 +459,11 @@ export default function AiWorkshopView() {
         </div>
 
         {/* Live sværm-banner */}
-        <SwarmLiveBar />
+        <div className="mb-4 rounded-xl bg-indigo-500/5 p-3 text-sm">
+        AI-værkstedet samler tidligere jobs og forslag. Udførelse sker fra almindelige arbejdsordrer i Orbit-chatten eller AI-køen, hvor projektets bibel, repository og kontroller følger med. Vælg ét projekt for at overføre jobs. Overførte kort åbner arbejdsordren og viser dens aktuelle status.
+      </div>
+      {showImport && projectFilter !== 'all' && <WorkshopImport key={projectFilter} projectId={projectFilter} jobs={legacyJobs.filter(job => job.projectId === projectFilter)} />}
+      <SwarmLiveBar />
 
         {/* Agent-roster */}
         <div className="mb-6 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
@@ -590,7 +562,7 @@ export default function AiWorkshopView() {
                         </p>
                       ) : (
                         phaseJobs.map((job) => (
-                          <JobCard key={job.id} job={job} agents={agents} jobs={filteredJobs} onEdit={(j) => setModal({ job: j, phase: j.phase })} />
+                          <JobCard key={job.id} job={job} agents={agents} jobs={filteredJobs} onEdit={openJob} />
                         ))
                       )}
                     </div>
@@ -657,7 +629,7 @@ export default function AiWorkshopView() {
                   {openQuestions.map((j) => (
                     <button
                       key={j.id}
-                      onClick={() => setModal({ job: j, phase: j.phase })}
+                      onClick={() => openJob(j)}
                       className="w-full rounded-xl border border-amber-500/20 bg-amber-500/[0.05] p-2.5 text-left transition-colors hover:bg-amber-500/10"
                     >
                       <p className="text-[12px] font-medium text-zinc-800 dark:text-zinc-100">{j.title}</p>
@@ -686,7 +658,7 @@ export default function AiWorkshopView() {
                     return (
                       <button
                         key={j.id}
-                        onClick={() => setModal({ job: j, phase: j.phase })}
+                        onClick={() => openJob(j)}
                         className="flex w-full items-center gap-2 rounded-xl border border-indigo-500/20 bg-indigo-500/[0.05] p-2 text-left transition-colors hover:bg-indigo-500/10"
                       >
                         <AgentDot agent={agent} size="sm" />

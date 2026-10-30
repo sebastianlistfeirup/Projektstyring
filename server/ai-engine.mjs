@@ -9,6 +9,7 @@ import { projectExecution } from './task-execution.mjs';
 import { importProjectPlan } from './project-plan.mjs';
 import { DurableRunQueue } from './ai-queue.mjs';
 import { readRun, recoverRuns, validatePlan, runPath, withRunEvents, eventJournalPath, liveRunView } from './ai-state.mjs';
+import { importWorkshopJobs } from './ai-workshop.mjs';
 import { executeRun, swarmState, activeRuns, loadTemplates, saveUserTemplates, startTriggerScheduler, validateCron, pickOrchestrator, planWithLLM, parseJsonObject, projectMemoryDirs } from './ai-runtime.mjs';
 
 // ---- HTTP-ruter --------------------------------------------------------------
@@ -263,6 +264,18 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
         res.on('close', () => stream.destroy()); stream.pipe(res);
       } else res.send((run.events ?? []).map(event => JSON.stringify(event)).join('\n'));
     } catch (error) { res.status(404).json({ ok: false, reason: error.message }); }
+  });
+
+  app.post('/api/ai/workshop/import', (req, res) => {
+    try {
+      if (!updateSnapshot) throw new Error('Projektlageret er ikke tilgængeligt.');
+      let imported;
+      updateSnapshot(snapshot => {
+        imported = importWorkshopJobs(snapshot, req.body?.projectId, req.body?.selectedIds);
+        return imported.snapshot;
+      });
+      res.json({ ok: true, createdIds: imported.createdIds, existingIds: imported.existingIds });
+    } catch (error) { res.status(400).json({ ok: false, reason: error.message }); }
   });
 
   app.post('/api/ai/runs/:runId/import-plan', (req, res) => {

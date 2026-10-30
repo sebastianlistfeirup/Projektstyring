@@ -349,3 +349,37 @@ test('image previews and unsent drafts survive reload without leaking uploads in
   await expect(page.locator('textarea').last()).toHaveValue('Anden kladde uden billeder.');
   await expect(page.getByRole('button', { name: 'Åbn billede: first-shot.png' })).toHaveCount(0);
 });
+
+test('legacy workshop jobs become canonical work orders without losing dependencies or duplicating work', async ({ page, request }) => {
+  await page.addInitScript(() => localStorage.setItem('orbit-toured', '1'));
+  await page.goto('/#/ai');
+  const fixture = await page.evaluate(async () => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts');
+    const store = useStore.getState(), project = store.addProject('Workshop migration');
+    const first = store.addAiJob({ projectId: project.id, title: 'Gennemgå tidligere kampkode', phase: 'testing', status: 'done', result: 'Historisk vurdering uden testbevis' });
+    const second = store.addAiJob({ projectId: project.id, title: 'Afprøv kamp og genopfyldning', phase: 'testing', dependsOn: [first.id], question: 'Bevar XP?', answer: 'Ja' });
+    store.updateProject(project.id, { scopeTaskIds: [] });
+    return { projectId: project.id, first: first.id, second: second.id };
+  });
+  await page.getByLabel('Projekt i AI-værksted').selectOption(fixture.projectId);
+  await page.getByRole('button', { name: 'Overfør til arbejdsordrer', exact: true }).click();
+  const panel = page.getByRole('region', { name: 'Overfør AI-jobs' });
+  await panel.getByRole('button', { name: 'Overfør 1 valgte jobs', exact: true }).click();
+  await expect(panel.getByRole('status')).toContainText('Vælg også forgængeren');
+  await panel.getByRole('checkbox', { name: 'Gennemgå tidligere kampkode', exact: true }).check();
+  await panel.getByRole('button', { name: 'Overfør 2 valgte jobs', exact: true }).click();
+  await expect(panel.getByRole('status')).toContainText('2 arbejdsordrer oprettet');
+  await panel.getByRole('button', { name: 'Overfør 2 valgte jobs', exact: true }).click();
+  await expect(panel.getByRole('status')).toContainText('0 arbejdsordrer oprettet');
+  const { snapshot } = await (await request.get(`${base}/api/sync/state`)).json();
+  const tasks = snapshot.tasks.filter((task: { projectId: string }) => task.projectId === fixture.projectId);
+  expect(tasks).toHaveLength(2); expect(tasks.map((task: { status: string }) => task.status)).toEqual(['backlog', 'backlog']);
+  const first = tasks.find((task: { aiWorkshopSource?: { jobId: string } }) => task.aiWorkshopSource?.jobId === fixture.first);
+  const second = tasks.find((task: { aiWorkshopSource?: { jobId: string } }) => task.aiWorkshopSource?.jobId === fixture.second);
+  expect(second.blockedBy).toEqual([first.id]); expect(second.description).toContain('Bevar XP?');
+  expect(first.description).toContain('ikke verificeret');
+  expect(snapshot.projects.find((project: { id: string }) => project.id === fixture.projectId).scopeTaskIds).toEqual([]);
+  await page.getByRole('button', { name: /Afprøv kamp og genopfyldning/ }).first().click();
+  await expect(page.getByRole('dialog').getByText('Orbit-arbejdsordre', { exact: false })).toBeVisible();
+});
