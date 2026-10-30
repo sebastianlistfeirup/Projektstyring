@@ -87,11 +87,17 @@ Strukturelle hændelser gemmes i en append-only journal; den aktuelle kørsel ho
 
 Historikken kan søges efter det viste mål eller kørsels-id og filtreres pr. projekt med sideskift til ældre kørsler. Listen bruger små, afledte indeksfiler; den fulde bibel og leverance hentes først, når en kørsel åbnes. Ældre kørsler får automatisk et indeks, og forældede indeks genopbygges fra den oprindelige fil. Ulæselige historikfiler oplyses og bevares.
 
-Arbejdskortet grupperer opgaver efter deres afhængigheder. En valgt opgave viser registrerede værktøjshændelser, underagenter, ventebegrundelse og leverance; tjenester kan fremhæves på tværs af forløbet. Kodecommit og faktisk udførte kontroller står særskilt. Heartbeat dokumenterer en svarende kørselsmotor, ikke model-fremdrift. Historik bevarer registrerede tidspunkter, og genafspilning viser først evidens ved den relevante hændelse. Den tidligere konstellation kan stadig vælges.
+Arbejdskortet grupperer opgaver efter deres afhængigheder. En valgt opgave viser registrerede værktøjshændelser, underagenter, ventebegrundelse og leverance; tjenester kan fremhæves på tværs af forløbet. Kodecommit og faktisk udførte kontroller står særskilt. Heartbeat dokumenterer en svarende kørselsmotor, ikke model-fremdrift. Historik bevarer registrerede tidspunkter, og genafspilning viser først evidens ved den relevante hændelse. Standardvisningen kombinerer servicekugler og arbejdskort; valget kan ændres og huskes. Alle ni tjenester har en hovedkugle, og flere jobs hos samme tjeneste samles dér. Qwen Code og lokal Qwen vises under samme Qwen-service. Underagenter er mindre forbundne kugler; eksplicitte forældrerelationer bevares fra native hændelser gennem server, historik og genafspilning. Uoplyste relationer bliver ikke opfundet som flere niveauer. Kugler og arbejdskort vælger samme arbejdsordre.
+
+![Servicekugler med demonstrationsdata](screenshots/orbit-services-demo.png)
+
+Kuglerne ovenfor viser ni tjenester og en registreret kæde af underagenter med kontrollerede demonstrationsdata.
 
 ![Orbit Live med demonstrationsdata](screenshots/orbit-live-demo.png)
 
 Billedet er taget i den rigtige brugerflade med en kontrolleret testfixture. Opgaver, modelnavne, underagent, commit og testresultat i billedet er demonstrationsdata; de beskriver ikke en gennemført Realmread-opgave.
+
+Kuglerne bruger statisk SVG til forbindelser og CSS-transform/opacity til aktivitet. Den tidligere canvas-løkke med gentegning hvert billedskift er fjernet. React-komponenten er memoiseret, og højst 12 satellitter pr. service vises; kun hovedtjenesternes aktivitetsring og den valgte aktive underagent animeres (højst 10 samtidige animationer); øvrige underagenter oplyses med antal og findes i opgavedetaljerne. Store animerede baggrundslag med sløringsfiltre er erstattet af en statisk gradient. Rene tekstdeltaer gentegner ikke kuglerne, og valg af satellitter bevarer deres forfædre inden for visningsgrænsen. Animation kan pauses og respekterer reduceret bevægelse. Det er en aktivitetsvisning, ikke en beregnet færdiggørelsesprocent.
 
 Der er endnu ikke en fælles MCP-servermanager eller en universal tool-calling-loop for alle modeller. Livekortet viser de strukturerede hændelser, adapteren modtager. Det opfinder ikke underagenter, og det viser ikke modellernes interne ræsonnementer.
 
@@ -120,6 +126,10 @@ Backup omfatter køfilen, og gendannelse genindlæser den på pause. Windows-sto
 - Codex modtager native billedargumenter; lokal Qwen/Ollama modtager base64-billeddata efter kontrol af modellens vision-kapabilitet. Modelprofilens cloudmarkeringer kontrolleres også, så et omdøbt cloudnavn ikke alene omgår betalingskontrollen.
 - Vedhæftninger gemmes på serveren og rehydreres ved senere ture. Browserens vilkårlige lokale filstier accepteres ikke som uploadreferencer.
 - Markdown vises med lister, tabeller og kodeblokke. Modeloutput får ikke lov at indsætte rå HTML. Store jobresultater vises som tydeligt markerede uddrag med link til fuld eksport.
+
+## Milepæle og datoplan
+
+Milepæle vises som klikbare diamanter på fristen eller, uden frist, startdatoen. De tegnes som tidspunkter frem for almindelige opgaveintervaller. På tidslinjen kan et valgt projekts datoer gemmes og sammenlignes med senere ændringer, nye daterede opgaver og opgaver, der er fjernet fra projektet. En ny gemning erstatter sammenligningsgrundlaget; den ændrer hverken opgavernes aktuelle datoer eller versionens scope.
 
 ## Data og gendannelse
 
@@ -174,8 +184,8 @@ På Windows sættes miljøvariablen med PowerShell: `$env:ORBIT_SOAK_MINUTES='12
 | Lint | Ingen fejl; React-advarsler består |
 | Importkontroller | 21 bestået |
 | Workspace-tests | 4 bestået |
-| Server-/AI-tests | 87 bestået |
-| Chromium-forløb | 17 bestået |
+| Server-/AI-tests | 88 bestået |
+| Chromium-forløb | 19 bestået |
 | Produktionsafhængigheder | Fire kendte sårbarheder rettet med kompatible opdateringer; efterfølgende audit: 0 kendte |
 | Fem native CLI-distributioner | Version og alle anvendte flag fundet i hjælpen; ingen modelkald |
 
@@ -200,6 +210,8 @@ Varighedsprøver bruger lokale prøveagenter, faktiske ventetider og rigtige fil
 - [90 minutters godkendelsespause](verification/approval-90-minutes-2026-10-30.json): 1.080 stikprøver, ingen jobstart før eksplicit godkendelse, derefter gennemført.
 - [60 minutters aktiv udførelse med seks jobs](verification/execution-60-minutes-six-jobs-2026-10-30.json): stop efter tre, genoptagelse af samme worktree, ingen gentagelse af afsluttede jobs og bestået kontrol af alle seks filer.
 - [Afhængighedskontrol](verification/dependencies-2026-10-30.json): MSAL Node 7.1.2, body-parser 2.4.0, qs 6.17.1 og postcss-selector-parser 6.1.5. Dette er registerets kendte advisories, ikke en komplet sikkerhedsrevision.
+- [60 minutters aktiv udførelse med tolv jobs](verification/execution-60-minutes-twelve-jobs-2026-10-30.json): 719 stikprøver, stop efter seks og genoptagelse af de sidste seks uden gentagelse; alle tolv filer bestod faktisk kontrol.
+- [Serviceuniversets stresprøve](verification/service-universe-2026-10-30.json): ni tjenester, ti jobs og 270 registrerede underagenter. 108 synlige satellitter og højst ti animationer. I 90 aktive frames var medianen 33,3 ms, 95-percentilen 33,5 ms og maksimum 100,1 ms; den separate pausestikprøve havde 50 ms ved 95-percentilen. Dette er en kort prøve i delt, headless Linux-miljø, ikke en garanti om billedhastighed på brugerens Windows-maskine.
 - [Native CLI-kontrol](verification/native-cli-2026-10-30.json): Codex 0.166.0, Claude Code 2.1.314, Gemini CLI 0.66.0, Kimi Code 2.4.1 og Qwen Code 0.26.4.
 
 Browserkontroller: `npx playwright install chromium` efterfulgt af `npm run test:browser`. De starter isolerede testservere på 5173/4310 og kræver ledige porte. Lokale testdata ligger i en separat midlertidig mappe.

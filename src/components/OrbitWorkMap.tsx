@@ -22,10 +22,12 @@ function clock(at: number | null | undefined) {
   return at ? new Date(at).toLocaleString('da-DK', { dateStyle: 'short', timeStyle: 'medium' }) : 'Ikke registreret';
 }
 
-export default function OrbitWorkMap({ run, services, connected, historical = false, now = Date.now() }: {
-  run: SwarmRun; services: Record<string, AiServiceInfo> | null; connected: boolean; historical?: boolean; now?: number;
+export default function OrbitWorkMap({ run, services, connected, historical = false, now = Date.now(), selectedJobId, onSelectJob }: {
+  run: SwarmRun; services: Record<string, AiServiceInfo> | null; connected: boolean; historical?: boolean; now?: number; selectedJobId?: string; onSelectJob?: (id: string) => void;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [localSelectedId, setLocalSelectedId] = useState<string | null>(null);
+  const selectedId = selectedJobId ?? localSelectedId;
+  const setSelectedId = onSelectJob ?? setLocalSelectedId;
   const [service, setService] = useState('all');
   const stages = useMemo(() => jobStages(run.jobs), [run.jobs]);
   const columns = Array.from(new Set(stages)).sort((a, b) => a - b);

@@ -632,7 +632,7 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
       claude: serviceId === 'claude',
       onDelta: delta,
       onProcess,
-      onEvent: native.jsonl ? agentEvents(serviceId, { onText: delta, onSubagent: event => onSubagent?.({ ...event, subId: `${callId}:${event.subId}` }), onAction: action => onAction?.({ ...action, id: `${callId}:${action.id}` }) }) : undefined,
+      onEvent: native.jsonl ? agentEvents(serviceId, { onText: delta, onSubagent: event => onSubagent?.({ ...event, subId: `${callId}:${event.subId}`, parentSubId: event.parentSubId ? `${callId}:${event.parentSubId}` : undefined }), onAction: action => onAction?.({ ...action, id: `${callId}:${action.id}` }) }) : undefined,
       signal,
     });
   } else if (svc.kind === 'local') {

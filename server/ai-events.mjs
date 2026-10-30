@@ -3,13 +3,13 @@
 export function agentEvents(provider, { onText, onAction, onSubagent }) {
   const tools = new Map();
   const action = (id, kind, label, status, detail = '') => onAction?.({ id, kind, label: String(label).slice(0, 300), status, detail: String(detail).slice(-3000), at: Date.now() });
-  const beginTool = (id, name, input = {}) => {
+  const beginTool = (id, name, input = {}, parentSubId) => {
     input = input && typeof input === 'object' ? input : {};
     const sub = ['Task', 'Agent', 'AgentSwarm'].includes(name);
     const command = ['Bash', 'run_shell_command', 'shell'].includes(name);
     const label = sub ? input.description ?? 'Underagent' : command ? input.command ?? name : input.file_path ?? input.path ?? name;
     tools.set(id, { sub, label, kind: name?.startsWith('mcp__') ? 'mcp' : command ? 'command' : 'tool' });
-    if (sub) onSubagent?.({ phase: 'start', subId: id, name: String(label).slice(0, 180) });
+    if (sub) onSubagent?.({ phase: 'start', subId: id, parentSubId: typeof parentSubId === 'string' ? parentSubId : undefined, name: String(label).slice(0, 180) });
     else action(id, tools.get(id).kind, label, 'running');
   };
   const endTool = (id, failed, detail = '') => {
@@ -39,7 +39,7 @@ export function agentEvents(provider, { onText, onAction, onSubagent }) {
           const child = item.agents_states?.[id];
           const terminal = ['completed', 'errored', 'shutdown'].includes(child?.status);
           if (!terminal && !['spawn_agent', 'send_input'].includes(item.tool)) continue;
-          onSubagent?.({ phase: terminal ? 'done' : 'start', subId: id, name: `Codex · ${item.tool ?? 'underagent'}`, error: child?.status === 'errored' ? 'Underagent fejlede' : undefined });
+          onSubagent?.({ phase: terminal ? 'done' : 'start', subId: id, parentSubId: item.sender_thread_id, name: `Codex · ${item.tool ?? 'underagent'}`, error: child?.status === 'errored' ? 'Underagent fejlede' : undefined });
         }
       }
       return;
@@ -73,7 +73,7 @@ export function agentEvents(provider, { onText, onAction, onSubagent }) {
     for (const b of ev.message?.content ?? []) {
       if (ev.type === 'assistant' && b.type === 'text' && b.text) onText?.(b.text);
       if (ev.type === 'assistant' && b.type === 'tool_use') {
-        beginTool(b.id, b.name, b.input);
+        beginTool(b.id, b.name, b.input, ev.parent_tool_use_id);
       }
       if (ev.type === 'user' && b.type === 'tool_result' && tools.has(b.tool_use_id)) {
         endTool(b.tool_use_id, b.is_error);

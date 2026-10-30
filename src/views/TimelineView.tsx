@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { addDays, differenceInCalendarDays, format, isWeekend, parseISO, startOfDay } from 'date-fns';
 import { da } from 'date-fns/locale';
-import { CalendarRange } from 'lucide-react';
+import { CalendarRange, Diamond } from 'lucide-react';
+import TimelineBaseline from '../components/TimelineBaseline';
 import { useStore } from '../store/useStore';
 import type { TaskStatus } from '../lib/types';
 import { useLang, t } from '../lib/i18n';
@@ -50,7 +51,7 @@ export default function TimelineView() {
       .filter((t) => t.startDate || t.dueDate)
       .map((t) => {
         const end = t.dueDate ? parseISO(t.dueDate) : parseISO(t.startDate!);
-        const start = t.startDate ? parseISO(t.startDate) : addDays(end, -3);
+        const start = t.isMilestone ? end : t.startDate ? parseISO(t.startDate) : addDays(end, -3);
         return { task: t, start, end };
       });
     dated.sort(
@@ -125,6 +126,7 @@ export default function TimelineView() {
       <div className="h-full overflow-auto">
         <div className="p-4 lg:p-6">
           <ViewHeader title={t('timeline.title')} subtitle={t('timeline.subtitle')} />
+          <TimelineBaseline />
           <EmptyState
             icon={<CalendarRange className="h-6 w-6" />}
             title={t('timeline.emptyTitle')}
@@ -163,8 +165,8 @@ export default function TimelineView() {
   const rowData = rows.map(({ task, start, end }, rowIndex) => {
     const clampedStart = start < windowStart ? windowStart : start;
     const clampedEnd = end > windowEnd ? windowEnd : end;
-    const left = offsetOf(clampedStart);
-    const width = Math.max(10, (differenceInCalendarDays(clampedEnd, clampedStart) + 1) * DAY_W - 3);
+    const left = offsetOf(clampedStart) + (task.isMilestone ? 9 : 0);
+    const width = task.isMilestone ? 18 : Math.max(10, (differenceInCalendarDays(clampedEnd, clampedStart) + 1) * DAY_W - 3);
     const done = task.status === 'done';
     return { task, left, width, done, rowIndex, clampedStart, clampedEnd };
   });
@@ -190,6 +192,7 @@ export default function TimelineView() {
     <div className="h-full overflow-auto">
       <div className="p-4 lg:p-6">
         <ViewHeader title={t('timeline.title')} subtitle={t('timeline.subtitle')} />
+          <TimelineBaseline />
         <div className="w-max min-w-full">
         <div className="sticky top-0 z-30 flex">
           <div className="sticky left-0 top-0 z-40 flex h-full w-64 shrink-0 items-end bg-zinc-100 pb-2 pl-2 dark:bg-[#17181c]">
@@ -343,7 +346,7 @@ export default function TimelineView() {
                   <Avatar user={users.find((u) => u.id === task.assigneeId)} size="xs" className="shrink-0" />
                 </div>
                 <div className="relative" style={{ width: totalWidth }}>
-                  <div
+                  {task.isMilestone ? <button type="button" aria-label={`Milepæl: ${task.title}`} title={`Milepæl · ${task.title} · ${formatDateShort(clampedEnd)}`} onClick={() => selectTask(task.id)} className="absolute top-1/2 -translate-y-1/2 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-400" style={{ left, color: STATUS_HEX[task.status] }}><Diamond size={18} fill="currentColor" /></button> : <div
                     title={`${taskRef(task, projects)} · ${task.title} · ${formatDateShort(clampedStart)} – ${formatDateShort(clampedEnd)}`}
                     className={cn(
                       'absolute top-1/2 flex h-3 -translate-y-1/2 items-center overflow-hidden rounded-full',
@@ -356,7 +359,7 @@ export default function TimelineView() {
                     {width >= 64 && (
                       <span className="truncate px-1.5 text-[10px] font-medium leading-none">{task.title}</span>
                     )}
-                  </div>
+                  </div>}
                 </div>
               </div>
             );

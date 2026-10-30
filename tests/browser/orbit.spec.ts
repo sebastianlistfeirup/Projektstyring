@@ -585,6 +585,79 @@ test('surviving recovery processes are visible with their interrupted run and di
 });
 
 
+test('timeline renders real milestones and compares saved dates without moving the current plan', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('orbit-toured', '1'));
+  await page.goto('/#/tidslinje');
+  const id = await page.evaluate(async () => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts');
+    // @ts-expect-error Vite browser module
+    const { pullAndMerge } = await import('/src/lib/sync.ts'); await pullAndMerge();
+    const store = useStore.getState(), project = store.addProject('Datoplan fixture');
+    const task = store.addTask({ projectId: project.id, title: 'Spilbar milepæl', startDate: '2026-10-01', dueDate: '2026-10-12' });
+    store.toggleMilestone(task.id); useStore.setState({ activeProjectId: project.id }); return task.id;
+  });
+  await expect(page.getByRole('button', { name: 'Milepæl: Spilbar milepæl', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Gem datoplan', exact: true }).click();
+  await page.evaluate(async id => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts'); useStore.getState().updateTask(id, { dueDate: '2026-10-20' });
+  }, id);
+  const plan = page.getByRole('region', { name: 'Gemt datoplan' });
+  await expect(plan).toContainText('1 ændringer'); await plan.getByText('Se datoændringer', { exact: true }).click();
+  await expect(plan.getByRole('row').filter({ hasText: 'Spilbar milepæl' })).toContainText('12. okt.');
+  await expect(plan.getByRole('row').filter({ hasText: 'Spilbar milepæl' })).toContainText('20. okt.');
+  await page.getByRole('button', { name: 'Milepæl: Spilbar milepæl', exact: true }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+});
+
+test('service spheres group jobs, retain nested satellites and keep animation work bounded', async ({ page }, testInfo) => {
+  await page.addInitScript(() => { localStorage.setItem('orbit-toured', '1'); localStorage.setItem('swarm-sound', 'off'); });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  const start = Date.now(), ids = ['claude', 'codex', 'gemini', 'grok', 'meshy', 'heygen', 'elevenlabs', 'kimi', 'qwen'];
+  const jobs = ids.map((serviceId, index) => ({ id: `service-${index}`, serviceId, title: `Demonstration ${serviceId}`, description: 'Kontrolleret visualiseringsfixture', phase: 'production', dependsOn: [], status: 'running', startedAt: start, finishedAt: null, notes: [], actions: [], artifacts: [], text: '', liveText: '', deltaCount: 0, lastDeltaAt: start,
+    subagents: Array.from({ length: 30 }, (_, child) => ({ subId: `child-${child}`, parentSubId: child === 1 ? 'child-0' : undefined, name: `${serviceId} underagent ${child + 1}`, status: 'running', startedAt: start, finishedAt: null, text: 'Demonstrationsdata' })) }));
+  jobs.push({ ...jobs[0], id: 'second-claude-job', title: 'Endnu en Claude-opgave', subagents: [] });
+  const run = { runId: 'service-universe-fixture', goal: 'Demonstration af servicekugler', status: 'running', startedAt: start, heartbeatAt: start, jobs, notes: [], results: [], events: [], orchestratorId: 'codex' };
+  await page.route(`${base}/api/ai/swarm*`, route => route.fulfill({ json: { ok: true, run } }));
+  await page.goto('/#/swarm');
+  const universe = page.getByRole('region', { name: 'Animeret agentunivers', exact: true });
+  await expect(universe.locator('[data-service-orb]')).toHaveCount(9);
+  await expect(universe.locator('[data-service-orb="claude"]')).toHaveCount(1);
+  await expect(universe.locator('[data-subagent-orb]')).toHaveCount(108);
+  await expect(universe.locator('[data-agent-edge="service-0:child-1"]')).toHaveAttribute('data-parent', 'service-0:child-0');
+  await expect(universe).toContainText('+18 underagenter i opgavedetaljer');
+  await universe.getByRole('button', { name: 'Underagent: claude underagent 2', exact: true }).click();
+  await expect(universe.getByRole('status')).toContainText('Agenten arbejder');
+  expect(await universe.locator('canvas').count()).toBe(0);
+  const performance = await page.evaluate(async () => {
+    const gaps: number[] = []; let last = window.performance.now();
+    await new Promise<void>(resolve => { const sample = (at: number) => { gaps.push(at - last); last = at; if (gaps.length < 90) requestAnimationFrame(sample); else resolve(); }; requestAnimationFrame(sample); });
+    gaps.sort((a, b) => a - b);
+    return { sampleFrames: gaps.length, medianFrameGapMs: gaps[Math.floor(gaps.length / 2)], p95FrameGapMs: gaps[Math.floor(gaps.length * .95)], maxFrameGapMs: gaps.at(-1), animations: document.querySelector('.orbit-universe')!.getAnimations({ subtree: true }).length };
+  });
+  expect(performance.animations).toBeLessThanOrEqual(10);
+  writeFileSync(testInfo.outputPath('service-performance.json'), JSON.stringify(performance, null, 2));
+  await testInfo.attach('Service sphere performance sample', { body: JSON.stringify(performance), contentType: 'application/json' });
+  await universe.getByRole('button', { name: 'Pause animationer', exact: true }).click();
+  expect(await universe.locator('.orbit-universe').evaluate(node => node.getAnimations({ subtree: true }).length)).toBe(0);
+  const paused = await page.evaluate(async () => {
+    const gaps: number[] = []; let last = window.performance.now();
+    await new Promise<void>(resolve => { const sample = (at: number) => { gaps.push(at - last); last = at; if (gaps.length < 60) requestAnimationFrame(sample); else resolve(); }; requestAnimationFrame(sample); });
+    gaps.sort((a, b) => a - b); return { pausedP95FrameGapMs: gaps[Math.floor(gaps.length * .95)] };
+  });
+  writeFileSync(testInfo.outputPath('service-performance.json'), JSON.stringify({ ...performance, ...paused }, null, 2));
+  await universe.getByRole('button', { name: 'Start animationer', exact: true }).click();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  expect(await universe.locator('.orbit-universe').evaluate(node => node.getAnimations({ subtree: true }).length)).toBe(0);
+  jobs.forEach((job, index) => { job.subagents.splice(index < 3 ? 3 : 0); job.status = index < 3 ? 'running' : 'queued'; });
+  await expect(universe.locator('[data-subagent-orb]')).toHaveCount(9, { timeout: 10000 });
+  await page.setViewportSize({ width: 1440, height: 1400 });
+  await universe.screenshot({ path: testInfo.outputPath('service-universe.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
 test('backup restoration replaces both open tabs and rejects stale data without losing the local recovery copy', async ({ page, context, request }) => {
   const projectId = await setup(page);
   await page.evaluate(async () => {

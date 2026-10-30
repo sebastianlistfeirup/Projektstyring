@@ -133,3 +133,13 @@ test('separate native calls cannot overwrite each others tool or subagent events
   assert.equal(actions.length, 2); assert.notEqual(actions[0].id, actions[1].id);
   assert.equal(children.length, 2); assert.notEqual(children[0].subId, children[1].subId);
 });
+
+
+test('native Claude events retain explicit nested agent ancestry', () => {
+  const children = [];
+  const emit = agentEvents('claude', { onSubagent: event => children.push(event) });
+  emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'parent', name: 'Agent', input: { description: 'First agent' } }] } });
+  emit({ type: 'assistant', parent_tool_use_id: 'parent', message: { content: [{ type: 'tool_use', id: 'child', name: 'Agent', input: { description: 'Nested agent' } }] } });
+  assert.equal(children[1].parentSubId, 'parent'); assert.equal(children[1].subId, 'child');
+  assert.equal(children[0].parentSubId, undefined);
+});

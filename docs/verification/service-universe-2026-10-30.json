@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-10-30T14:23:07.947719+00:00",
+  "environment": "Linux headless Chromium at 1440x1000 in a shared execution environment. This is a sample, not a guaranteed Windows frame rate.",
+  "scenario": {
+    "services": 9,
+    "jobs": 10,
+    "registeredSubagents": 270,
+    "visibleSatellites": 108,
+    "maximumAnimations": 10
+  },
+  "sample": {
+    "sampleFrames": 90,
+    "medianFrameGapMs": 33.299999999999955,
+    "p95FrameGapMs": 33.5,
+    "maxFrameGapMs": 100.09999999999991,
+    "animations": 10,
+    "pausedP95FrameGapMs": 50
+  },
+  "checks": [
+    "One sphere per service, including two Claude jobs in one sphere",
+    "Explicit child-to-parent edge retained",
+    "Pause removes all constellation animations",
+    "Reduced motion removes all constellation animations",
+    "Mobile page has no horizontal overflow outside the scrollable universe"
+  ],
+  "limits": "Only 90 active and 60 paused frames sampled. There was still one roughly 100 ms frame; real hardware and streaming providers require a separate performance test."
+}

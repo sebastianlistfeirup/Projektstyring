@@ -6,6 +6,7 @@ import { fetchAiServices, type AiServiceInfo } from './aiApi';
 /* ---------- typer ---------- */
 
 export interface SwarmSubagent {
+  parentSubId?: string;
   subId: string;
   name: string;
   status: 'running' | 'done' | 'error';
@@ -266,7 +267,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
                     ...j,
                     subagents: [
                       ...(j.subagents ?? []).filter((s) => s.subId !== sid),
-                      { subId: sid, name: String(evt.name ?? 'Underagent'), status: 'running' as const, startedAt: Date.now(), finishedAt: null, text: '' },
+                      { subId: sid, parentSubId: typeof evt.parentSubId === 'string' ? evt.parentSubId : undefined, name: String(evt.name ?? 'Underagent'), status: 'running' as const, startedAt: Date.now(), finishedAt: null, text: '' },
                     ],
                   }
                 : j,
@@ -596,7 +597,7 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
                 ...j,
                 subagents: [
                   ...(j.subagents ?? []).filter((x) => x.subId !== sid),
-                  { subId: sid, name: String(evt.name ?? 'Underagent'), status: 'running' as const, startedAt: Number(evt.at), finishedAt: null, text: '' },
+                  { subId: sid, parentSubId: typeof evt.parentSubId === 'string' ? evt.parentSubId : undefined, name: String(evt.name ?? 'Underagent'), status: 'running' as const, startedAt: Number(evt.at), finishedAt: null, text: '' },
                 ],
               }
             : j,

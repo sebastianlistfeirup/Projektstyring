@@ -380,7 +380,7 @@ function updateSwarm(run, obj) {
       if (j) {
         j.subagents = [
           ...(j.subagents ?? []).filter((s) => s.subId !== obj.subId),
-          { subId: obj.subId, name: obj.name, status: 'running', startedAt: Date.now(), finishedAt: null, text: '' },
+          { subId: obj.subId, parentSubId: obj.parentSubId, name: obj.name, status: 'running', startedAt: Date.now(), finishedAt: null, text: '' },
         ];
       }
     } else if (obj.type === 'subagent_delta') {
@@ -487,7 +487,7 @@ async function runTeamJob({ job, handle, goal, bible, attachments, cfg, dirs, av
           onDelta: delta => track({ type: 'subagent_delta', jobId: job.id, subId, delta }),
           onProcess: process => track({ type: 'job_process', jobId: job.id, ...process }),
           onAction: action => track({ type: 'job_action', jobId: job.id, action }),
-          onSubagent: sub => track({ type: sub.phase === 'start' ? 'subagent_start' : 'subagent_done', jobId: job.id, ...sub }),
+          onSubagent: sub => track({ type: sub.phase === 'start' ? 'subagent_start' : 'subagent_done', jobId: job.id, ...sub, parentSubId: sub.parentSubId ?? subId }),
         });
         if (handle.cancelled) throw new Error('Kørslen er stoppet.');
         texts.set(sj.id, `## ${sj.title}\n${text}`); states.set(sj.id, 'done');
