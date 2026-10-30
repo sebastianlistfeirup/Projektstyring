@@ -23,7 +23,8 @@ export class DurableRunQueue {
     if (this.running) throw new Error('Stop den aktive køopgave før gendannelse.');
     const loaded = new DurableRunQueue({ path: this.path });
     this.state = loaded.state; this.storageError = loaded.storageError;
-    if (!this.storageError) { this.recover(); this.pause('Backup er gendannet. Gennemgå de ventende opgaver og fortsæt køen, når de stadig er aktuelle.'); }
+    if (!this.storageError) try { this.recover(); this.pause('Backup er gendannet. Gennemgå de ventende opgaver og fortsæt køen, når de stadig er aktuelle.'); }
+    catch { this.storageError = 'Backup er gendannet, men køens pause kunne ikke gemmes. Køen er blokeret, indtil lageret er rettet og gendannelsen gennemført igen.'; this.state.paused = true; this.state.reason = this.storageError; }
   }
   snapshot() { return structuredClone({ ...this.state, storageError: this.storageError }); }
   commit(change) {

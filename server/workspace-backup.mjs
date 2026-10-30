@@ -36,10 +36,12 @@ export function createWorkspaceBackup(snapshot, appDir, attachmentsDir) {
     scope: 'Workspace, AI history and local attachments. External repositories and provider credentials require their own backup.' };
 }
 
-export function restoreWorkspaceBackup(bundle, appDir, attachmentsDir) {
+export function restoreWorkspaceBackup(bundle, appDir, attachmentsDir, { commitSnapshot } = {}) {
   if (bundle.format !== 'orbit-workspace') {
     if (!Array.isArray(bundle.tasks)) throw new Error('Ugyldig backup.');
-    return bundle; // Legacy snapshot, no file mutations.
+    const snapshot = normalizeSnapshot(bundle);
+    commitSnapshot?.(snapshot);
+    return snapshot; // Legacy snapshot, no file mutations.
   }
   if (bundle.version !== 2 || !Array.isArray(bundle.files) || !Array.isArray(bundle.snapshot?.tasks)) throw new Error('Ukendt eller beskadiget backupformat.');
   const roots = new Map([...ROOTS.map(root => [root, join(appDir, root)]), ['attachments', attachmentsDir]]);
@@ -57,6 +59,7 @@ export function restoreWorkspaceBackup(bundle, appDir, attachmentsDir) {
     if (bytes > MAX_BYTES || hash(data) !== file.sha256) throw new Error('Backup er beskadiget eller for stor.');
     return { ...file, data };
   });
+  const snapshot = normalizeSnapshot(bundle.snapshot);
   const suffix = randomUUID(), swapped = [], staged = [];
   try {
     for (const [root, live] of roots) {
@@ -81,6 +84,9 @@ export function restoreWorkspaceBackup(bundle, appDir, attachmentsDir) {
       }
       swapped.push({ live, old, existed });
     }
+    // Keep all previous directories until the workspace record itself is
+    // durable. A failed disk write must not pair old tasks with restored files.
+    commitSnapshot?.(snapshot);
   } catch (e) {
     for (const { live, old, existed } of swapped.reverse()) {
       if (live === roots.get('ai-runs') && existed && existsSync(join(live, 'work'))) renameSync(join(live, 'work'), join(old, 'work'));
@@ -89,10 +95,10 @@ export function restoreWorkspaceBackup(bundle, appDir, attachmentsDir) {
     }
     throw e;
   } finally {
-    for (const stage of staged) rmSync(stage, { recursive: true, force: true });
+    for (const stage of staged) try { rmSync(stage, { recursive: true, force: true }); } catch { console.warn('En midlertidig gendannelsesmappe kunne ikke ryddes op.'); }
   }
   for (const { old, existed } of swapped) if (existed) {
     try { rmSync(old, { recursive: true, force: true }); } catch { console.warn('En tidligere backupmappe kunne ikke ryddes op efter gendannelse.'); }
   }
-  return bundle.snapshot;
+  return snapshot;
 }

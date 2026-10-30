@@ -69,3 +69,15 @@ test('cron validates ranges and steps instead of accepting silently inert schedu
   assert.equal(cronMatches('0 8 * */2 *', new Date(2026, 0, 1, 8, 0)), true);
   assert.equal(cronMatches('0 8 * */2 *', new Date(2026, 1, 1, 8, 0)), false);
 });
+
+
+test('restored queues remain blocked if their required pause cannot be persisted', async () => {
+  const file = path(), calls = [];
+  const queue = new DurableRunQueue({ path: file, execute: input => calls.push(input), readRun: () => null });
+  queue.enqueue({ goal: 'Must remain paused' });
+  queue.commit = () => { throw new Error('Simulated unavailable disk'); };
+  queue.reloadAfterRestore();
+  assert.equal(queue.state.paused, true); assert.match(queue.storageError, /pause kunne ikke gemmes/);
+  await queue.pump(); assert.equal(calls.length, 0);
+  assert.throws(() => queue.enqueue({ goal: 'No new dispatch' }), /pause kunne ikke gemmes/);
+});

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
@@ -117,4 +117,40 @@ else{fs.writeFileSync(${JSON.stringify(counter)},String(Number(fs.existsSync(${J
     assert.equal(readFileSync(counter, 'utf8'), '1'); assert.equal(final.results.length, 2); assert.equal(final.bible, bible);
     assert.equal(git('rev-parse', 'HEAD'), initialCommit); assert.equal(git('status', '--porcelain'), '');
   } finally { stopOrphan(); await server.stop(); }
+});
+
+
+test('restore rolls back files and keeps live workspace when its durable workspace write fails', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-restore-failure-'));
+  const server = await start(root), app = join(root, 'app'), workspace = join(app, 'workspace.json'), savedWorkspace = join(app, 'workspace-before-test.json');
+  const post = async (path, body) => (await fetch(`${server.base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+  try {
+    const snapshot = { schemaVersion: 2, tasks: [], projects: [], sprints: [], users: [], labels: [], activity: [], workspaceState: { bibles: { project: 'Backup bible' } }, workspaceVersions: { bibles: '2026-10-30T10:00:00Z' } };
+    await post('/api/sync/push', { clientId: 'test', snapshot });
+    const attachment = join(app, 'ai-uploads', 'bible.txt'); writeFileSync(attachment, 'Backup file');
+    const backup = await post('/api/backup/now', {}); assert.equal(backup.ok, true);
+    snapshot.workspaceState.bibles.project = 'Current bible'; snapshot.workspaceVersions.bibles = '2026-10-30T11:00:00Z';
+    await post('/api/sync/push', { clientId: 'test', snapshot }); writeFileSync(attachment, 'Current file');
+    // An actual rename error at the final workspace commit, after file staging.
+    renameSync(workspace, savedWorkspace); mkdirSync(workspace);
+    const result = await post('/api/backup/restore', { name: backup.path.split(/[\\/]/).at(-1) });
+    assert.equal(result.ok, false); assert.equal(readFileSync(attachment, 'utf8'), 'Current file');
+    const live = (await (await fetch(`${server.base}/api/sync/state`)).json()).snapshot;
+    assert.equal(live.workspaceState.bibles.project, 'Current bible');
+    rmSync(workspace, { recursive: true }); renameSync(savedWorkspace, workspace);
+    const retried = await post('/api/backup/restore', { name: backup.path.split(/[\\/]/).at(-1) });
+    assert.equal(retried.ok, true); assert.equal(retried.snapshot.workspaceState.bibles.project, 'Backup bible');
+    assert.equal(readFileSync(attachment, 'utf8'), 'Backup file');
+    assert.equal(JSON.parse(readFileSync(join(app, 'ai-runs', 'ai-queue.json'), 'utf8')).paused, true);
+    assert.equal(typeof retried.snapshot.workspaceEpoch, 'string');
+    const stale = await fetch(`${server.base}/api/sync/push`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: 'stale-tab', snapshot }) });
+    assert.equal(stale.status, 409); assert.equal((await stale.json()).resetRequired, true);
+    assert.equal((await (await fetch(`${server.base}/api/sync/state`)).json()).snapshot.workspaceState.bibles.project, 'Backup bible');
+    assert.equal((await post('/api/sync/push', { clientId: 'current-tab', snapshot: retried.snapshot })).ok, true);
+    const again = await post('/api/backup/restore', { name: backup.path.split(/[\\/]/).at(-1) });
+    assert.equal(again.ok, true); assert.notEqual(again.snapshot.workspaceEpoch, retried.snapshot.workspaceEpoch);
+  } finally {
+    if (existsSync(savedWorkspace)) { rmSync(workspace, { recursive: true, force: true }); renameSync(savedWorkspace, workspace); }
+    await server.stop();
+  }
 });

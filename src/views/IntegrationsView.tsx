@@ -72,7 +72,7 @@ import {
   type IcalEvent,
   type PlannerTaskExt,
 } from '../lib/companion';
-import { applySnapshot, getSyncUrl, isSyncEnabled, pushNow, restartSync, setSyncEnabled, setSyncUrl } from '../lib/sync';
+import { applySnapshot, getPreviousWorkspace, getSyncUrl, isSyncEnabled, pushNow, restartSync, setSyncEnabled, setSyncUrl } from '../lib/sync';
 import { cn, formatDate, formatDateShort, isOverdue, taskRef, timeAgo } from '../lib/utils';
 import { Avatar } from '../components/common';
 import { STATUS_META } from '../lib/constants';
@@ -847,6 +847,10 @@ export default function IntegrationsView() {
               Opret backup nu
             </button>
           </div>
+          {getPreviousWorkspace() && <button className="btn-ghost text-xs mt-2" onClick={() => {
+            const url = URL.createObjectURL(new Blob([JSON.stringify(getPreviousWorkspace(), null, 2)], { type: 'application/json' }));
+            const link = document.createElement('a'); link.href = url; link.download = 'orbit-browserdata-foer-gendannelse.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+          }}>Hent denne fanes browserdata fra før gendannelsen</button>}
           {backups.length > 0 && (
             <ul className="mt-3 divide-y divide-zinc-200/70 dark:divide-white/[0.05]">
               {backups.slice(0, 5).map((b) => (
@@ -862,7 +866,7 @@ export default function IntegrationsView() {
                         const r = await restoreBackup(b.name);
                         if (!r.ok || !r.snapshot) return r.reason ?? 'Kunne ikke læse backup.';
                         applySnapshot(r.snapshot);
-                        return `Backup gendannet (${(r.snapshot.tasks ?? []).length} opgaver gendannet).`;
+                        return `Backup gendannet (${(r.snapshot.tasks ?? []).length} opgaver gendannet).${r.warning ? ` ${r.warning}` : ''}`;
                       }, 'error')
                     }
                     className="btn-ghost shrink-0 px-2 py-1 text-xs text-indigo-600 dark:text-indigo-300"

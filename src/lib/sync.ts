@@ -13,6 +13,13 @@ const SYNC_URL_KEY = 'orbit-sync-url';
 const POLL_KEY = 'orbit-sync-poll';
 const VERSION_KEY = 'orbit-workspace-versions';
 const DELETION_KEY = 'orbit-deleted-entities';
+const EPOCH_KEY = 'orbit-workspace-epoch';
+const RECOVERY_KEY = 'orbit-before-restore';
+let workspaceEpoch: string | undefined = localStorage.getItem(EPOCH_KEY) || undefined;
+let previousWorkspace: SyncSnapshotPayload | null = null;
+try { previousWorkspace = JSON.parse(sessionStorage.getItem(RECOVERY_KEY) ?? 'null'); } catch { /* Optional local recovery copy. */ }
+export function getPreviousWorkspace(): SyncSnapshotPayload | null { return previousWorkspace; }
+let pullRequest = 0;
 let deletedEntities: Tombstones = {};
 try { deletedEntities = mergeTombstones(JSON.parse(localStorage.getItem(DELETION_KEY) ?? '{}')); } catch { /* old data */ }
 const saveDeletions = () => localStorage.setItem(DELETION_KEY, JSON.stringify(deletedEntities));
@@ -49,6 +56,7 @@ export function snapshotFromStore(): SyncSnapshotPayload {
   const s = useStore.getState();
   return {
     schemaVersion: 2,
+    workspaceEpoch,
     deletedEntities,
     workspaceVersions: { ...fieldVersions },
     workspaceState: Object.fromEntries(Object.entries(s).filter(([, value]) => typeof value !== 'function')),
@@ -103,8 +111,15 @@ function mergeSnapshot(remote: SyncSnapshotPayload, excludeIds?: Set<string>) {
 }
 
 export async function pullAndMerge(): Promise<boolean> {
+  const request = ++pullRequest;
   const remote = await syncPull();
+  if (request !== pullRequest) return false;
   if (!remote?.ok || !remote.snapshot || !remote.updatedAt) return false;
+  if ((remote.snapshot.workspaceEpoch ?? null) !== (workspaceEpoch ?? null)) {
+    applySnapshot(remote.snapshot, { push: false });
+    lastSyncedAt = remote.updatedAt;
+    return true;
+  }
   if (remote.updatedAt === lastSyncedAt) return false;
 
   // Konfliktdetektering: både lokale ændringer OG fjernændringer siden sidste sync
@@ -129,7 +144,7 @@ export async function pullAndMerge(): Promise<boolean> {
 
 // Restore is replacement, not conflict merging. Only known data fields may be
 // restored; actions and methods always remain the current application version.
-export function applySnapshot(snapshot: SyncSnapshotPayload): void {
+export function applySnapshot(snapshot: SyncSnapshotPayload, { push = true } = {}): void {
   const current = useStore.getState();
   const data = snapshot.schemaVersion === 2 && snapshot.workspaceState
     ? snapshot.workspaceState
@@ -138,21 +153,33 @@ export function applySnapshot(snapshot: SyncSnapshotPayload): void {
     if (!Array.isArray(data[key])) throw new Error(`Backup mangler ${key}.`);
   }
   const restored = Object.fromEntries(Object.entries(data).filter(([key]) => Object.hasOwn(current, key) && typeof current[key as keyof typeof current] !== 'function'));
+  if ((snapshot.workspaceEpoch ?? null) !== (workspaceEpoch ?? null)) {
+    previousWorkspace = structuredClone(snapshotFromStore());
+    try { sessionStorage.setItem(RECOVERY_KEY, JSON.stringify(previousWorkspace)); } catch { /* Keep the in-memory copy available for download. */ }
+  }
+  if (pushTimer) { window.clearTimeout(pushTimer); pushTimer = null; }
+  pullRequest++; // Ignore an older in-flight pull from before restoration.
   applying = true;
   try {
-    useStore.setState({ ...restored, selectedTaskId: null, syncConflicts: [] });
+    const defaults = snapshot.schemaVersion === 2 ? Object.fromEntries(Object.entries(useStore.getInitialState()).filter(([key, value]) => typeof value !== 'function' && !localFields.has(key))) : {};
+    useStore.setState({ ...defaults, ...restored, selectedTaskId: null, syncConflicts: [] });
+    workspaceEpoch = snapshot.workspaceEpoch;
+    if (workspaceEpoch) localStorage.setItem(EPOCH_KEY, workspaceEpoch); else localStorage.removeItem(EPOCH_KEY);
     deletedEntities = mergeTombstones(snapshot.deletedEntities); saveDeletions();
-    fieldVersions = Object.fromEntries(Object.keys(restored).map(key => [key, new Date().toISOString()]));
+    fieldVersions = { ...snapshot.workspaceVersions };
     saveVersions();
     lastSyncedAt = '';
   } finally { applying = false; }
-  void pushNow();
+  if (push) void pushNow();
 }
 
 export async function pushNow(): Promise<boolean> {
   const s = useStore.getState();
   const me = s.users.find((u) => u.id === s.currentUserId);
+  const epochAtSend = workspaceEpoch;
   const r = await syncPush(getClientId(), { id: s.currentUserId, name: me?.name ?? 'Ukendt' }, snapshotFromStore());
+  if (epochAtSend !== workspaceEpoch) return false;
+  if (r.resetRequired) { lastSyncedAt = ''; await pullAndMerge(); return false; }
   if (r.ok && r.updatedAt) {
     if (r.merged) { lastSyncedAt = ''; await pullAndMerge(); }
     else lastSyncedAt = r.updatedAt;
@@ -188,7 +215,7 @@ function connectWs() {
   ws.onmessage = (event) => {
     try {
       const msg = JSON.parse(String(event.data));
-      if (msg.type === 'sync') void pullAndMerge();
+      if (msg.type === 'sync' || msg.type === 'workspace_restored') void pullAndMerge();
       else if (msg.type === 'cursor') cursorListeners.forEach((l) => l(msg));
     } catch { /* ignorer */ }
   };

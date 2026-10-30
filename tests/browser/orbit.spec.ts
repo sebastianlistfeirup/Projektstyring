@@ -581,3 +581,52 @@ test('surviving recovery processes are visible with their interrupted run and di
   working = false;
   await expect(recovery).not.toBeVisible({ timeout: 10000 });
 });
+
+
+test('backup restoration replaces both open tabs and rejects stale data without losing the local recovery copy', async ({ page, context, request }) => {
+  const projectId = await setup(page);
+  await page.evaluate(async () => {
+    // @ts-expect-error Vite browser module
+    const sync = await import('/src/lib/sync.ts'); await sync.pushNow();
+  });
+  const backup = await (await request.post(`${base}/api/backup/now`, { data: {} })).json();
+  expect(backup.ok).toBe(true);
+  const other = await context.newPage(); await other.goto('/#/chat');
+  await expect(other.getByRole('button', { name: 'Ny chat', exact: true }).first()).toBeVisible();
+  const extra = await other.evaluate(async projectId => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts');
+    // @ts-expect-error Vite browser module
+    const sync = await import('/src/lib/sync.ts'); await sync.pullAndMerge();
+    const task = useStore.getState().addTask({ projectId, title: 'Arbejde oprettet efter backup' });
+    await sync.pushNow(); return { id: task.id, snapshot: sync.snapshotFromStore() };
+  }, projectId);
+  const hasExtra = (tab: Page) => tab.evaluate(async id => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts'); return useStore.getState().tasks.some((task: { id: string }) => task.id === id);
+  }, extra.id);
+  await expect.poll(() => hasExtra(page)).toBe(true);
+  const restored = await (await request.post(`${base}/api/backup/restore`, { data: { name: backup.path.split(/[\\/]/).at(-1) } })).json();
+  expect(restored.ok).toBe(true); expect(restored.snapshot.workspaceEpoch).toBeTruthy();
+  await expect.poll(() => hasExtra(page)).toBe(false);
+  await expect.poll(() => hasExtra(other)).toBe(false);
+  expect(await other.evaluate(async id => {
+    // @ts-expect-error Vite browser module
+    const { getPreviousWorkspace } = await import('/src/lib/sync.ts'); return getPreviousWorkspace()?.tasks.some((task: { id: string }) => task.id === id);
+  }, extra.id)).toBe(true);
+  const rejected = await request.post(`${base}/api/sync/push`, { data: { clientId: 'stale-fixture', snapshot: extra.snapshot } });
+  expect(rejected.status()).toBe(409); expect((await rejected.json()).resetRequired).toBe(true);
+  const freshId = await other.evaluate(async projectId => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts');
+    // @ts-expect-error Vite browser module
+    const sync = await import('/src/lib/sync.ts');
+    const task = useStore.getState().addTask({ projectId, title: 'Arbejde efter gendannelsen' });
+    await sync.pushNow(); return task.id;
+  }, projectId);
+  await expect.poll(() => page.evaluate(async id => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts'); return useStore.getState().tasks.some((task: { id: string }) => task.id === id);
+  }, freshId)).toBe(true);
+  await other.close();
+});

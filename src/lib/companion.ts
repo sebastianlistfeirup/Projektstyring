@@ -222,6 +222,7 @@ export async function graphEvents(): Promise<{ ok: boolean; items?: GraphEvent[]
 
 // ---------------- Synkronisering ----------------
 export interface SyncSnapshotPayload {
+  workspaceEpoch?: string;
   deletedEntities?: Record<string, Record<string, string>>;
   workspaceVersions?: Record<string, string>;
   schemaVersion?: number;
@@ -244,7 +245,7 @@ export async function syncPush(
   clientId: string,
   user: { id: string; name: string },
   snapshot: SyncSnapshotPayload,
-): Promise<{ ok: boolean; updatedAt?: string; merged?: boolean }> {
+): Promise<{ ok: boolean; updatedAt?: string; merged?: boolean; resetRequired?: boolean }> {
   try {
     return await post('/api/sync/push', { clientId, user, snapshot });
   } catch {
@@ -368,7 +369,7 @@ export async function listBackups(): Promise<{ ok: boolean; files?: BackupFile[]
 
 export async function restoreBackup(
   name: string,
-): Promise<{ ok: boolean; snapshot?: SyncSnapshotPayload; reason?: string }> {
+): Promise<{ ok: boolean; snapshot?: SyncSnapshotPayload; reason?: string; warning?: string }> {
   try {
     return await post('/api/backup/restore', { name });
   } catch {

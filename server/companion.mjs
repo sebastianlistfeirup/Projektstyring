@@ -7,6 +7,7 @@ import { localAiAccess } from './local-access.mjs';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, networkInterfaces } from 'node:os';
@@ -495,6 +496,7 @@ app.post('/api/sync/push', (req, res) => {
     return res.status(400).json({ ok: false, reason: 'Mangler snapshot' });
   }
   const prev = lastSnapshot?.snapshot;
+  if (prev && (prev.workspaceEpoch ?? null) !== (snapshot.workspaceEpoch ?? null)) return res.status(409).json({ ok: false, resetRequired: true, reason: 'Arbejdsområdet er gendannet. Hent den gendannede version før nye ændringer sendes.' });
   if (prev) {
     const prevStatus = new Map((prev.tasks ?? []).map((t) => [t.id, t.status]));
     for (const t of snapshot.tasks) {
@@ -821,12 +823,24 @@ app.post('/api/backup/restore', (req, res) => {
     const data = JSON.parse(readFileSync(join(BACKUP_DIR, String(name)), 'utf8'));
     if (app.locals.orbitQueue && !app.locals.orbitQueue.storageError) app.locals.orbitQueue.pause('Gendannelse af backup er i gang.');
     if (lastSnapshot) writeAtomicJson(join(BACKUP_DIR, `before-restore-${Date.now()}.json`), createWorkspaceBackup(lastSnapshot.snapshot, APP_DIR, ATTACH_DIR));
-    const snapshot = restoreWorkspaceBackup(data, APP_DIR, ATTACH_DIR);
-    lastSnapshot = { snapshot, from: 'backup', updatedAt: new Date().toISOString() };
-    writeAtomicJson(SNAPSHOT_PATH, lastSnapshot);
+    let restoredRecord;
+    restoreWorkspaceBackup(data, APP_DIR, ATTACH_DIR, { commitSnapshot: restored => {
+      // Persist the restored queue's pause before committing the workspace.
+      // Even a crash/failure in the subsequent reload cannot replay old intent.
+      const queuePath = join(APP_DIR, 'ai-runs', 'ai-queue.json');
+      if (existsSync(queuePath)) {
+        const restoredQueue = JSON.parse(readFileSync(queuePath, 'utf8'));
+        writeAtomicJson(queuePath, { ...restoredQueue, paused: true, reason: 'Backup er gendannet. Gennemgå køen før den fortsættes.', updatedAt: Date.now() });
+      }
+      restoredRecord = { snapshot: { ...restored, workspaceEpoch: randomUUID() }, from: 'backup', updatedAt: new Date().toISOString() };
+      writeAtomicJson(SNAPSHOT_PATH, restoredRecord);
+    } });
+    lastSnapshot = restoredRecord;
+    const snapshot = restoredRecord.snapshot;
     swarmState.last = null;
     app.locals.orbitQueue?.reloadAfterRestore();
-    res.json({ ok: true, snapshot });
+    broadcast({ type: 'workspace_restored', updatedAt: lastSnapshot.updatedAt });
+    res.json({ ok: true, snapshot, warning: app.locals.orbitQueue?.storageError });
   } catch (err) {
     res.status(404).json({ ok: false, reason: String(err) });
   }
