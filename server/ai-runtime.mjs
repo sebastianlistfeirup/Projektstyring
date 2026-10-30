@@ -364,6 +364,8 @@ function updateSwarm(run, obj) {
         error: null,
         subagents: [],
       }));
+    } else if (obj.type === 'job_added') {
+      run.jobs.push({ ...obj.job, status: 'queued', liveText: '', notes: [], deltaCount: 0, startedAt: null, finishedAt: null, text: '', artifacts: [], error: null, subagents: [] });
     } else if (obj.type === 'job_action') {
       const j = run.jobs.find(x => x.id === obj.jobId);
       if (j) j.actions = [...(j.actions ?? []).filter(a => a.id !== obj.action.id).slice(-99), obj.action];
@@ -498,6 +500,8 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     runId, goal, projectId, taskId, repository, checks,
     contextManifest: previousRun?.contextManifest ?? contextManifest,
     verification: { status: 'not_run', checks: [] },
+    verificationHistory: [...(previousRun?.verificationHistory ?? [])],
+    verificationRepairs: previousRun?.verificationRepairs ?? 0,
     bible: String(bible ?? ''),
     parentRunId: previousRun?.runId ?? null,
     workDir: resumeDir ?? join(dirs.runs, 'work', runId),
@@ -722,17 +726,41 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
   });
   let outcome = runOutcome(run.jobs, handle.cancelled);
   if (outcome === 'done' && run.repository) {
-    track({ type: 'job_note', note: 'Kontrollerer den samlede repository-leverance.' });
     const analysisOnly = jobs.every(j => j.readOnly === true);
-    const checkResults = analysisOnly ? [] : await verifyRepository(handle.runDir, checks, handle.abort.signal);
-    run.verification = { status: analysisOnly ? 'not_run' : !checks.length ? 'not_configured' : checkResults.length === checks.length && checkResults.every(c => c.status === 'passed') ? 'passed' : 'failed', checks: checkResults };
-    run.evidence = await repositoryEvidence(handle.runDir, run.repository.baseCommit);
-    if (run.evidence.trackedChangesAfterChecks) {
-      run.verification.status = 'failed';
-      run.verification.checks.push({ name: 'Testet commit uændret', status: 'failed', exitCode: null, output: 'Kontrollerne ændrede versionsstyrede filer. Resultatet kan ikke knyttes til det gemte commit.' });
+    while (true) {
+      track({ type: 'job_note', note: 'Kontrollerer den samlede repository-leverance.' });
+      const checkResults = analysisOnly ? [] : await verifyRepository(handle.runDir, checks, handle.abort.signal);
+      run.verification = { status: analysisOnly ? 'not_run' : !checks.length ? 'not_configured' : checkResults.length === checks.length && checkResults.every(c => c.status === 'passed') ? 'passed' : 'failed', checks: checkResults };
+      run.evidence = await repositoryEvidence(handle.runDir, run.repository.baseCommit);
+      if (run.evidence.trackedChangesAfterChecks) {
+        run.verification.status = 'failed';
+        run.verification.checks.push({ name: 'Testet commit uændret', status: 'failed', exitCode: null, output: 'Kontrollerne ændrede versionsstyrede filer. Resultatet kan ikke knyttes til det gemte commit.' });
+      }
+      const attemptRecord = { number: run.verificationHistory.length + 1, at: Date.now(), commit: run.evidence.commit, ...run.verification };
+      run.verificationHistory.push(attemptRecord);
+      track({ type: 'verification', verification: run.verification, evidence: run.evidence, attempt: attemptRecord });
+      if (run.verification.status !== 'failed') break;
+      outcome = 'blocked';
+      const failedCheck = checkResults.find(check => check.status === 'failed');
+      // One bounded repair of an actual test failure. Missing programs, altered
+      // tracked files, cancellation and ambiguous infrastructure errors stop.
+      const canRepair = prefs.selfHeal && !analysisOnly && run.verificationRepairs < 1 && jobs.length < 100 &&
+        failedCheck?.exitCode !== null && failedCheck?.exitCode !== undefined && !run.evidence.trackedChangesAfterChecks && !handle.cancelled;
+      const coder = canRepair ? [...jobs].reverse().find(job => job.readOnly !== true && availability[job.serviceId]?.available && serviceCapabilities(serviceById(job.serviceId) ?? {}).repository)?.serviceId : null;
+      if (!coder) break;
+      run.verificationRepairs += 1;
+      const repair = {
+        id: `repair-${randomUUID().slice(0, 8)}`, title: `Ret dokumenteret testfejl (forsøg ${run.verificationRepairs})`,
+        serviceId: coder, phase: 'produktion', dependsOn: jobs.map((_, index) => index), repairFor: attemptRecord.number,
+        description: `RETTELSE EFTER FAKTISK TESTFEJL. Løs kun årsagen inden for den oprindelige arbejdsordre og bibel. Undersøg den aktuelle kode og testens output. Du må ikke fjerne, svække eller omgå tests eller acceptkriterier, og du må ikke udvide scopet. Hvis problemet kræver en beslutning eller ændrede krav, skal du forklare blokeringen. Orbit kører de samme kontrolkommandoer igen efter din ændring.\n\nTestet commit: ${run.evidence.commit}\nFaktiske kontroller:\n${JSON.stringify(checkResults, null, 2)}`,
+      };
+      jobs.push(repair);
+      track({ type: 'job_added', job: repair });
+      track({ type: 'job_note', note: 'En faktisk kontrol fejlede. Orbit forsøger én afgrænset rettelse og gentager derefter kontrollerne.' });
+      await runJob(repair);
+      if (run.jobs.find(job => job.id === repair.id)?.status !== 'done' || handle.cancelled) break;
+      outcome = 'done';
     }
-    if (run.verification.status === 'failed') outcome = 'blocked';
-    track({ type: 'verification', verification: run.verification, evidence: run.evidence });
   }
   run.status = handle.cancelled ? 'cancelled' : outcome;
   if (run.status === 'done') {

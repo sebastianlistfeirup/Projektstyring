@@ -5,6 +5,7 @@ import type { AiServiceInfo } from '../lib/aiApi';
 import { jobStages, runLabels, waitingReason } from '../lib/runPresentation';
 import ChatMarkdown from './ChatMarkdown';
 import RunContextPanel from './RunContextPanel';
+import VerificationHistory from './VerificationHistory';
 
 const tones: Record<string, string> = {
   running: 'border-indigo-400 bg-indigo-500/10', done: 'border-emerald-500/40 bg-emerald-500/5',
@@ -85,6 +86,7 @@ export default function OrbitWorkMap({ run, services, connected, historical = fa
         </div>
       </div>}
     </>}
+    {!!run.verificationHistory?.length && <div className="px-4 pb-4"><VerificationHistory run={run} /></div>}
     {run.contextManifest && <div className="px-4 pb-4"><RunContextPanel run={run} /></div>}
     <div className="border-t border-current/10 p-4 grid sm:grid-cols-2 gap-4 text-xs">
       <div><h3 className="font-semibold flex gap-2 items-center"><GitBranch size={14} />Kodeleverance</h3>{run.evidence ? <><p className="font-mono break-all mt-2">{run.evidence.commit}</p><p className="opacity-65 mt-1">{run.evidence.changedFiles.length} ændrede filer på kørselsgrenen</p><details className="mt-2"><summary className="cursor-pointer opacity-65">Filer og ændringsoversigt</summary><pre className="whitespace-pre-wrap break-all mt-2">{run.evidence.changedFiles.join('\n')}\n{run.evidence.diffStat}</pre></details></> : <p className="opacity-55 mt-2">Ingen Git-leverance registreret endnu.</p>}</div>

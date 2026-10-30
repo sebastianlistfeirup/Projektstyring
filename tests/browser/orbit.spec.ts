@@ -17,6 +17,7 @@ test.beforeAll(async ({ request }) => {
   writeFileSync(fake, `import fs from 'node:fs'; let p=process.argv.at(-1); const file=p.match(/UTF-8-filen (.*)\\. Filen indeholder/); if(file) p=fs.readFileSync(file[1],'utf8');
 if(p.includes('PLANLÆGNINGSFASE')) console.log(JSON.stringify({jobs:[{title:'Verificeret rettelse',service:'codex',phase:'produktion',dependsOn:[],description:p.includes('FAIL_MARKER')?'FAIL_MARKER':'Ret game.txt efter biblen'}]}));
 else if(p.includes('FAIL_MARKER')) { console.error('Reproduced test failure'); process.exit(9); }
+else if(p.includes('REPAIR_TEST')&&!p.includes('RETTELSE EFTER FAKTISK TESTFEJL')) { fs.writeFileSync('game.txt','broken'); console.log('First implementation requires a test repair'); }
 else if(p.includes('"orbitProjectPlan"')) console.log(JSON.stringify({orbitProjectPlan:{version:1,releaseGoal:'En stabil save/load-cyklus',summary:'Et afgrænset restarbejde',firstMilestone:'Gem og indlæs en kampagne',unknowns:['Gameplay skal afprøves manuelt'],tasks:[{id:'save',title:'Verificér save-format',description:'Bevar kompatibilitet',priority:'high',scope:'version1',acceptanceCriteria:['Data bevares'],verification:['Kør save/load-test'],evidence:['game.txt'],dependsOn:[]}]}}));
 else if(p.includes('Kortlæg kode og gældende beslutninger')) console.log('game.txt er læst. Ingen tests er kørt i denne analyse.');
 else { await new Promise(r=>setTimeout(r,1800)); fs.writeFileSync('game.txt','fixed'); console.log('## Leverance\\n\\n| Fil | Resultat |\\n| --- | --- |\\n| game.txt | fixed |\\n\\nÆndringen er implementeret.'); }`);
@@ -251,4 +252,24 @@ test('work map explains dependencies and preserves historical tool evidence and 
   await expect(map.getByRole('heading', { name: 'Seneste værktøjshændelser' })).toBeInViewport();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await testInfo.attach('Arbejdskort mobile', { body: await page.screenshot({ path: testInfo.outputPath('work-map-mobile.png'), fullPage: true }), contentType: 'image/png' });
+});
+
+
+test('a real failed check creates one visible repair job and retains both test results', async ({ page, request }) => {
+  await request.post(`${base}/api/ai/prefs`, { data: { selfHeal: true, autoJudge: false } });
+  try {
+    await setup(page);
+    await page.locator('textarea').last().fill('REPAIR_TEST: Ret gemt tilstand og verificér resultatet.');
+    await page.locator('textarea').last().press('Enter');
+    const live = page.getByRole('region', { name: 'Orbit Live' });
+    await expect(live.getByText('Leveret til gennemgang', { exact: true })).toBeVisible();
+    await expect(live.getByText('Ret dokumenteret testfejl (forsøg 1)', { exact: true })).toBeVisible();
+    await live.getByText('Kontrolhistorik · 2 gennemløb').click();
+    await expect(live.getByText('Kontrol 1: Fejlet', { exact: true })).toBeVisible();
+    await expect(live.getByText('Kontrol 2: Bestået', { exact: true })).toBeVisible();
+    const run = (await (await request.get(`${base}/api/ai/swarm`)).json()).run;
+    expect(run.jobs).toHaveLength(2); expect(run.verificationRepairs).toBe(1);
+    expect(run.verificationHistory.map((attempt: { status: string }) => attempt.status)).toEqual(['failed', 'passed']);
+    expect(readFileSync(join(source, 'game.txt'), 'utf8')).toBe('original');
+  } finally { await request.post(`${base}/api/ai/prefs`, { data: { selfHeal: false } }); }
 });

@@ -15,6 +15,7 @@ export interface SwarmSubagent {
 }
 
 export interface SwarmJob {
+  repairFor?: number;
   contextDocuments?: { path: string; status: string; bytes?: number; sha256?: string; reason?: string }[];
   actions?: { id: string; kind: string; label: string; status: 'running' | 'done' | 'error'; detail: string; at: number }[];
   id: string;
@@ -51,6 +52,7 @@ export interface SwarmRun {
   projectId?: string | null;
   taskId?: string | null;
   evidence?: { commit: string; changedFiles: string[]; diffStat: string };
+  verificationHistory?: { number: number; at: number; commit: string; status: string; checks: { name: string; status: string; exitCode: number | null; output: string }[] }[];
   verification?: { status: string; checks: { name: string; status: string; exitCode: number | null; output: string }[] };
   runId: string;
   goal: string;
@@ -201,6 +203,10 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
         } else {
           set({ run: { ...cur, status: 'running', jobs: mapped }, approval: null });
         }
+        break;
+      }
+      case 'job_added': {
+        if (cur) set({ run: presentRun({ ...cur, jobs: [...cur.jobs, { ...(evt.job as SwarmJob), status: 'queued' }] }) });
         break;
       }
       case 'job_action': {
@@ -396,7 +402,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
         break;
       }
       case 'verification':
-        if (cur) set({ run: { ...cur, verification: evt.verification as SwarmRun['verification'], evidence: evt.evidence as SwarmRun['evidence'] } });
+        if (cur) set({ run: { ...cur, verification: evt.verification as SwarmRun['verification'], evidence: evt.evidence as SwarmRun['evidence'], verificationHistory: withVerificationAttempt(cur, evt) } });
         break;
       case 'run_finished':
         if (cur) reconcileTask({ ...cur, status: evt.status as SwarmRun['status'] });
@@ -516,6 +522,11 @@ export interface SwarmEvent {
   [key: string]: unknown;
 }
 
+function withVerificationAttempt(run: SwarmRun, evt: Record<string, unknown>) {
+  const attempt = evt.attempt as NonNullable<SwarmRun['verificationHistory']>[number] | undefined;
+  return attempt ? [...(run.verificationHistory ?? []).filter(item => item.number !== attempt.number), attempt] : run.verificationHistory;
+}
+
 function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
   switch (evt.type) {
     case 'run_start':
@@ -548,6 +559,8 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
           subagents: [],
         })),
       };
+    case 'job_added':
+      return presentRun({ ...run, jobs: [...run.jobs, { ...(evt.job as SwarmJob), status: 'queued' }] });
     case 'job_action': {
       const action = evt.action as NonNullable<SwarmJob['actions']>[number];
       return { ...run, jobs: run.jobs.map(j => j.id === evt.jobId ? { ...j, actions: [...(j.actions ?? []).filter(a => a.id !== action.id).slice(-99), action] } : j) };
@@ -632,7 +645,7 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
         ),
       };
     case 'verification':
-      return { ...run, verification: evt.verification as SwarmRun['verification'], evidence: evt.evidence as SwarmRun['evidence'] };
+      return { ...run, verification: evt.verification as SwarmRun['verification'], evidence: evt.evidence as SwarmRun['evidence'], verificationHistory: withVerificationAttempt(run, evt) };
     case 'done':
       return { ...run, status: 'done', finishedAt: Number(evt.at) };
     case 'run_finished':

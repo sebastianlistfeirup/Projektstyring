@@ -338,7 +338,7 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
 
 function ConnectionPanel({ services, prefs, onChanged }: {
   services: Record<string, AiServiceInfo> | null;
-  prefs: { allowPaidApis: boolean; orchestrator: string; autoJudge?: boolean } | null;
+  prefs: { allowPaidApis: boolean; orchestrator: string; autoJudge?: boolean; selfHeal?: boolean } | null;
   onChanged: () => void;
 }) {
   const list = useMemo(() => (services ? Object.values(services) : []), [services]);
@@ -373,6 +373,8 @@ function ConnectionPanel({ services, prefs, onChanged }: {
             <span className="text-emerald-300 flex items-center gap-1"><Gavel size={11} /> {t('chat.autoJudge')}</span>
           </label>
           <p className="text-[10px] opacity-50 leading-snug">{t('chat.autoJudgeHint')}</p>
+          <label className="flex items-start gap-2 text-[11px]"><input type="checkbox" className="mt-0.5 accent-indigo-500" checked={prefs.selfHeal !== false} onChange={async e => { await saveAiPrefs({ selfHeal: e.target.checked }); onChanged(); }} /><span>Afgrænsede rettelsesforsøg</span></label>
+          <p className="text-[10px] opacity-50 leading-snug">Højst ét genforsøg ved en agentfejl og én rettelse efter en faktisk testfejl. Testresultater bevares. Der tilkøbes ikke ekstra forbrug.</p>
         </div>
       )}
       {list.map((s) => <ServiceRow key={s.id} s={s} onChanged={onChanged} />)}
@@ -409,7 +411,7 @@ export function AiChatView() {
 
   const [newProjectId, setNewProjectId] = useState<string>(() => useStore.getState().activeProjectId ?? projects[0]?.id ?? '');
   const [services, setServices] = useState<Record<string, AiServiceInfo> | null>(null);
-  const [prefs, setPrefs] = useState<{ allowPaidApis: boolean; orchestrator: string; autoJudge?: boolean } | null>(null);
+  const [prefs, setPrefs] = useState<{ allowPaidApis: boolean; orchestrator: string; autoJudge?: boolean; selfHeal?: boolean } | null>(null);
   const [companionOk, setCompanionOk] = useState<boolean | null>(null);
   const [service, setService] = useState<string>('auto');
   const [runMode, setRunMode] = useState<'standard' | 'roles' | 'debate' | 'vote' | 'race'>('standard');

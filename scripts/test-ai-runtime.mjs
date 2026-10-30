@@ -156,4 +156,28 @@ test('actual runtime verifies repository, blocks failed checks and detects mutat
   }
 });
 
+
+
+test('bounded verification repair uses actual failing output and repeats the same checks', async () => {
+  for (const succeeds of [true, false]) {
+    const dirs = fixture(), source = join(dirs.cwd, 'source'), agent = join(dirs.cwd, 'repair.mjs'); mkdirSync(source);
+    const git = (...args) => execFileSync('git', args, { cwd: source, encoding: 'utf8' });
+    git('init', '-q'); writeFileSync(join(source, 'game.txt'), 'original'); git('add', '.');
+    git('-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'base');
+    writeFileSync(agent, `import fs from 'node:fs'; let p=process.argv.at(-1); const f=p.match(/UTF-8-filen (.*)\\. Filen indeholder/); if(f) p=fs.readFileSync(f[1],'utf8'); const repair=p.includes('RETTELSE EFTER FAKTISK TESTFEJL'); if(repair&&!p.includes('EXPECTED_FIXED_GOT_BROKEN')) process.exit(7); fs.writeFileSync('game.txt',repair&&${succeeds}?'fixed':'broken'); console.log(repair?'Repaired from actual failure':'First implementation');`);
+    const localCfg = { ...cfg, aiProviders: { codex: { ...cfg.aiProviders.codex, cliTemplate: `"${agent}" {prompt}` } }, aiPrefs: { selfHeal: true, autoJudge: false } };
+    const checks = [{ name: 'Save integrity', command: process.execPath, args: ['-e', "if(require('fs').readFileSync('game.txt','utf8')!=='fixed'){console.error('EXPECTED_FIXED_GOT_BROKEN');process.exit(2)}"] }];
+    await start(dirs, { cfg: localCfg, repository: { source }, predefinedJobs: [job('a', 'Implement')], checks });
+    const run = readRun(dirs, 'test');
+    assert.equal(run.status, succeeds ? 'done' : 'blocked');
+    assert.equal(run.jobs.length, 2); assert.equal(run.jobs[1].repairFor, 1);
+    assert.equal(run.verificationRepairs, 1); assert.equal(run.verificationHistory.length, 2);
+    assert.equal(run.verificationHistory[0].status, 'failed');
+    assert.equal(run.verificationHistory[1].status, succeeds ? 'passed' : 'failed');
+    assert.deepEqual(run.verificationHistory[1].checks[0].args, checks[0].args);
+    assert.ok(run.events.some(event => event.type === 'job_added'));
+    assert.equal(readFileSync(join(source, 'game.txt'), 'utf8'), 'original');
+  }
+});
+
 test('cleanup leaves no active run', () => { assert.equal(activeRuns.size, 0); assert.equal(swarmState.active, null); globalThis.fetch = originalFetch; });

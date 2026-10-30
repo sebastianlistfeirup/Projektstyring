@@ -439,6 +439,10 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
         lines.push('');
       }
       lines.push(`Verifikation: ${run.verification?.status ?? 'ikke kørt'}`, '');
+      for (const attempt of run.verificationHistory ?? []) {
+        lines.push(`### Kontrolgennemløb ${attempt.number}: ${attempt.status}`, '', `Commit: ${attempt.commit} · ${new Date(attempt.at).toISOString()}`, '');
+        for (const check of attempt.checks) lines.push(`- ${check.name}: ${check.status} (exit ${check.exitCode ?? 'ukendt'})`, '', '~~~~text', String(check.output ?? ''), '~~~~', '');
+      }
       for (const check of run.verification?.checks ?? []) lines.push(`### ${check.name}`, '', `Status: ${check.status} · Exitkode: ${check.exitCode ?? 'ukendt'}`, '', '~~~~text', String(check.output ?? ''), '~~~~', '');
       for (const job of (run.jobs ?? []).filter(j => j.status !== 'done')) lines.push(`### ${job.title} — ${job.status}`, '', job.error ?? 'Ingen godkendt leverance.', '');
       for (const r of run.results ?? []) {

@@ -1147,7 +1147,7 @@ export function AiSwarmView() {
     if (!archived || archivedEvents.length < 2) return;
     const events = archivedEvents;
     // Evidence from the end must not appear before its event in the replay.
-    const base = { ...archived, jobs: [], evidence: undefined, verification: undefined, results: [], projectPlan: undefined, projectPlanError: undefined, heartbeatAt: undefined, finishedAt: null };
+    const base = { ...archived, jobs: [], evidence: undefined, verification: undefined, verificationHistory: [], results: [], projectPlan: undefined, projectPlanError: undefined, heartbeatAt: undefined, finishedAt: null };
     setReplay({ base, events, t0: events[0].at, t1: events.at(-1)!.at, cursor: events[0].at, playing: false, speed: 8 });
   };
 
