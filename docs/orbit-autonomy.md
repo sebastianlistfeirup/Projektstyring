@@ -17,7 +17,7 @@ Direkte chat med én tjeneste er til læsning/rådgivning. Repositoryændringer 
 ## Hvad kørselsmotoren garanterer i den implementerede sti
 
 - Planer valideres for dublerede id'er, ugyldige afhængigheder, ukendte faser og cykler før udførelse. Danske og engelske fasenavne normaliseres ens, også ved kontrol af repository-adgang.
-- Planredigering bevarer læsetilstand og kontekstfiler. Sletning forskyder afhængigheder korrekt og afvises, hvis andre jobs stadig afhænger af det slettede job. Afhængigheder kan redigeres, og en afvist godkendelse viser serverens forklaring i dialogen. Tomme jobs bortfiltreres ikke lydløst.
+- Planredigering bevarer læsetilstand og kontekstfiler. Sletning forskyder afhængigheder korrekt og afvises, hvis andre jobs stadig afhænger af det slettede job. Afhængigheder kan redigeres, og en afvist godkendelse viser serverens forklaring i dialogen. Tomme jobs bortfiltreres ikke lydløst. Planvinduet kan lukkes med Escape eller **Se arbejdskortet** uden godkendelse/aflysning; kladden bevares, mens du undersøger kortet. **Redigér og godkend planen** åbner den igen.
 - Afhængige jobs starter kun efter vellykkede forgængere. Fejl kan give `partial`, `blocked` eller `error`; de bliver ikke skjult som succes.
 - En plan, der afventer godkendelse, starter aldrig på grund af timeout.
 - Lukning af fanen aflyser ikke Auto. **Stop** sender en særskilt afbrydelse til serveren og den lokale proces.

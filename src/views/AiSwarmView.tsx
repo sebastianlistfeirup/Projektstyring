@@ -723,13 +723,18 @@ function RunControls({ run }: { run: SwarmRun }) {
 
 interface PlanDraft { id: string; title: string; serviceId: string | null; phase: string; dependsOn: number[]; description: string; team?: boolean; readOnly?: boolean; context?: string[] }
 
-function ApprovalModal({ services, onClose }: { services: Record<string, AiServiceInfo> | null; onClose: () => void }) {
+function ApprovalModal({ services, open, onClose }: { services: Record<string, AiServiceInfo> | null; open: boolean; onClose: () => void }) {
   const approval = useSwarm((s) => s.approval);
   const setApproval = useSwarm((s) => s.setApproval);
   const [draft, setDraft] = useState<PlanDraft[]>([]);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const element = dialog.current;
+    if (open && approval) element?.showModal(); else element?.close();
+  }, [open, approval?.runId]);
 
   useEffect(() => {
     if (approval && !ready) {
@@ -772,13 +777,13 @@ function ApprovalModal({ services, onClose }: { services: Record<string, AiServi
   };
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center p-4" role="dialog" aria-modal aria-label="Gennemgå jobplan">
-      <div className="absolute inset-0 bg-zinc-950/70 backdrop-blur-sm" />
+    <dialog ref={dialog} aria-label="Gennemgå jobplan" onCancel={event => { event.preventDefault(); onClose(); }} className="fixed m-auto w-[min(96vw,700px)] max-h-[94dvh] rounded-3xl border border-slate-500/30 bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100 p-0 shadow-2xl backdrop:bg-black/75">
       <div className="glass-panel animate-fade-in relative max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-3xl p-5">
         <h3 className="text-base font-bold flex items-center gap-2">
           <Check size={16} className="text-emerald-400" /> {t('swarm.approvalTitle')}
         </h3>
-        <p className="text-[11px] opacity-55 mt-1 mb-3">{t('swarm.approvalHint')}</p>
+        <p className="text-xs opacity-65 mt-1 mb-3">{t('swarm.approvalHint')}</p>
+        <button className="btn-ghost text-xs mb-3" onClick={onClose}>Se arbejdskortet · planen venter</button>
         <fieldset disabled={busy} className="space-y-2">
           {draft.map((j, i) => (
             <div key={j.id || i} role="group" aria-label={`Planjob ${i + 1}`} className="rounded-2xl border border-white/10 bg-black/15 dark:bg-black/25 p-2.5 space-y-1.5">
@@ -826,7 +831,7 @@ function ApprovalModal({ services, onClose }: { services: Record<string, AiServi
           </div>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }
 
@@ -1090,6 +1095,7 @@ export function AiSwarmView() {
   const services = useSwarm((s) => s.services);
   const approval = useSwarm((s) => s.approval);
   const [archived, setArchived] = useState<SwarmRun | null>(null);
+  const [hiddenApproval, setHiddenApproval] = useState<string | null>(null);
   const [replay, setReplay] = useState<ReplayState | null>(null);
   const [archivedEvents, setArchivedEvents] = useState<SwarmEvent[]>([]);
   const [mapMode, setMapMode] = useState<'work' | 'constellation'>('work');
@@ -1206,10 +1212,11 @@ export function AiSwarmView() {
 
       {/* pulserende banner når en plan afventer godkendelse */}
       {approval && (
-        <div className="rounded-2xl border border-amber-400/50 bg-amber-400/10 px-3.5 py-2.5 flex items-center gap-2 animate-pulse">
+        <div className="rounded-2xl border border-amber-400/50 bg-amber-400/10 px-3.5 py-2.5 flex flex-wrap items-center gap-2">
           <AlertTriangle size={14} className="text-amber-300 shrink-0" />
           <span className="text-[12px] font-semibold text-amber-200">{t('swarm.approvalWaiting')}</span>
-          <span className="text-[10px] opacity-50">{t('swarm.approvalWaitingHint')}</span>
+          <span className="text-xs opacity-65 flex-1">{t('swarm.approvalWaitingHint')}</span>
+          <button className="btn-primary text-xs" onClick={() => setHiddenApproval(null)}>Redigér og godkend planen</button>
         </div>
       )}
 
@@ -1224,7 +1231,7 @@ export function AiSwarmView() {
           {/* statuslinje */}
           <div className="rounded-2xl border border-white/10 glass-panel p-3.5 space-y-2.5">
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[12px]">
-              <span className="font-medium max-w-[46%] truncate" title={shown.goal}>{shown.goal}</span>
+              <span className="font-semibold text-sm w-full break-words" title={shown.goal}>{shown.goal}</span>
               {modeKey && (
                 <span className="text-[9px] px-1.5 py-0.5 rounded-full border border-violet-400/40 text-violet-300">{t(modeKey)}</span>
               )}
@@ -1253,6 +1260,7 @@ export function AiSwarmView() {
               <span>{t('swarm.progress')}</span>
               <span>{t('swarm.jobsDone').replace('{done}', String(doneCount)).replace('{total}', String(jobs.length))}</span>
             </div>
+            <details><summary className="text-xs opacity-60 cursor-pointer">Flere tal om kørslen</summary>
             {/* faser */}
             <div className="flex gap-1 pt-1">
               {phaseStats.map(({ phase, total, done }) => total === 0 ? null : (
@@ -1281,6 +1289,7 @@ export function AiSwarmView() {
                 })}
               </div>
             )}
+            </details>
           </div>
 
           {/* dommer-panel for race/debate/vote */}
@@ -1381,7 +1390,7 @@ export function AiSwarmView() {
       <RunHistory refreshKey={`${run?.runId ?? ''}:${run?.status ?? ''}`} onOpen={r => void openArchived(r)} />
 
       {/* godkendelsesmodal til plan-pause */}
-      {approval && <ApprovalModal services={services} onClose={() => undefined} />}
+      {approval && <ApprovalModal services={services} open={hiddenApproval !== approval.runId} onClose={() => setHiddenApproval(approval.runId)} />}
 
       {/* lille toast til handlinger (genoptagelse, link, eksport) */}
       {toast && (

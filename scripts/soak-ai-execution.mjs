@@ -33,7 +33,8 @@ const jobs = Array.from({ length: count }, (_, index) => ({ id: `job-${index}`, 
 const checkScript = `const fs=require('fs');for(let i=0;i<${count};i++)if(fs.readFileSync('delivery-'+i+'.txt','utf8')!=='verified '+i+'\\n')process.exit(7);console.log('All deliveries verified');`;
 const checks = [{ name: 'Actual delivery files', command: process.execPath, args: ['-e', checkScript] }];
 const bible = 'Keep the complete mandate and preserve the source checkout.\n'.repeat(300);
-const sourceHashes = Object.fromEntries(['ai-runtime.mjs', 'ai-state.mjs', 'ai-services.mjs', 'ai-repository.mjs', 'ai-check-process.mjs'].map(name => [name, createHash('sha256').update(readFileSync(new URL(`../server/${name}`, import.meta.url))).digest('hex')]));
+const sourceHashes = Object.fromEntries(['ai-runtime.mjs', 'ai-state.mjs', 'ai-services.mjs', 'ai-repository.mjs', 'ai-check-process.mjs', 'ai-history.mjs', 'ai-capabilities.mjs', 'ai-processes.mjs'].map(name => [name, createHash('sha256').update(readFileSync(new URL(`../server/${name}`, import.meta.url))).digest('hex')]));
+sourceHashes['shared/ai-plan.mjs'] = createHash('sha256').update(readFileSync(new URL('../shared/ai-plan.mjs', import.meta.url))).digest('hex');
 const startedAt = Date.now(); let samples = 0, maxRss = 0, monitorError, currentId = 'first';
 const monitor = setInterval(() => {
   try {

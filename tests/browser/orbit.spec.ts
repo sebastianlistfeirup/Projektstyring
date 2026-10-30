@@ -542,6 +542,12 @@ test('plan editing retains read-only context, dependency identities and visible 
   await expect(first.getByLabel('Kun læsning', { exact: false })).toBeChecked();
   await expect(first).toContainText('missing-context.md');
   await expect(first.getByLabel('Fase', { exact: true })).toHaveValue('concept');
+  await first.getByLabel('Jobbeskrivelse').fill('READ_ONLY_PLAN bevaret kladde');
+  await page.keyboard.press('Escape');
+  await expect(modal).not.toBeVisible();
+  expect((await (await request.get(`${base}/api/ai/swarm`)).json()).run.status).toBe('awaiting_approval');
+  await page.getByRole('button', { name: 'Redigér og godkend planen', exact: true }).click();
+  await expect(first.getByLabel('Jobbeskrivelse')).toHaveValue('READ_ONLY_PLAN bevaret kladde');
   await modal.getByRole('button', { name: 'Fjern job 1', exact: true }).click();
   await expect(modal.getByRole('alert')).toContainText('Sammenhold reglerne afhænger');
   await second.getByText('Afhænger af 1 jobs', { exact: true }).click();
