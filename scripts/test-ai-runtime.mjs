@@ -66,6 +66,21 @@ test('disconnected observer does not stop execution', async () => {
   assert.equal(readRun(dirs, 'test').status, 'done');
 });
 
+test('jobs with equal titles and nonnumeric or case-variant ids cannot overwrite dependency deliveries', async () => {
+  const dirs = fixture();
+  await start(dirs, { predefinedJobs: [
+    { ...job('a', 'FIRST_DELIVERY_MARKER'), title: 'Same title' },
+    { ...job('A', 'SECOND_DELIVERY_MARKER'), title: 'Same title' },
+    job('consumer', 'Read only the first dependency', [0]),
+  ] });
+  const run = readRun(dirs, 'test');
+  assert.equal(run.status, 'done');
+  assert.notEqual(run.results[0].deliverable.toLowerCase(), run.results[1].deliverable.toLowerCase());
+  assert.match(run.results[2].text, /FIRST_DELIVERY_MARKER/);
+  assert.ok(!run.results[2].text.includes('SECOND_DELIVERY_MARKER'));
+  assert.match(readFileSync(join(run.auditDir, run.results[0].deliverable), 'utf8'), /FIRST_DELIVERY_MARKER/);
+});
+
 test('project memory cannot carry another projects instructions into a run', async () => {
   const dirs = fixture();
   const foreign = projectMemoryDirs(dirs, 'foreign');

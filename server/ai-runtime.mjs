@@ -78,10 +78,15 @@ async function gitCommit(runDir, message) {
   return stdout.trim();
 }
 
+function deliverableFilename(job) {
+  // IDs such as a/b or A/a used to collapse to the same numeric prefix. A hash
+  // also keeps names distinct on case-insensitive Windows filesystems.
+  return `${createHash('sha256').update(job.id).digest('hex').slice(0, 16)}-${slugify(job.title)}.md`;
+}
+
 function writeDeliverable(runDir, job, text) {
   try {
-    const idx = job.id.replace(/\D/g, '').padStart(2, '0') || '00';
-    const fname = `${idx}-${slugify(job.title)}.md`;
+    const fname = deliverableFilename(job);
     writeFileSync(join(runDir, fname), `# ${job.title}\n\n**Fase:** ${job.phase} · **Tjeneste:** ${job.serviceId ?? '—'}\n\n${text}\n`);
     return fname;
   } catch { return null; }
@@ -93,8 +98,7 @@ function readDeliverables(runDir, jobs, dependsOn, doneText) {
     const src = jobs[d];
     const text = src ? doneText.get(src.id) : null;
     if (src && typeof text === 'string' && text.trim()) {
-      const idx = src.id.replace(/\D/g, '').padStart(2, '0') || '00';
-      const fname = `${idx}-${slugify(src.title)}.md`;
+      const fname = deliverableFilename(src);
       let body = text;
       try {
         const p = join(runDir, fname);
