@@ -5,6 +5,14 @@ try {
     if ($listeners.LocalPort -contains 4310) {
         # A reachable control endpoint is required before touching processes.
         $state = Invoke-RestMethod 'http://127.0.0.1:4310/api/ai/swarm' -TimeoutSec 5
+        if ($RefuseActive -and $state.run.status -in @('running', 'awaiting_approval')) { throw 'En AI-koersel er aktiv. Afslut eller stop den i Orbit foer opdatering.' }
+        # Prevent a queued job from starting between cancellation and shutdown.
+        try {
+            Invoke-RestMethod 'http://127.0.0.1:4310/api/ai/queue/control' -Method Post -ContentType 'application/json' -Body '{"action":"pause"}' -TimeoutSec 5 | Out-Null
+        } catch {
+            if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw }
+        }
+        $state = Invoke-RestMethod 'http://127.0.0.1:4310/api/ai/swarm' -TimeoutSec 5
         if ($state.run.status -in @('running', 'awaiting_approval')) {
             if ($RefuseActive) { throw 'En AI-koersel er aktiv. Afslut eller stop den i Orbit foer opdatering.' }
             $runId = [uri]::EscapeDataString($state.run.runId)

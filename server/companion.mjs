@@ -813,11 +813,13 @@ app.post('/api/backup/restore', (req, res) => {
   }
   try {
     const data = JSON.parse(readFileSync(join(BACKUP_DIR, String(name)), 'utf8'));
+    if (app.locals.orbitQueue && !app.locals.orbitQueue.storageError) app.locals.orbitQueue.pause('Gendannelse af backup er i gang.');
     if (lastSnapshot) writeAtomicJson(join(BACKUP_DIR, `before-restore-${Date.now()}.json`), createWorkspaceBackup(lastSnapshot.snapshot, APP_DIR, ATTACH_DIR));
     const snapshot = restoreWorkspaceBackup(data, APP_DIR, ATTACH_DIR);
     lastSnapshot = { snapshot, from: 'backup', updatedAt: new Date().toISOString() };
     writeAtomicJson(SNAPSHOT_PATH, lastSnapshot);
     swarmState.last = null;
+    app.locals.orbitQueue?.reloadAfterRestore();
     res.json({ ok: true, snapshot });
   } catch (err) {
     res.status(404).json({ ok: false, reason: String(err) });

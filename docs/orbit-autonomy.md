@@ -66,6 +66,16 @@ Arbejdskortet grupperer opgaver efter deres afhængigheder. En valgt opgave vise
 
 Der er endnu ikke en fælles MCP-servermanager eller en universal tool-calling-loop for alle modeller. Livekortet viser de strukturerede hændelser, adapteren modtager. Det opfinder ikke underagenter, og det viser ikke modellernes interne ræsonnementer.
 
+## Vedvarende arbejdskø
+
+En åben arbejdsordre kan lægges i AI-kø fra opgavens detaljevisning. Køen gemmes atomisk og udfører én kørsel ad gangen. Den kontrollerer projektets aktuelle scope, afhængigheder, WIP, bibel, repository og kontrolkommandoer ved start. Et gentaget klik opretter ikke samme ventende arbejdsordre igen.
+
+Planlagte triggere kan tilknyttes et projekt. En optaget motor lægger nye intentioner i kø; samme cron-minut deduplikeres også efter genstart. Cron bruger maskinens lokale tidszone og understøtter fem felter med tal, `*` og `*/n`. Tidspunkter, hvor Companion var lukket, efterkøres ikke.
+
+Fejl, delvise resultater og usikre afbrydelser pauser køen. En gemt påbegyndt handling afspilles aldrig automatisk igen efter genstart. Et afsluttet resultat kan derimod afstemmes fra den gemte kørsel. En mulig overlevende agentproces blokerer fortsættelse. Kontrollen **Pause efter denne kørsel** lader den aktive opgave afslutte. Køen har højst 100 ventende/aktive intentioner og bevarer de seneste 200 afsluttede poster.
+
+Backup omfatter køfilen, og gendannelse genindlæser den på pause. Windows-stop pauser også køen før processtop. Maskinen og Companion skal fortsat være tændt; dette er én lokal worker, ikke en distribueret cloudtjeneste.
+
 ## Bibel, billeder og beslutninger
 
 - Hver projektkørsel gemmer identiteten på bibelversion, arbejdsordre og projektets beslutningsnoter med SHA-256, versionsmål og scope. Beslutningsnoter medsendes i fuld længde; øvrige notetyper bliver ikke automatisk til krav. Genoptagelse bevarer dette grundlag.
@@ -123,7 +133,7 @@ På Windows sættes miljøvariablen med PowerShell: `$env:ORBIT_SOAK_MINUTES='12
 
 ## Verifikation udført under udviklingen
 
-30. oktober 2026: Linux-build, lint uden fejl (eksisterende React-advarsler), 21 importkontroller, 4 workspace-tests og 51 server-/AI-tests bestod. Otte Playwright-forløb er afprøvet med rigtig Chromium: upload af bibel på over 6.000 tegn, offentliggørelse af bibelversion, repositorytilknytning, reel filkontrol, genindlæsning under udførelse, bevaret kilde-checkout, status til gennemgang, et fejlet forløb, der forblev fejlet i chatten, præcisering og filupload efter genindlæsning, serverafslutning med lukket browser, projektoprettelse på mobil, projektgennemgang med import uden dubletter samt sletning og gendannelse på tværs af åbne faner samt arbejdskortets afhængigheder, historik, tastatur og mobilvisning samt en reel testfejl med afgrænset automatisk rettelse og bevaret kontrolhistorik. Det tidligere checkpoint bestod også GitHub-kontrollerne på Windows efter en rettelse af absolutte programstier.
+30. oktober 2026: Linux-build, lint uden fejl (eksisterende React-advarsler), 21 importkontroller, 4 workspace-tests og 57 server-/AI-tests bestod. Ni Playwright-forløb er afprøvet med rigtig Chromium: upload af bibel på over 6.000 tegn, offentliggørelse af bibelversion, repositorytilknytning, reel filkontrol, genindlæsning under udførelse, bevaret kilde-checkout, status til gennemgang, et fejlet forløb, der forblev fejlet i chatten, præcisering og filupload efter genindlæsning, serverafslutning med lukket browser, projektoprettelse på mobil, projektgennemgang med import uden dubletter samt sletning og gendannelse på tværs af åbne faner samt arbejdskortets afhængigheder, historik, tastatur og mobilvisning samt en reel testfejl med afgrænset automatisk rettelse og bevaret kontrolhistorik samt to arbejdsordrer fra den gemte kø, udført i rækkefølge med lukket browser. Det tidligere checkpoint bestod også GitHub-kontrollerne på Windows efter en rettelse af absolutte programstier.
 
 Godkendelsespausen blev desuden afprøvet i 12 faktiske minutter med 144 stikprøver. Ingen jobstart skete før eksplicit godkendelse. Dette er en afgrænset varighedstest med en lokal prøveagent, ikke dokumentation for flere døgns autonomi med rigtige udbydere.
 

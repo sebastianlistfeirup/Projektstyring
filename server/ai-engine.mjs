@@ -7,8 +7,9 @@ import { extractDocument, hydrateAttachment } from './ai-documents.mjs';
 import { inspectRepository, validateChecks } from './ai-repository.mjs';
 import { projectExecution } from './task-execution.mjs';
 import { importProjectPlan } from './project-plan.mjs';
+import { DurableRunQueue } from './ai-queue.mjs';
 import { readRun, recoverRuns, validatePlan, runPath } from './ai-state.mjs';
-import { executeRun, swarmState, activeRuns, loadTemplates, saveUserTemplates, startTriggerScheduler, cronMatches, pickOrchestrator, planWithLLM, parseJsonObject, projectMemoryDirs } from './ai-runtime.mjs';
+import { executeRun, swarmState, activeRuns, loadTemplates, saveUserTemplates, startTriggerScheduler, validateCron, pickOrchestrator, planWithLLM, parseJsonObject, projectMemoryDirs } from './ai-runtime.mjs';
 
 // ---- HTTP-ruter --------------------------------------------------------------
 export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, getSnapshot, updateSnapshot }) {
@@ -24,7 +25,61 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
 
   const recovered = recoverRuns(dirs);
   if (recovered.length) swarmState.last = recovered.at(-1);
-  startTriggerScheduler({ loadConfig, dirs, broadcast });
+  const queueInput = body => {
+    const input = { goal: String(body.goal ?? '').trim(), projectId: body.projectId || null, taskId: body.taskId || null,
+      mode: ['standard', 'roles', 'debate', 'vote', 'race'].includes(body.mode) ? body.mode : 'standard', pauseAfterPlan: Boolean(body.pauseAfterPlan) };
+    if (input.projectId && getSnapshot) {
+      const snapshot = getSnapshot(), project = snapshot.projects?.find(project => project.id === input.projectId);
+      if (!project) throw new Error('Projektet skal gemmes på Companion før det kan lægges i kø.');
+      if (input.taskId) {
+        const task = snapshot.tasks?.find(task => task.id === input.taskId && task.projectId === input.projectId);
+        if (!task || ['done', 'canceled'].includes(task.status)) throw new Error('Vælg en åben arbejdsordre i projektet.');
+        if (project.scopeTaskIds && !project.scopeTaskIds.includes(task.id)) throw new Error('Arbejdsordren ligger uden for versionens scope.');
+      }
+    } else if (input.taskId) throw new Error('Arbejdsordren kræver et projekt.');
+    if (!input.projectId) input.bible = String(body.bible ?? '');
+    return input;
+  };
+  const orphanGuard = () => {
+    const runs = [...recovered];
+    for (const entry of queue.state.entries.filter(entry => entry.status === 'interrupted' && entry.runId)) { try { runs.push(readRun(dirs, entry.runId)); } catch { /* no process identity available */ } }
+    const live = runs.some(run => (run.processes ?? []).some(processInfo => { try { process.kill(processInfo.pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } }));
+    return live ? 'En proces fra en afbrudt kørsel kan stadig arbejde. Stop den før køen fortsættes.' : '';
+  };
+  const queue = new DurableRunQueue({ path: join(dirs.runs, 'ai-queue.json'),
+    isBusy: () => Boolean(swarmState.active), canResume: orphanGuard,
+    readRun: runId => readRun(dirs, runId),
+    resolveInput: input => getSnapshot ? projectExecution(getSnapshot(), input) : input,
+    execute: input => executeRun({ ...input, repository: input.repositoryPath ? { source: String(input.repositoryPath) } : null,
+      checks: validateChecks(input.checks ?? []), cfg: loadConfig(), dirs, emit: event => broadcast?.({ kind: 'ai', ...event }) }),
+    onUpdate: state => broadcast?.({ kind: 'ai_queue', type: 'queue_updated', updatedAt: state.updatedAt }),
+  });
+  app.locals.orbitQueue = queue;
+  queue.recover();
+  if (!queue.storageError && recovered.some(run => run.status === 'interrupted' && run.processes?.length)) queue.pause('Companion genstartede under en kørsel. Kontrollér processer og leverance før arbejdskøen fortsættes.');
+  startTriggerScheduler({ loadConfig, broadcast, enqueue: (body, options) => queue.enqueue(queueInput(body), options), pump: () => queue.pump() });
+
+  app.get('/api/ai/queue', (_req, res) => res.json({ ok: true, queue: queue.snapshot() }));
+  app.post('/api/ai/queue', (req, res) => {
+    try {
+      const input = queueInput(req.body ?? {});
+      if (input.taskId && swarmState.active?.taskId === input.taskId && !queue.state.entries.some(entry => entry.status === 'running' && entry.runId === swarmState.active.runId)) throw new Error('Arbejdsordren kører allerede. Send en præcisering i chatten eller vent på resultatet.');
+      const result = queue.enqueue(input); res.json({ ok: true, ...result }); void queue.pump();
+    }
+    catch (error) { res.status(409).json({ ok: false, reason: error.message }); }
+  });
+  app.post('/api/ai/queue/control', (req, res) => {
+    try {
+      if (req.body?.action === 'pause') queue.pause();
+      else if (req.body?.action === 'resume') queue.resume();
+      else throw new Error('Vælg pause eller resume.');
+      res.json({ ok: true, queue: queue.snapshot() });
+    } catch (error) { res.status(409).json({ ok: false, reason: error.message }); }
+  });
+  app.delete('/api/ai/queue/:id', (req, res) => {
+    try { queue.cancel(req.params.id); res.json({ ok: true }); }
+    catch (error) { res.status(409).json({ ok: false, reason: error.message }); }
+  });
 
   const sse = (res) => {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'Access-Control-Allow-Origin': '*' });
@@ -350,16 +405,16 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   });
 
   app.post('/api/ai/triggers', (req, res) => {
-    const { name, kind, cron, goal, bible, mode } = req.body ?? {};
+    const { name, kind, cron, goal, bible, mode, projectId, taskId } = req.body ?? {};
     if (!name || !goal) return res.status(400).json({ ok: false, reason: 'name og goal kræves' });
-    if (kind === 'cron' && !cronMatches(cron, new Date()) && !/^\S+\s+\S+\s+\S+\s+\S+$/.test(String(cron ?? ''))) {
-      return res.status(400).json({ ok: false, reason: 'cron skal have 5 felter, fx "0 8 * * 1"' });
-    }
+    try { if (kind !== 'webhook') validateCron(cron ?? '* * * * *'); queueInput({ goal, projectId, taskId }); }
+    catch (error) { return res.status(400).json({ ok: false, reason: error.message }); }
     const cfg = loadConfig();
     cfg.aiTriggers = cfg.aiTriggers ?? [];
     const tr = {
       id: `trg-${randomUUID().slice(0, 8)}`,
       name: String(name).slice(0, 60),
+      projectId: projectId || null, taskId: taskId || null,
       kind: kind === 'webhook' ? 'webhook' : 'cron',
       cron: kind === 'webhook' ? undefined : String(cron ?? '* * * * *'),
       token: randomUUID().replace(/-/g, '').slice(0, 24),
@@ -386,12 +441,11 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     const cfg = loadConfig();
     const trigger = (cfg.aiTriggers ?? []).find((t) => t.kind === 'webhook' && t.token === req.params.token);
     if (!trigger || trigger.enabled === false) return res.status(404).json({ ok: false, reason: 'Ukendt webhook-token' });
-    if (swarmState.active) return res.status(409).json({ ok: false, reason: 'En kørsel er allerede aktiv.' });
-    const runId = randomUUID().slice(0, 12);
-    const extra = req.body?.goal ? String(req.body.goal).slice(0, 500) : '';
-    broadcast?.({ type: 'toast', level: 'info', text: `Webhook "${trigger.name}" starter en kørsel.` });
-    executeRun({ runId, goal: extra || trigger.goal, bible: trigger.bible ?? '', cfg, dirs, mode: trigger.mode ?? 'standard', emit: (obj) => broadcast?.({ kind: 'ai', ...obj, runId }) }).catch(() => {});
-    res.json({ ok: true, runId });
+    try {
+      const extra = req.body?.goal ? String(req.body.goal).slice(0, 500) : '';
+      const result = queue.enqueue(queueInput({ ...trigger, goal: extra || trigger.goal }), { source: trigger.id, name: trigger.name });
+      res.json({ ok: true, ...result }); void queue.pump();
+    } catch (error) { res.status(409).json({ ok: false, reason: error.message }); }
   });
 
   // ---- genoptagelse (resume): kør kun de jobs der aldrig leverede ----

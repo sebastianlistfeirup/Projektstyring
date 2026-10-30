@@ -234,6 +234,8 @@ export async function fireOrchestrate(input: OrchestrateInput): Promise<{ ok: bo
 }
 
 export interface Trigger {
+  projectId?: string;
+  taskId?: string;
   id: string;
   name: string;
   kind: 'cron' | 'webhook';
@@ -521,4 +523,21 @@ export async function fetchRunHistory(limit = 20): Promise<RunHistoryItem[]> {
   } catch {
     return [];
   }
+}
+
+export interface AiQueueEntry {
+  id: string; name: string; source: string; status: string; createdAt: number; startedAt?: number; finishedAt?: number; runId?: string; reason?: string;
+  input: { goal: string; projectId?: string | null; taskId?: string | null };
+}
+export interface AiQueueState { paused: boolean; reason: string; entries: AiQueueEntry[]; storageError?: string; updatedAt: number }
+export async function fetchAiQueue(): Promise<AiQueueState | null> {
+  try { const response = await fetch(`${BASE}/api/ai/queue`); const result = await response.json(); return result.ok ? result.queue : null; } catch { return null; }
+}
+export async function enqueueAiTask(input: { goal: string; projectId: string; taskId: string }): Promise<{ ok: boolean; reason?: string; duplicate?: boolean; entry?: AiQueueEntry }> {
+  try { return await (await fetch(`${BASE}/api/ai/queue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })).json(); }
+  catch { return { ok: false, reason: 'Køens svar kunne ikke hentes. Kontrollér arbejdskøen før et nyt forsøg.' }; }
+}
+export async function controlAiQueue(action: 'pause' | 'resume' | 'cancel', id?: string): Promise<{ ok: boolean; reason?: string }> {
+  try { return await (await fetch(`${BASE}/api/ai/queue/${action === 'cancel' ? encodeURIComponent(id ?? '') : 'control'}`, { method: action === 'cancel' ? 'DELETE' : 'POST', headers: { 'Content-Type': 'application/json' }, ...(action === 'cancel' ? {} : { body: JSON.stringify({ action }) }) })).json(); }
+  catch { return { ok: false, reason: 'Handlingen kunne ikke bekræftes. Kontrollér forbindelsen.' }; }
 }

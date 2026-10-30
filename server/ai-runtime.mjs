@@ -868,40 +868,42 @@ export function saveUserTemplates(dirs, list) {
 // ---- Autonome triggere (idé 15) ------------------------------------------------
 // cron: minut-baseret plan (5 felter, * , og */n understøttes) — kører et mål på fast tidspunkt.
 // webhook: POST /api/ai/hook/<token> starter kørslen (fx fra GitHub eller en færdig Meshy-job).
-export function cronMatches(expr, date) {
-  const fields = String(expr ?? '').trim().split(/\s+/);
-  if (fields.length !== 5) return false;
-  const vals = [date.getMinutes(), date.getHours(), date.getDate(), date.getMonth() + 1, date.getDay()];
-  return fields.every((f, i) => {
-    if (f === '*') return true;
-    const m = f.match(/^\*\/(\d+)$/);
-    if (m) return vals[i] % Number(m[1]) === 0;
-    return Number(f) === vals[i];
+export function validateCron(expr) {
+  const fields = String(expr ?? '').trim().split(/\s+/), ranges = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]];
+  if (fields.length !== 5) throw new Error('Cron kræver fem felter: minut time dag måned ugedag.');
+  return fields.map((field, index) => {
+    const [min, max] = ranges[index];
+    if (field === '*') return () => true;
+    const step = field.match(/^\*\/(\d+)$/);
+    if (step && Number(step[1]) > 0 && Number(step[1]) <= max - min + 1) return value => (value - min) % Number(step[1]) === 0;
+    if (/^\d+$/.test(field) && Number(field) >= min && Number(field) <= max) return value => value === Number(field);
+    throw new Error(`Cron-felt ${index + 1} skal være *, */n eller et tal fra ${min} til ${max}.`);
   });
+}
+export function cronMatches(expr, date) {
+  try {
+    const predicates = validateCron(expr);
+    const values = [date.getMinutes(), date.getHours(), date.getDate(), date.getMonth() + 1, date.getDay()];
+    return predicates.every((predicate, index) => predicate(values[index]));
+  } catch { return false; }
 }
 
 let triggerTimer = null;
-export function startTriggerScheduler({ loadConfig, dirs, broadcast }) {
+export function startTriggerScheduler({ loadConfig, enqueue, pump, broadcast }) {
   if (triggerTimer) return;
-  const lastFire = new Map();
-  triggerTimer = setInterval(async () => {
+  const tick = () => {
     try {
-      const cfg = loadConfig();
-      const triggers = cfg.aiTriggers ?? [];
-      if (!triggers.length) return;
-      const now = new Date();
-      const minuteKey = now.toISOString().slice(0, 16);
-      for (const tr of triggers) {
-        if (tr.kind !== 'cron' || !tr.enabled) continue;
-        if (!cronMatches(tr.cron, now)) continue;
-        if (lastFire.get(tr.id) === minuteKey) continue;
-        lastFire.set(tr.id, minuteKey);
-        if (swarmState.active) { broadcast?.({ type: 'toast', level: 'info', text: `Trigger "${tr.name}" sprunget over — en kørsel er allerede aktiv.` }); continue; }
-        const runId = randomUUID().slice(0, 12);
-        broadcast?.({ type: 'toast', level: 'info', text: `Trigger "${tr.name}" starter en kørsel: ${String(tr.goal).slice(0, 80)}` });
-        executeRun({ runId, goal: tr.goal, bible: tr.bible ?? '', cfg, dirs, mode: tr.mode ?? 'standard', emit: (obj) => broadcast?.({ kind: 'ai', ...obj, runId }) }).catch(() => {});
+      const cfg = loadConfig(), now = new Date(), minuteKey = now.toISOString().slice(0, 16);
+      for (const trigger of cfg.aiTriggers ?? []) {
+        if (trigger.kind !== 'cron' || !trigger.enabled || !cronMatches(trigger.cron, now)) continue;
+        try {
+          const result = enqueue(trigger, { key: `cron:${trigger.id}:${minuteKey}`, source: trigger.id, name: trigger.name });
+          if (!result.duplicate) broadcast?.({ type: 'toast', level: 'info', text: `Trigger "${trigger.name}" er lagt i arbejdskøen.` });
+        } catch (error) { console.warn(`AI-trigger ${trigger.id}: ${error.message}`); }
       }
-    } catch { /* triggerfejl må ikke crashe companion */ }
-  }, 15_000);
+      void pump();
+    } catch (error) { console.warn(`AI-kø: ${error.message}`); }
+  };
+  triggerTimer = setInterval(tick, 5000);
   triggerTimer.unref();
 }

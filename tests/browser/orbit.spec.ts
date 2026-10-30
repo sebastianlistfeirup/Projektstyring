@@ -273,3 +273,44 @@ test('a real failed check creates one visible repair job and retains both test r
     expect(readFileSync(join(source, 'game.txt'), 'utf8')).toBe('original');
   } finally { await request.post(`${base}/api/ai/prefs`, { data: { selfHeal: false } }); }
 });
+
+test('work orders can be queued from their drawer and execute serially with the browser closed', async ({ page, request }) => {
+  await request.post(`${base}/api/ai/queue/control`, { data: { action: 'pause' } });
+  const projectId = await setup(page);
+  const taskIds = await page.evaluate(async id => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts');
+    const store = useStore.getState();
+    const first = store.tasks.find((task: { projectId: string }) => task.projectId === id);
+    const second = store.addTask({ projectId: id, title: 'Verificér næste arbejdsordre', description: 'game.txt skal være fixed efter ændringen.' });
+    store.selectTask(first.id); return [first.id, second.id];
+  }, projectId);
+  await page.getByRole('button', { name: 'Læg i AI-kø' }).click();
+  await expect(page.getByText('Arbejdsordren er lagt i kø.', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Læg i AI-kø' }).click();
+  await expect(page.getByText('Arbejdsordren er allerede i køen.', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.evaluate(async id => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts'); useStore.getState().selectTask(id);
+  }, taskIds[1]);
+  await page.getByRole('button', { name: 'Læg i AI-kø' }).click();
+  await expect(page.getByText('Arbejdsordren er lagt i kø.', { exact: false })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.goto('/#/swarm');
+  const queue = page.getByRole('region', { name: 'AI-arbejdskø' });
+  await expect(queue.getByText('Arbejdskø · 2 opgaver', { exact: true })).toBeVisible();
+  await queue.getByRole('button', { name: 'Fortsæt køen' }).click();
+  await page.close();
+  await expect.poll(async () => {
+    const snapshot = (await (await request.get(`${base}/api/ai/queue`)).json()).queue;
+    return snapshot.entries.filter((entry: { input: { projectId: string } }) => entry.input.projectId === projectId).map((entry: { status: string }) => entry.status);
+  }, { timeout: 30000 }).toEqual(['done', 'done']);
+  const entries = (await (await request.get(`${base}/api/ai/queue`)).json()).queue.entries.filter((entry: { input: { projectId: string } }) => entry.input.projectId === projectId);
+  expect(entries[1].startedAt).toBeGreaterThanOrEqual(entries[0].finishedAt);
+  for (const entry of entries) {
+    const run = (await (await request.get(`${base}/api/ai/runs/${entry.runId}`)).json()).run;
+    expect(run.taskId).toBeTruthy(); expect(run.verification.status).toBe('passed'); expect(run.contextManifest.projectId).toBe(projectId);
+  }
+  expect(readFileSync(join(source, 'game.txt'), 'utf8')).toBe('original');
+});

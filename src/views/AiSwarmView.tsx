@@ -66,6 +66,8 @@ import {
 } from '../lib/aiApi';
 import type { AiServiceInfo } from '../lib/aiApi';
 import OrbitWorkMap from '../components/OrbitWorkMap';
+import RunQueuePanel from '../components/RunQueuePanel';
+import { useStore } from '../store/useStore';
 import { presentRun, timestamp } from '../lib/runPresentation';
 import { AnalysisPanel, CompareRunsPanel, CopyDeliverableButton, JudgePanel, MiniMap, RunActionsBar } from './AiSwarmExtras';
 
@@ -813,6 +815,9 @@ function PlusIcon() {
 /* ================= autonome triggere (idé 15) ================= */
 
 function TriggersPanel() {
+  const projects = useStore(state => state.projects);
+  const [projectId, setProjectId] = useState('');
+  const [error, setError] = useState('');
   const [triggers, setTriggers] = useState<Trigger[]>([]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: '', kind: 'cron' as 'cron' | 'webhook', cron: '0 8 * * 1', goal: '', mode: 'standard' as Trigger['mode'] });
@@ -823,7 +828,9 @@ function TriggersPanel() {
 
   const add = async () => {
     if (!form.name.trim() || !form.goal.trim()) return;
-    await saveTrigger({ ...form, cron: form.kind === 'cron' ? form.cron : undefined });
+    const saved = await saveTrigger({ ...form, projectId: projectId || undefined, cron: form.kind === 'cron' ? form.cron : undefined });
+    if (!saved) { setError('Planlægningen kunne ikke gemmes. Kontrollér projekt, cron-felter og forbindelsen.'); return; }
+    setError('');
     setForm({ name: '', kind: 'cron', cron: '0 8 * * 1', goal: '', mode: 'standard' });
     reload();
   };
@@ -877,6 +884,9 @@ function TriggersPanel() {
                 <option value="race">{t('swarm.mode.race')}</option>
               </select>
             </div>
+            <label className="block text-[11px] space-y-1"><span>Projekt og gældende grundlag</span><select className="input w-full text-xs" aria-label="Projekt for planlagt kørsel" value={projectId} onChange={event => setProjectId(event.target.value)}><option value="">Uden projekt (ingen repositorytilknytning)</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+            <p className="text-[10px] opacity-50">Tidspunkter bruger maskinens lokale tidszone. Ventende kørsler gemmes; tider mens Companion er lukket efterkøres ikke.</p>
+            {error && <p role="alert" className="text-rose-400 text-xs">{error}</p>}
             <textarea value={form.goal} onChange={(e) => setForm((f) => ({ ...f, goal: e.target.value }))} rows={2} placeholder={t('swarm.triggerGoal')} className="w-full rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none focus:border-indigo-400/50 resize-none" />
             <button onClick={() => void add()} disabled={!form.name.trim() || !form.goal.trim()} className="btn-primary rounded-lg px-3 py-1.5 text-[10.5px] disabled:opacity-40 flex items-center gap-1">
               <PlusIcon /> {t('swarm.addTrigger')}
@@ -1187,6 +1197,8 @@ export function AiSwarmView() {
           </span>
         )}
       </div>
+
+      <RunQueuePanel />
 
       {/* pulserende banner når en plan afventer godkendelse */}
       {approval && (
