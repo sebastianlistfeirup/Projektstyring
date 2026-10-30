@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Activity, ArrowRight, Bot, CheckCircle2, ChevronRight, FileText, GitBranch, ShieldCheck } from 'lucide-react';
 import { serviceName, type SwarmRun } from '../lib/swarm';
 import type { AiServiceInfo } from '../lib/aiApi';
-import { jobStages, runLabels, waitingReason } from '../lib/runPresentation';
+import { jobStages, runLabels, verificationLabels, waitingReason } from '../lib/runPresentation';
 import ChatMarkdown from './ChatMarkdown';
 import RunContextPanel from './RunContextPanel';
 import VerificationHistory from './VerificationHistory';
@@ -92,7 +92,7 @@ export default function OrbitWorkMap({ run, services, connected, historical = fa
     {run.contextManifest && <div className="px-4 pb-4"><RunContextPanel run={run} /></div>}
     <div className="border-t border-current/10 p-4 grid sm:grid-cols-2 gap-4 text-xs">
       <div><h3 className="font-semibold flex gap-2 items-center"><GitBranch size={14} />Kodeleverance</h3>{run.evidence ? <><p className="font-mono break-all mt-2">{run.evidence.commit}</p><p className="opacity-65 mt-1">{run.evidence.changedFiles.length} ændrede filer på kørselsgrenen</p><details className="mt-2"><summary className="cursor-pointer opacity-65">Filer og ændringsoversigt</summary><pre className="whitespace-pre-wrap break-all mt-2">{run.evidence.changedFiles.join('\n')}\n{run.evidence.diffStat}</pre></details></> : <p className="opacity-55 mt-2">Ingen Git-leverance registreret endnu.</p>}</div>
-      <div><h3 className="font-semibold flex gap-2 items-center"><ShieldCheck size={14} />Faktiske kontroller</h3>{run.verification?.checks.length ? <ul className="mt-2 space-y-2">{run.verification.checks.map((check, index) => <li key={index}><details><summary className="cursor-pointer flex gap-2 items-center">{check.status === 'passed' && <CheckCircle2 size={12} className="text-emerald-500" />}{check.name}: {check.status === 'passed' ? 'Bestået' : check.status} · exit {check.exitCode ?? 'ukendt'}</summary><pre className="whitespace-pre-wrap break-all max-h-48 overflow-auto mt-2 p-2 bg-black/5 rounded">{check.output}</pre></details></li>)}</ul> : <p className="opacity-55 mt-2">Ingen udførte kontroller registreret. Leverancen er ikke dokumenteret testet.</p>}</div>
+      <div><h3 className="font-semibold flex gap-2 items-center"><ShieldCheck size={14} />Faktiske kontroller</h3>{run.verification?.checks.length ? <ul className="mt-2 space-y-2">{run.verification.checks.map((check, index) => <li key={index}><details><summary className="cursor-pointer flex gap-2 items-center">{check.status === 'passed' && <CheckCircle2 size={12} className="text-emerald-500" />}{check.name}: {verificationLabels[check.status] ?? check.status} · exit {check.exitCode ?? 'ukendt'}</summary><pre className="whitespace-pre-wrap break-all max-h-48 overflow-auto mt-2 p-2 bg-black/5 rounded">{check.output}</pre></details></li>)}</ul> : <p className="opacity-55 mt-2">Ingen udførte kontroller registreret. Leverancen er ikke dokumenteret testet.</p>}</div>
     </div>
   </section>;
 }

@@ -6,6 +6,11 @@ export const runLabels: Record<string, string> = {
   interrupted: 'Afbrudt', queued: 'I kø', skipped: 'Sprunget over',
 };
 
+export const verificationLabels: Record<string, string> = {
+  running: 'Kører', passed: 'Bestået', failed: 'Fejlet', cancelled: 'Stoppet',
+  interrupted: 'Afbrudt ved genstart', not_run: 'Ikke kørt', not_configured: 'Ingen kontroller valgt',
+};
+
 export function timestamp(value: unknown): number | null {
   const number = typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : NaN;
   return Number.isFinite(number) && number > 0 ? number : null;

@@ -483,7 +483,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       if (getSnapshot && prev.projectId) projectExecution(getSnapshot(), { projectId: prev.projectId, taskId: prev.taskId, goal: prev.goal });
       if (swarmState.active) return res.status(409).json({ ok: false, reason: 'En kørsel er allerede aktiv.' });
       if (prev.schemaVersion !== 2) return res.status(409).json({ ok: false, reason: 'Denne ældre kørsel mangler gemt projektkontekst. Start en ny kørsel med bibel og repository.' });
-      if (!prev.jobs?.some(j => j.status !== 'done') && prev.verification?.status !== 'failed') return res.status(400).json({ ok: false, reason: 'Alle jobs leverede — intet at genoptage.' });
+      if (!prev.jobs?.some(j => j.status !== 'done') && !['failed', 'interrupted', 'cancelled'].includes(prev.verification?.status)) return res.status(400).json({ ok: false, reason: 'Alle jobs leverede — intet at genoptage.' });
       const liveProcesses = (prev.processes ?? []).filter(p => {
         try { process.kill(p.pid, 0); return true; } catch (e) { return e.code !== 'ESRCH'; }
       });

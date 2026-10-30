@@ -3,6 +3,7 @@ import { cliSpawnSpec } from './ai-services.mjs';
 import { promisify } from 'node:util';
 import { realpathSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
+import { runCheckProcess } from './ai-check-process.mjs';
 const exec = promisify(execFile);
 const git = async (cwd, args) => (await exec('git', args, { cwd, timeout: 30000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
 
@@ -32,11 +33,12 @@ export function validateChecks(checks) {
   });
 }
 
-export async function verifyRepository(cwd, checks, signal) {
+export async function verifyRepository(cwd, checks, signal, { onProgress, onProcess, timeoutMs } = {}) {
   const results = [];
   for (const check of validateChecks(checks)) {
     signal?.throwIfAborted();
     const startedAt = Date.now();
+    onProgress?.([...results, { ...check, startedAt, status: 'running', exitCode: null, output: '' }]);
     try {
       let command = check.command;
       if (process.platform === 'win32' && !isAbsolute(command)) {
@@ -44,12 +46,13 @@ export async function verifyRepository(cwd, checks, signal) {
         command = found.stdout.trim().split(/\r?\n/)[0];
       }
       const launch = cliSpawnSpec(command, check.args);
-      const { stdout, stderr } = await exec(launch.cmd, launch.args, { cwd, signal, timeout: 10 * 60 * 1000, maxBuffer: 2 * 1024 * 1024 });
-      results.push({ ...check, startedAt, finishedAt: Date.now(), exitCode: 0, status: 'passed', output: `${stdout}\n${stderr}`.slice(-20000) });
+      const result = await runCheckProcess(launch.cmd, launch.args, { cwd, signal, timeoutMs, onProcess: info => onProcess?.({ ...info, checkName: check.name }) });
+      results.push({ ...check, startedAt, finishedAt: Date.now(), ...result });
     } catch (e) {
       results.push({ ...check, startedAt, finishedAt: Date.now(), exitCode: typeof e.code === 'number' ? e.code : null, status: 'failed', output: `${e.stdout ?? ''}\n${e.stderr ?? ''}\n${e.message}`.slice(-20000) });
-      break;
     }
+    onProgress?.([...results]);
+    if (results.at(-1).status !== 'passed') break;
   }
   return results;
 }

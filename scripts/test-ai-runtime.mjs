@@ -100,10 +100,17 @@ test('restart preserves approval and marks active work interrupted', () => {
   const dirs = fixture();
   saveRun(dirs, { runId: 'waiting', status: 'awaiting_approval', jobs: [job('a', 'ok')] });
   saveRun(dirs, { runId: 'working', status: 'running', jobs: [{ ...job('a', 'ok'), status: 'running' }] });
+  const verification = { status: 'running', checks: [{ name: 'finished', status: 'passed', output: 'ok' }, { name: 'active', status: 'running', output: '' }] };
+  saveRun(dirs, { runId: 'testing', status: 'running', jobs: [{ ...job('a', 'ok'), status: 'done' }], verification, verificationHistory: [{ number: 1, ...verification }], processes: [{ pid: 1234, checkName: 'active' }] });
   recoverRuns(dirs);
   assert.equal(readRun(dirs, 'waiting').status, 'awaiting_approval');
   assert.equal(readRun(dirs, 'working').status, 'interrupted');
   assert.equal(readRun(dirs, 'working').jobs[0].status, 'interrupted');
+  const interrupted = readRun(dirs, 'testing');
+  assert.equal(interrupted.verification.status, 'interrupted');
+  assert.deepEqual(interrupted.verification.checks.map(check => check.status), ['passed', 'interrupted']);
+  assert.equal(interrupted.verificationHistory[0].status, 'interrupted');
+  assert.equal(interrupted.processes[0].pid, 1234);
 });
 
 test('billing never infers subscription coverage from name or key', () => {
@@ -154,6 +161,35 @@ test('actual runtime verifies repository, blocks failed checks and detects mutat
     assert.match(run.evidence.commit, /^[a-f0-9]{40}$/);
     assert.equal(readFileSync(join(source, 'game.txt'), 'utf8'), 'original');
   }
+});
+
+test('runtime checkpoints completed checks and running process before cancellation, then resumes only checks', async () => {
+  const dirs = fixture(), source = join(dirs.cwd, 'source'); mkdirSync(source);
+  const git = (...args) => execFileSync('git', args, { cwd: source, encoding: 'utf8' });
+  git('init', '-q'); git('-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'base');
+  const checks = [
+    { name: 'completed', command: process.execPath, args: ['-e', 'console.log("saved evidence")'] },
+    { name: 'long', command: process.execPath, args: ['-e', 'setInterval(()=>{},1000)'] },
+  ];
+  let persisted;
+  await start(dirs, { repository: { source }, predefinedJobs: [job('a', 'ok')], checks, emit(event) {
+    if (event.type === 'job_process' && event.checkName === 'long' && !event.finished) {
+      persisted = readRun(dirs, 'test');
+      const handle = activeRuns.get('test'); handle.cancelled = true; handle.abort.abort();
+    }
+  } });
+  assert.equal(persisted.verification.status, 'running');
+  assert.deepEqual(persisted.verification.checks.map(check => check.status), ['passed', 'running']);
+  assert.ok(persisted.processes.some(info => info.checkName === 'long'));
+  const previousRun = readRun(dirs, 'test');
+  assert.equal(previousRun.status, 'cancelled'); assert.equal(previousRun.verification.status, 'cancelled');
+  assert.match(previousRun.verification.checks[0].output, /saved evidence/); assert.deepEqual(previousRun.processes, []);
+  const events = [];
+  await start(dirs, { runId: 'resumed-checks', previousRun, resumeDir: previousRun.workDir, bible: previousRun.bible, repository: previousRun.repository, predefinedJobs: previousRun.jobs, checks: [checks[0]], emit: event => events.push(event) });
+  const resumed = readRun(dirs, 'resumed-checks');
+  assert.equal(resumed.status, 'done');
+  assert.deepEqual(resumed.verificationHistory.map(attempt => attempt.status), ['cancelled', 'passed']);
+  assert.equal(events.some(event => event.type === 'job_start'), false);
 });
 
 

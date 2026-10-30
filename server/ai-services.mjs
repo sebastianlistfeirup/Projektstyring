@@ -536,11 +536,11 @@ export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent,
     const env = cliChildEnv({ ...process.env, NO_COLOR: '1' }, { claude });
     for (const key of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'MOONSHOT_API_KEY', 'DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'KIMI_API_KEY']) delete env[key];
     const child = spawn(launch.cmd, launch.args, { cwd: cwd ?? process.cwd(), env, detached: process.platform !== 'win32' });
-    let terminationTimer, callbackError, stopped = false, out = '', lineBuf = '', bytes = 0;
+    let terminationTimer, windowsStop, callbackError, stopped = false, out = '', lineBuf = '', bytes = 0;
     const kill = () => {
       if (stopped) return;
       stopped = true;
-      try { if (process.platform === 'win32') execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => {}); else process.kill(-child.pid, 'SIGTERM'); } catch { /* already stopped */ }
+      try { if (process.platform === 'win32') windowsStop = new Promise(done => execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { timeout: 10000 }, () => done())); else process.kill(-child.pid, 'SIGTERM'); } catch { /* already stopped */ }
       terminationTimer = setTimeout(() => { try { if (process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL'); else child.kill(); } catch { /* already stopped */ } }, 5000);
       terminationTimer.unref();
     };
@@ -565,8 +565,12 @@ export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent,
     });
     child.stderr.on('data', chunk => { out = (out + chunk).slice(-20000); });
     child.on('error', e => { clean(); reject(new Error(`Kunne ikke starte '${cmd}': ${e.message}`)); });
-    child.on('close', code => {
+    child.on('close', async code => {
       if (jsonl && lineBuf.trim()) line(lineBuf);
+      // Do not cancel escalation just because the parent exited: grandchildren
+      // with separate stdio may still be running in the same process group.
+      if (stopped && child.pid && process.platform !== 'win32') try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already stopped */ }
+      if (windowsStop) await windowsStop;
       if (child.pid) call(() => onProcess?.({ pid: child.pid, finished: true }));
       clean();
       if (callbackError) reject(callbackError);

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { agentEvents } from '../server/ai-events.mjs';
@@ -104,6 +104,23 @@ test('CLI reads final JSON line and callback failures terminate without crashing
   assert.deepEqual(messages, ['æøå']);
   writeFileSync(script, `setInterval(()=>{},100);`);
   await assert.rejects(chatCli({ cmd: process.execPath, cliTemplate: `"${script}" {prompt}`, prompt: 'test', cwd: root, onProcess: p => { if (!p.finished) throw new Error('Disk full'); } }), /Disk full/);
+});
+
+test('CLI cancellation terminates grandchildren even when their parent exits first', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-cli-tree-')), marker = join(root, 'pulse'), script = join(root, 'parent.mjs');
+  const childScript = `const fs=require('fs'); process.on('SIGTERM',()=>{}); setInterval(()=>fs.writeFileSync(${JSON.stringify(marker)},String(Date.now())),20);`;
+  writeFileSync(script, `import {spawn} from 'node:child_process';spawn(process.execPath,['-e',${JSON.stringify(childScript)}],{stdio:'ignore'});setInterval(()=>{},1000);`);
+  const controller = new AbortController();
+  const pending = chatCli({ cmd: process.execPath, cliTemplate: `"${script}" {prompt}`, prompt: 'test', cwd: root, signal: controller.signal });
+  void pending.catch(() => {});
+  try {
+    for (let i = 0; i < 200 && !existsSync(marker); i++) await new Promise(resolve => setTimeout(resolve, 25));
+    assert.ok(existsSync(marker), 'grandchild started');
+  } finally { controller.abort(); }
+  await assert.rejects(pending, /Afbrudt/);
+  const pulse = readFileSync(marker, 'utf8');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(readFileSync(marker, 'utf8'), pulse);
 });
 
 

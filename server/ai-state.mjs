@@ -139,6 +139,11 @@ export function recoverRuns(dirs) {
     if (['running', 'planning', 'awaiting_approval'].includes(run.status)) {
       if (run.status !== 'awaiting_approval') run.status = 'interrupted';
       run.jobs = (run.jobs ?? []).map(j => j.status === 'running' ? { ...j, status: 'interrupted', error: 'Companion blev genstartet. Kontrollér eventuelle eksterne handlinger før genoptagelse.' } : j);
+      if (run.verification?.status === 'running') {
+        run.verification = { ...run.verification, status: 'interrupted', checks: run.verification.checks.map(check => check.status === 'running' ? { ...check, status: 'interrupted', output: `${check.output}\nCompanion blev genstartet under kontrollen. Resultatet er ukendt.` } : check) };
+        const last = run.verificationHistory?.at(-1);
+        if (last) run.verificationHistory[run.verificationHistory.length - 1] = { ...last, ...run.verification };
+      }
       run.recoveredAt = Date.now();
       saveRun(dirs, run);
       recovered.push(run);

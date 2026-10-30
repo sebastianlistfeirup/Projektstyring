@@ -535,7 +535,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     const transient = ['job_delta', 'delta', 'subagent_delta'].includes(obj.type);
     if (!transient) appendRunEvent(dirs, run, { at: Date.now(), ...obj });
     else if (run.events.at(-1)?.type !== 'job_delta') appendRunEvent(dirs, run, { at: Date.now(), type: 'job_delta', jobId: obj.jobId });
-    if (obj.type === 'job_process') run.processes = [...run.processes.filter(p => p.pid !== obj.pid), ...(obj.finished ? [] : [{ pid: obj.pid, jobId: obj.jobId, startedAt: obj.startedAt }])];
+    if (obj.type === 'job_process') run.processes = [...run.processes.filter(p => p.pid !== obj.pid), ...(obj.finished ? [] : [{ pid: obj.pid, jobId: obj.jobId, checkName: obj.checkName, startedAt: obj.startedAt }])];
     updateSwarm(run, obj);
     if (checkpoints.has(obj.type) || (!transient && Date.now() - lastSnapshotAt >= 1000)) { saveRun(dirs, run); lastSnapshotAt = Date.now(); }
     try { emit({ ...obj, runId, goal }); } catch { /* client disconnect does not cancel work */ }
@@ -752,16 +752,26 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     const analysisOnly = jobs.every(j => j.readOnly === true);
     while (true) {
       track({ type: 'job_note', note: 'Kontrollerer den samlede repository-leverance.' });
-      const checkResults = analysisOnly ? [] : await verifyRepository(handle.runDir, checks, handle.abort.signal);
-      run.verification = { status: analysisOnly ? 'not_run' : !checks.length ? 'not_configured' : checkResults.length === checks.length && checkResults.every(c => c.status === 'passed') ? 'passed' : 'failed', checks: checkResults };
+      run.evidence = await repositoryEvidence(handle.runDir, run.repository.baseCommit);
+      const attemptNumber = run.verificationHistory.length + 1, attemptAt = Date.now();
+      const publishChecks = verification => {
+        run.verification = verification;
+        const attempt = { number: attemptNumber, at: attemptAt, commit: run.evidence.commit, ...verification };
+        run.verificationHistory = [...run.verificationHistory.filter(item => item.number !== attemptNumber), attempt];
+        track({ type: 'verification', verification, evidence: run.evidence, attempt });
+      };
+      const checkResults = analysisOnly ? [] : await verifyRepository(handle.runDir, checks, handle.abort.signal, {
+        onProgress: results => publishChecks({ status: 'running', checks: results }),
+        onProcess: info => track({ type: 'job_process', jobId: null, ...info }),
+      });
+      run.verification = { status: handle.cancelled ? 'cancelled' : analysisOnly ? 'not_run' : !checks.length ? 'not_configured' : checkResults.length === checks.length && checkResults.every(c => c.status === 'passed') ? 'passed' : 'failed', checks: checkResults };
       run.evidence = await repositoryEvidence(handle.runDir, run.repository.baseCommit);
       if (run.evidence.trackedChangesAfterChecks) {
         run.verification.status = 'failed';
         run.verification.checks.push({ name: 'Testet commit uændret', status: 'failed', exitCode: null, output: 'Kontrollerne ændrede versionsstyrede filer. Resultatet kan ikke knyttes til det gemte commit.' });
       }
-      const attemptRecord = { number: run.verificationHistory.length + 1, at: Date.now(), commit: run.evidence.commit, ...run.verification };
-      run.verificationHistory.push(attemptRecord);
-      track({ type: 'verification', verification: run.verification, evidence: run.evidence, attempt: attemptRecord });
+      publishChecks(run.verification);
+      const attemptRecord = run.verificationHistory.at(-1);
       if (run.verification.status !== 'failed') break;
       outcome = 'blocked';
       const failedCheck = checkResults.find(check => check.status === 'failed');
@@ -799,6 +809,13 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
   if (run.status === 'done') track({ type: 'done', status: run.status, summary: results.map(r => ({ title: r.title, serviceId: r.serviceId })) });
   else track({ type: 'error', status: run.status, error: run.status === 'cancelled' ? 'Kørslen blev stoppet af brugeren.' : 'Kørslen leverede ikke alle nødvendige jobs. Se fejl og blokeringer.' });
   } catch (e) {
+    if (run.verification?.status === 'running') {
+      const status = handle.cancelled ? 'cancelled' : 'failed';
+      run.verification = { ...run.verification, status, checks: run.verification.checks.map(check => check.status === 'running' ? { ...check, status, output: `${check.output}\n${e.message}`, finishedAt: Date.now() } : check) };
+      const last = run.verificationHistory.at(-1);
+      if (last) run.verificationHistory[run.verificationHistory.length - 1] = { ...last, ...run.verification };
+      track({ type: 'verification', verification: run.verification, evidence: run.evidence, attempt: run.verificationHistory.at(-1) });
+    }
     run.status = handle.cancelled ? 'cancelled' : 'error';
     run.error = e.message;
     run.finishedAt = Date.now();

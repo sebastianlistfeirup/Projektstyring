@@ -38,3 +38,37 @@ test('uncommitted source changes are never silently omitted', async () => {
   writeFileSync(join(root, 'unsaved'), 'work');
   await assert.rejects(createRunWorktree(root, join(root, 'work'), 'test'), /lokale ændringer/);
 });
+
+test('check progress and process identity are observable before completion, cancellation stops children', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-check-cancel-')), marker = join(root, 'child-pulse');
+  const controller = new AbortController(), progress = [], processes = [];
+  const childScript = `const fs=require('fs'); process.on('SIGTERM',()=>{}); setInterval(()=>fs.writeFileSync(${JSON.stringify(marker)},String(Date.now())),20);`;
+  const parentScript = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(childScript)}],{stdio:'ignore'}); setInterval(()=>{},1000);`;
+  const pending = verifyRepository(root, [
+    { command: process.execPath, args: ['-e', 'console.log("first finished")'], name: 'first' },
+    { command: process.execPath, args: ['-e', parentScript], name: 'second' },
+    { command: process.execPath, args: ['-e', 'process.exit(99)'], name: 'never' },
+  ], controller.signal, { onProgress: value => progress.push(value), onProcess: value => processes.push(value) });
+  try {
+    for (let i = 0; i < 200 && !existsSync(marker); i++) await new Promise(resolve => setTimeout(resolve, 25));
+    assert.ok(existsSync(marker), 'child process started');
+    assert.deepEqual(progress.at(-1).map(item => item.status), ['passed', 'running']);
+    assert.ok(processes.some(item => item.checkName === 'second' && !item.finished && item.pid > 0));
+  } finally { controller.abort(); }
+  const results = await pending;
+  assert.deepEqual(results.map(item => item.status), ['passed', 'cancelled']);
+  assert.equal(results[1].exitCode, null);
+  assert.equal(processes.filter(item => !item.finished).length, processes.filter(item => item.finished).length);
+  const pulse = readFileSync(marker, 'utf8');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(readFileSync(marker, 'utf8'), pulse, 'child cannot keep writing after cancellation');
+});
+
+test('check timeout and output limits cannot look like successful exits', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-check-limit-'));
+  const timed = await verifyRepository(root, [{ command: process.execPath, args: ['-e', 'setInterval(()=>{},1000)'] }], undefined, { timeoutMs: 100 });
+  assert.equal(timed[0].status, 'failed'); assert.equal(timed[0].exitCode, null); assert.match(timed[0].output, /tidsgrænsen/);
+  const noisy = await verifyRepository(root, [{ command: process.execPath, args: ['-e', "process.stdout.write('x'.repeat(3*1024*1024));setInterval(()=>{},1000)"] }]);
+  assert.equal(noisy[0].status, 'failed'); assert.equal(noisy[0].exitCode, null); assert.match(noisy[0].output, /2 MB/);
+  assert.ok(noisy[0].output.length <= 20000);
+});
