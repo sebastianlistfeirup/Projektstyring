@@ -18,6 +18,9 @@ export interface AiServiceInfo {
   models?: string[] | null;
   cmd: string | null;
   subscriptionCovered: boolean;
+  avatarId?: string | null;
+  voiceId?: string | null;
+  billing?: { allowed: boolean; mode: string; source: string; reason: string | null };
 }
 
 export interface AiServicesResponse {
@@ -108,27 +111,33 @@ async function readSse(url: string, body: unknown, onEvent: (e: Record<string, u
     body: JSON.stringify(body),
     signal,
   });
-  if (!r.ok || !r.body) throw new Error(`Companion svarede ${r.status}`);
+  if (!r.ok || !r.body) {
+    const data = await r.json().catch(() => ({}));
+    throw new Error(data.reason ?? `Companion svarede ${r.status}`);
+  }
   const reader = r.body.getReader();
   const dec = new TextDecoder();
   let buf = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop() ?? '';
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      try {
-        const evt = JSON.parse(line.slice(6));
-        onEvent(evt);
-        if (evt.type === 'done' || evt.type === 'error') return;
-      } catch {
-        /* ufuldstændig JSON */
+  const handleLine = (line: string): boolean => {
+    if (!line.startsWith('data:')) return false;
+    const data = line.slice(5).trim();
+    if (!data) return false;
+    const evt = JSON.parse(data) as Record<string, unknown>;
+    onEvent(evt);
+    return evt.type === 'done' || evt.type === 'error';
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      buf += done ? dec.decode() : dec.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop() ?? '';
+      for (const line of lines) if (handleLine(line)) return;
+      if (done) {
+        if (buf && handleLine(buf)) return;
+        throw new Error('Forbindelsen sluttede uden en slutstatus. En Auto-kørsel kan fortsætte; se Orbit Live før du starter igen.');
       }
     }
-  }
+  } finally { reader.releaseLock(); }
 }
 
 /** Stream en chat-besked fra en tjeneste. */
@@ -137,12 +146,13 @@ export async function streamChat(
   messages: Pick<AiMessage, 'role' | 'text' | 'attachments'>[],
   handlers: { onDelta: (delta: string, full: string) => void; onDone: (full: string) => void; onError: (msg: string) => void },
   signal: AbortSignal,
+  bible?: string,
 ): Promise<void> {
   let full = '';
   try {
     await readSse(
       `${BASE}/api/ai/chat`,
-      { service, messages: messages.map((m) => ({ role: m.role, text: m.text, attachments: m.attachments })) },
+      { service, bible, messages: messages.map((m) => ({ role: m.role, text: m.text, attachments: m.attachments })) },
       (evt) => {
         if (evt.type === 'delta') {
           full += String(evt.delta ?? '');
@@ -163,6 +173,10 @@ export async function streamChat(
 export type OrchestrateMode = 'standard' | 'roles' | 'debate' | 'vote' | 'race';
 
 export interface OrchestrateInput {
+  projectId?: string;
+  taskId?: string;
+  repositoryPath?: string;
+  checks?: { name: string; command: string; args: string[] }[];
   goal: string;
   bible?: string;
   jobs?: unknown[];
@@ -261,7 +275,7 @@ export interface PipelineTemplate {
   name: string;
   description?: string;
   builtin?: boolean;
-  jobs: { id: string; title: string; serviceId: string | null; phase: string; dependsOn: number[]; description: string; team?: boolean }[];
+  jobs: { id: string; title: string; serviceId: string | null; phase: string; dependsOn: number[]; description: string; team?: boolean; readOnly?: boolean }[];
 }
 
 export async function fetchTemplates(): Promise<PipelineTemplate[]> {
@@ -305,8 +319,8 @@ export async function suggestTemplate(goal: string, bible?: string, attachments?
 export interface CostSummary {
   totalRuns: number;
   totalJobs: number;
-  estKr: number;
-  byService: { id: string; name: string; kind: string; jobs: number; subscriptionCovered: boolean; estKr: number }[];
+  estKr: number | null;
+  byService: { id: string; name: string; kind: string; jobs: number; subscriptionCovered: boolean; estKr: number | null }[];
 }
 
 export async function fetchCosts(): Promise<CostSummary | null> {

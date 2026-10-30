@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import AppShell from './components/AppShell';
 import CommandPalette from './components/CommandPalette';
@@ -14,27 +14,27 @@ import { completeAdopsWorkItem, closeGitIssue, completeTodoTask, companionNotify
 import { completeJiraIssue, completePlannerTask, completeTrelloCard } from './lib/companion';
 import { celebrate } from './components/Confetti';
 import { startSync } from './lib/sync';
-import ActivityView from './views/ActivityView';
-import BacklogView from './views/BacklogView';
-import BoardView from './views/BoardView';
-import DashboardView from './views/DashboardView';
-import TasksView from './views/TasksView';
-import YearWheelView from './views/YearWheelView';
-import AiWorkshopView from './views/AiWorkshopView';
-import { AiChatView } from './views/AiChatView';
-import { AiSwarmView } from './views/AiSwarmView';
-import GraphView from './views/GraphView';
-import GoalsView from './views/GoalsView';
-import ImportView from './views/ImportView';
-import IntegrationsView from './views/IntegrationsView';
-import MyWorkView from './views/MyWorkView';
-import NotesView from './views/NotesView';
-import ReportsView from './views/ReportsView';
-import RisksView from './views/RisksView';
-import TableView from './views/TableView';
-import TeamView from './views/TeamView';
-import TimelineView from './views/TimelineView';
-import TodayView from './views/TodayView';
+const ActivityView = lazy(() => import('./views/ActivityView'));
+const BacklogView = lazy(() => import('./views/BacklogView'));
+const BoardView = lazy(() => import('./views/BoardView'));
+const DashboardView = lazy(() => import('./views/DashboardView'));
+const TasksView = lazy(() => import('./views/TasksView'));
+const YearWheelView = lazy(() => import('./views/YearWheelView'));
+const AiWorkshopView = lazy(() => import('./views/AiWorkshopView'));
+const AiChatView = lazy(() => import('./views/AiChatView').then(m => ({ default: m.AiChatView })));
+const AiSwarmView = lazy(() => import('./views/AiSwarmView').then(m => ({ default: m.AiSwarmView })));
+const GraphView = lazy(() => import('./views/GraphView'));
+const GoalsView = lazy(() => import('./views/GoalsView'));
+const ImportView = lazy(() => import('./views/ImportView'));
+const IntegrationsView = lazy(() => import('./views/IntegrationsView'));
+const MyWorkView = lazy(() => import('./views/MyWorkView'));
+const NotesView = lazy(() => import('./views/NotesView'));
+const ReportsView = lazy(() => import('./views/ReportsView'));
+const RisksView = lazy(() => import('./views/RisksView'));
+const TableView = lazy(() => import('./views/TableView'));
+const TeamView = lazy(() => import('./views/TeamView'));
+const TimelineView = lazy(() => import('./views/TimelineView'));
+const TodayView = lazy(() => import('./views/TodayView'));
 
 export default function App() {
   const theme = useStore((s) => s.theme);
@@ -168,7 +168,7 @@ export default function App() {
           void completeAdopsWorkItem(task.extIds.adopsId);
         }
         if (task.extIds?.gitProvider && task.extIds.gitIssue) {
-          void closeGitIssue(task.extIds.gitIssue);
+          void closeGitIssue(task.extIds.gitIssue, { projectId: task.projectId, provider: task.extIds.gitProvider, owner: task.extIds.gitOwner, repo: task.extIds.gitRepo });
         }
         if (task.extIds?.jiraKey) {
           void completeJiraIssue(task.extIds.jiraKey);
@@ -195,7 +195,7 @@ export default function App() {
 
   return (
     <HashRouter>
-      <Routes>
+      <Suspense fallback={<div role="status" className="p-6 text-sm opacity-60">Åbner arbejdsområdet…</div>}><Routes>
         <Route element={<AppShell />}>
           <Route index element={<Navigate to="/idag" replace />} />
           <Route path="/idag" element={<TodayView />} />
@@ -221,7 +221,7 @@ export default function App() {
           <Route path="/outlook" element={<GraphView />} />
           <Route path="*" element={<Navigate to="/idag" replace />} />
         </Route>
-      </Routes>
+      </Routes></Suspense>
       <TaskDrawer />
       <CommandPalette />
       <Splash />

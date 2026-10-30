@@ -1,22 +1,27 @@
 // Orbit AI HTTP-ruter.
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, realpathSync } from 'fs';
+import { join, basename, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { serviceById, serviceAvailability, runChat, setSecretsDir, loadKeySecrets, saveKeySecrets, aiCfg } from './ai-services.mjs';
-import { executeRun, swarmState, activeRuns, loadTemplates, saveUserTemplates, startTriggerScheduler, usageCostKr, pickOrchestrator, planWithLLM } from './ai-runtime.mjs';
+import { extractDocument } from './ai-documents.mjs';
+import { inspectRepository, validateChecks } from './ai-repository.mjs';
+import { readRun, recoverRuns, validatePlan, runPath } from './ai-state.mjs';
+import { executeRun, swarmState, activeRuns, loadTemplates, saveUserTemplates, startTriggerScheduler, cronMatches, pickOrchestrator, planWithLLM, parseJsonObject } from './ai-runtime.mjs';
 
 // ---- HTTP-ruter --------------------------------------------------------------
-export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, EXPORT_DIR }) {
+export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR }) {
   setSecretsDir(APP_DIR); // nøgleboksen bor ved siden af companion.json i ~/.orbit
   const dirs = {
     uploads: join(APP_DIR, 'ai-uploads'),
     artifacts: join(APP_DIR, 'ai-artifacts'),
     runs: join(APP_DIR, 'ai-runs'),
     memory: join(APP_DIR, 'ai-memory'),
-    cwd: process.cwd(),
+    cwd: join(APP_DIR, 'ai-context'),
   };
   for (const d of Object.values(dirs)) if (typeof d === 'string') mkdirSync(d, { recursive: true });
 
+  const recovered = recoverRuns(dirs);
+  if (recovered.length) swarmState.last = recovered.at(-1);
   startTriggerScheduler({ loadConfig, dirs, broadcast });
 
   const sse = (res) => {
@@ -24,7 +29,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     res.write('retry: 2000\n\n');
     const lastWs = new Map();
     return (obj) => {
-      res.write(`data: ${JSON.stringify(obj)}\n\n`);
+      if (!res.destroyed && !res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`);
       // Throttle hurtige delta-hændelser over WebSocket, så swarm-visningen ikke oversvømmes.
       const key = obj.jobId ? `${obj.type}:${obj.jobId}` : obj.type;
       const now = Date.now();
@@ -37,6 +42,11 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     };
   };
 
+  app.post('/api/ai/repository/inspect', async (req, res) => {
+    try { res.json({ ok: true, repository: await inspectRepository(String(req.body?.path ?? '')) }); }
+    catch (e) { res.status(400).json({ ok: false, reason: e.message }); }
+  });
+
   app.get('/api/ai/services', async (_req, res) => {
     const cfg = loadConfig();
     res.json({ ok: true, services: await serviceAvailability(cfg), prefs: aiCfg(cfg).prefs });
@@ -45,7 +55,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   app.post('/api/ai/prefs', (req, res) => {
     const cfg = loadConfig();
     const patch = req.body ?? {};
-    cfg.aiPrefs = { allowPaidApis: false, ...(cfg.aiPrefs ?? {}), ...patch };
+    cfg.aiPrefs = { ...(cfg.aiPrefs ?? {}), ...patch, allowPaidApis: false };
     try {
       saveConfig(cfg);
     } catch (e) {
@@ -65,7 +75,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     const cfg = loadConfig();
     cfg.aiProviders = cfg.aiProviders ?? {};
     const cur = cfg.aiProviders[svc.id] ?? {};
-    const { enabled, apiKey, model, cmd, cliTemplate, baseUrl, avatarId, voiceId } = req.body ?? {};
+    const { enabled, apiKey, model, cmd, cliTemplate, baseUrl, avatarId, voiceId, billingMode, noExtraCharges } = req.body ?? {};
 
     // Nøglehåndtering: nye nøgler gemmes i den hemmelige nøgleboks, og en
     // evt. gammel nøgle i companion.json migreres straks derover og slettes.
@@ -91,13 +101,15 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
 
     cfg.aiProviders[svc.id] = {
       ...cur,
+      ...(billingMode !== undefined ? { billingMode: ['included', 'usage', 'unknown'].includes(billingMode) ? billingMode : 'unknown' } : {}),
+      ...(noExtraCharges !== undefined ? { noExtraCharges: noExtraCharges === true } : {}),
       ...(enabled !== undefined ? { enabled } : {}),
       ...(model !== undefined ? { model } : {}),
       ...(cmd ? { cmd } : {}),
       ...(cliTemplate ? { cliTemplate } : {}),
       ...(baseUrl ? { baseUrl } : {}),
-      ...(avatarId ? { avatarId } : {}),
-      ...(voiceId ? { voiceId } : {}),
+      ...(avatarId !== undefined ? { avatarId: String(avatarId) } : {}),
+      ...(voiceId !== undefined ? { voiceId: String(voiceId) } : {}),
     };
     try {
       saveConfig(cfg);
@@ -108,7 +120,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   });
 
   // Upload: {name, mime, dataBase64} → gemt på disk; billeder kan indlæses som data-URL.
-  app.post('/api/ai/upload', (req, res) => {
+  app.post('/api/ai/upload', async (req, res) => {
     const { name, mime, dataBase64 } = req.body ?? {};
     if (!name || !dataBase64) return res.status(400).json({ ok: false, reason: 'name og dataBase64 kræves' });
     const buf = Buffer.from(dataBase64, 'base64');
@@ -116,14 +128,24 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     const id = randomUUID().slice(0, 8);
     const safe = String(name).replace(/[^\w.\-() ]/g, '_').slice(-80);
     writeFileSync(join(dirs.uploads, `${id}-${safe}`), buf);
+    let extractedText = null, extractionError = null;
+    try {
+      extractedText = await extractDocument(join(dirs.uploads, `${id}-${safe}`), String(mime ?? ''), String(name));
+      if (extractedText) writeFileSync(join(dirs.uploads, `${id}-${safe}.text.txt`), extractedText);
+    } catch (e) { extractionError = e.message; }
     const isImage = String(mime).startsWith('image/');
-    res.json({ ok: true, file: { id, name: String(name), mime: String(mime), size: buf.length, url: `/api/ai/file/${id}-${safe}`, path: join(dirs.uploads, `${id}-${safe}`), kind: isImage ? 'image' : 'file', dataUrl: isImage ? `data:${mime};base64,${buf.toString('base64')}` : undefined } });
+    res.json({ ok: true, file: { id, extractedText, extractionError, name: String(name), mime: String(mime), size: buf.length, url: `/api/ai/file/${id}-${safe}`, path: join(dirs.uploads, `${id}-${safe}`), kind: isImage ? 'image' : 'file', dataUrl: isImage ? `data:${mime};base64,${buf.toString('base64')}` : undefined } });
   });
 
   app.get('/api/ai/file/:name', (req, res) => {
+    if (basename(req.params.name) !== req.params.name || /[\\]/.test(req.params.name)) return res.status(400).end();
     for (const base of [dirs.uploads, dirs.artifacts]) {
       const p = join(base, req.params.name);
-      if (existsSync(p) && p.startsWith(base)) return res.sendFile(p);
+      if (existsSync(p) && dirname(realpathSync(p)) === realpathSync(base)) {
+        res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        return res.sendFile(p);
+      }
     }
     res.status(404).end();
   });
@@ -135,17 +157,28 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
 
   app.get('/api/ai/runs', (_req, res) => {
     const runs = readdirSync(dirs.runs).filter((f) => f.endsWith('.json')).map((f) => {
-      try { return { file: f, ...JSON.parse(readFileSync(join(dirs.runs, f), 'utf8')) }; } catch { return null; }
+      try { const run = JSON.parse(readFileSync(join(dirs.runs, f), 'utf8')); return run.runId ? { file: f, ...run } : null; } catch { return null; }
     }).filter(Boolean).sort((a, b) => String(b.finishedAt).localeCompare(String(a.finishedAt))).slice(0, 20);
     res.json({ ok: true, runs });
   });
 
+  app.get('/api/ai/runs/:runId', (req, res) => {
+    try {
+      res.json({ ok: true, run: activeRuns.get(req.params.runId)?.run ?? readRun(dirs, req.params.runId) });
+    } catch (e) { res.status(404).json({ ok: false, reason: e.message }); }
+  });
+
   // ---- kørselskontrol: godkend plan / besked til orkestrator / skip / aflys ----
   app.post('/api/ai/runs/:runId/approve', (req, res) => {
-    const h = activeRuns.get(req.params.runId);
-    if (!h?.resolveApproval) return res.status(409).json({ ok: false, reason: 'Ingen kørsel afventer godkendelse.' });
-    h.resolveApproval(Array.isArray(req.body?.jobs) ? req.body.jobs : h.jobsSnapshot ?? []);
-    res.json({ ok: true });
+    try {
+      const h = activeRuns.get(req.params.runId);
+      if (!h?.resolveApproval) return res.status(409).json({ ok: false, reason: 'Genoptag den gemte kørsel for at godkende planen.' });
+      const jobs = validatePlan(req.body?.jobs ?? h.jobsSnapshot);
+      const resolve = h.resolveApproval;
+      h.resolveApproval = null;
+      resolve(jobs);
+      res.json({ ok: true });
+    } catch (e) { res.status(400).json({ ok: false, reason: e.message }); }
   });
 
   app.post('/api/ai/runs/:runId/message', (req, res) => {
@@ -154,19 +187,20 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     if (!h) return res.status(409).json({ ok: false, reason: 'Ingen aktiv kørsel.' });
     if (!text) return res.status(400).json({ ok: false, reason: 'Tom besked.' });
     h.instructions.push(text);
+    h.persist();
     h.run.notes = [...(h.run.notes ?? []).slice(-4), `Besked fra dig: ${text.slice(0, 120)}`];
     broadcast?.({ kind: 'ai', type: 'job_note', jobId: null, note: `Besked fra dig: ${text.slice(0, 120)}`, runId: req.params.runId });
-    res.json({ ok: true, instructions: h.instructions });
+    res.json({ ok: true, instructions: h.instructions, appliesAt: 'next_job', note: 'Beskeden gælder fra næste job. Igangværende job bruger den kontekst, det startede med.' });
   });
 
   app.post('/api/ai/runs/:runId/skip', (req, res) => {
     const h = activeRuns.get(req.params.runId);
     if (!h) return res.status(409).json({ ok: false, reason: 'Ingen aktiv kørsel.' });
     const jobId = String(req.body?.jobId ?? '');
+    const j = h.run.jobs.find(x => x.id === jobId);
+    if (!j || j.status !== 'queued') return res.status(409).json({ ok: false, reason: 'Kun et job, der endnu ikke er startet, kan springes over.' });
     h.skip.add(jobId);
-    const j = h.run.jobs.find((x) => x.id === jobId);
-    if (j && j.status === 'queued') { j.status = 'done'; j.text = '(sprunget over)'; j.finishedAt = Date.now(); }
-    broadcast?.({ kind: 'ai', type: 'job_skipped', runId: req.params.runId, jobId });
+    h.track({ type: 'job_skipped', runId: req.params.runId, jobId });
     res.json({ ok: true });
   });
 
@@ -185,14 +219,13 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   app.get('/api/ai/costs', (_req, res) => {
     try {
       const byService = {};
-      let totalJobs = 0, totalRuns = 0, estKr = 0;
+      let totalJobs = 0, totalRuns = 0;
       for (const f of readdirSync(dirs.runs).filter((f) => f.endsWith('.json')).slice(0, 60)) {
         let run;
         try { run = JSON.parse(readFileSync(join(dirs.runs, f), 'utf8')); } catch { continue; }
         if (!run.usage) continue;
         totalRuns += 1;
         totalJobs += run.usage.jobs ?? 0;
-        estKr += usageCostKr(run.usage);
         for (const [id, u] of Object.entries(run.usage.byService ?? {})) {
           const cur = byService[id] ?? { id, jobs: 0, kind: u.kind };
           cur.jobs += u.jobs;
@@ -202,10 +235,10 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       const services = Object.values(byService).map((u) => ({
         ...u,
         name: serviceById(u.id)?.name ?? u.id,
-        subscriptionCovered: serviceById(u.id)?.kind === 'sub-api' || serviceById(u.id)?.kind === 'cli' || serviceById(u.id)?.kind === 'local',
-        estKr: serviceById(u.id)?.kind === 'paid-api' ? Math.round(u.jobs * 0.25 * 100) / 100 : 0,
+        subscriptionCovered: false, // Historical counts cannot establish an account entitlement.
+        estKr: null,
       })).sort((a, b) => b.jobs - a.jobs);
-      res.json({ ok: true, totalRuns, totalJobs, estKr: Math.round(estKr * 100) / 100, byService: services });
+      res.json({ ok: true, totalRuns, totalJobs, estKr: null, byService: services });
     } catch (e) {
       res.status(500).json({ ok: false, reason: e.message });
     }
@@ -258,7 +291,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       const orchestratorId = await pickOrchestrator(cfg, availability);
       if (!orchestratorId) return res.status(409).json({ ok: false, reason: 'Ingen orkestrator tilgængelig (installér et CLI).' });
       const prompt = `Skriv en projekt-bibel (rollebog) for projektet "${project ?? 'Uden navn'}". ${notes ? `Stikord/noter fra brugeren:\n${String(notes).slice(0, 3000)}\n\n` : ''}${current ? `Nuværende udkast:\n${String(current).slice(0, 2000)}\n\nForbedr og udbyg det.` : ''}Biblen skal fastlægge: overordnet vision/stil, hvilken AI-tjeneste der har hvilken rolle (kodning, design, 3D, lyd, video, review), tone/sprog og kvalitetskrav. Skriv den på dansk, kompakt (max 400 ord), så den kan prependes til enhver agent-prompt.`;
-      const text = await runChat({ serviceId: orchestratorId, messages: [{ role: 'user', text: prompt }], cfg, dirs });
+      const text = await runChat({ serviceId: orchestratorId, messages: [{ role: 'user', text: prompt }], cfg, dirs, cwd: dirs.cwd, readOnly: true });
       res.json({ ok: true, bible: text.trim() });
     } catch (e) {
       res.status(500).json({ ok: false, reason: e.message });
@@ -311,7 +344,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   app.post('/api/ai/hook/:token', (req, res) => {
     const cfg = loadConfig();
     const trigger = (cfg.aiTriggers ?? []).find((t) => t.kind === 'webhook' && t.token === req.params.token);
-    if (!trigger) return res.status(404).json({ ok: false, reason: 'Ukendt webhook-token' });
+    if (!trigger || trigger.enabled === false) return res.status(404).json({ ok: false, reason: 'Ukendt webhook-token' });
     if (swarmState.active) return res.status(409).json({ ok: false, reason: 'En kørsel er allerede aktiv.' });
     const runId = randomUUID().slice(0, 12);
     const extra = req.body?.goal ? String(req.body.goal).slice(0, 500) : '';
@@ -323,33 +356,27 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   // ---- genoptagelse (resume): kør kun de jobs der aldrig leverede ----
   app.post('/api/ai/runs/:runId/resume', (req, res) => {
     try {
-      const p = join(dirs.runs, `${req.params.runId}.json`);
+      const p = runPath(dirs, req.params.runId);
       if (!existsSync(p)) return res.status(404).json({ ok: false, reason: 'Kørsel ikke fundet' });
-      const prev = JSON.parse(readFileSync(p, 'utf8'));
+      const prev = readRun(dirs, req.params.runId);
       if (swarmState.active) return res.status(409).json({ ok: false, reason: 'En kørsel er allerede aktiv.' });
-      const doneIds = new Set((prev.results ?? []).map((r) => r.jobId));
-      const unfinished = (prev.jobs ?? []).filter((j) => !doneIds.has(j.id));
-      if (!unfinished.length) return res.status(400).json({ ok: false, reason: 'Alle jobs leverede — intet at genoptage.' });
-      const prevJobs = prev.jobs ?? [];
-      const idxMap = new Map(unfinished.map((j, i) => [j.id, i]));
-      const jobs = unfinished.map((j) => ({
-        ...j,
-        dependsOn: (j.dependsOn ?? []).map((d) => idxMap.get(prevJobs[d]?.id)).filter((d) => d !== undefined),
-      }));
+      if (prev.schemaVersion !== 2) return res.status(409).json({ ok: false, reason: 'Denne ældre kørsel mangler gemt projektkontekst. Start en ny kørsel med bibel og repository.' });
+      if (!prev.jobs?.some(j => j.status !== 'done') && prev.verification?.status !== 'failed') return res.status(400).json({ ok: false, reason: 'Alle jobs leverede — intet at genoptage.' });
+      const liveProcesses = (prev.processes ?? []).filter(p => {
+        try { process.kill(p.pid, 0); return true; } catch (e) { return e.code !== 'ESRCH'; }
+      });
+      if (liveProcesses.length) return res.status(409).json({ ok: false, reason: 'En proces fra den afbrudte kørsel kan stadig arbejde. Stop den på maskinen før genoptagelse.', pids: liveProcesses.map(p => p.pid) });
+      if (!existsSync(prev.workDir)) return res.status(409).json({ ok: false, reason: 'Den oprindelige arbejdsmappe mangler. Gendan den før genoptagelse.' });
+      const jobs = validatePlan(prev.jobs);
       const runId = randomUUID().slice(0, 12);
-      broadcast?.({ type: 'toast', level: 'info', text: `Kørslen genoptages — ${jobs.length} job(s) køres igen.` });
       executeRun({
-        runId,
-        goal: prev.goal ?? '',
-        bible: '',
-        attachments: prev.attachments ?? [],
-        predefinedJobs: jobs,
-        cfg: loadConfig(),
-        dirs,
-        resumeDir: join(dirs.runs, 'work', prev.runId),
-        mode: prev.mode ?? 'standard',
-        emit: (obj) => broadcast?.({ kind: 'ai', ...obj, runId }),
-      }).catch(() => {});
+        runId, goal: prev.goal, bible: prev.bible, attachments: prev.attachments,
+        predefinedJobs: jobs, previousRun: prev, resumeDir: prev.workDir,
+        projectId: prev.projectId, taskId: prev.taskId, repository: prev.repository, checks: prev.checks ?? [],
+        pauseAfterPlan: prev.status === 'awaiting_approval',
+        cfg: loadConfig(), dirs, mode: prev.mode ?? 'standard',
+        emit: obj => broadcast?.({ kind: 'ai', ...obj }),
+      }).catch(e => broadcast?.({ kind: 'ai', type: 'error', runId, error: e.message }));
       res.json({ ok: true, runId });
     } catch (e) {
       res.status(500).json({ ok: false, reason: e.message });
@@ -359,10 +386,14 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   // ---- leverance-eksport: samlet markdown-pakke til download ----
   app.get('/api/ai/runs/:runId/export', (req, res) => {
     try {
-      const p = join(dirs.runs, `${req.params.runId}.json`);
+      const p = runPath(dirs, req.params.runId);
       if (!existsSync(p)) return res.status(404).json({ ok: false, reason: 'Kørsel ikke fundet' });
       const run = JSON.parse(readFileSync(p, 'utf8'));
-      const lines = [`# ${run.goal ?? run.runId}`, '', `Kørsel: \`${run.runId}\` · Tilstand: ${run.mode ?? 'standard'} · ${run.finishedAt ?? ''}`, ''];
+      const lines = [`# ${run.goal ?? run.runId}`, '', `Kørsel: \`${run.runId}\` · Status: ${run.status ?? 'ukendt'} · Tilstand: ${run.mode ?? 'standard'}`, ''];
+      if (run.repository) lines.push(`Repository: ${run.repository.source}`, `Arbejdsgren: ${run.repository.branch}`, `Commit: ${run.evidence?.commit ?? 'Ingen samlet verificeret leverance'}`, '');
+      lines.push(`Verifikation: ${run.verification?.status ?? 'ikke kørt'}`, '');
+      for (const check of run.verification?.checks ?? []) lines.push(`### ${check.name}`, '', `Status: ${check.status} · Exitkode: ${check.exitCode ?? 'ukendt'}`, '', '~~~~text', String(check.output ?? ''), '~~~~', '');
+      for (const job of (run.jobs ?? []).filter(j => j.status !== 'done')) lines.push(`### ${job.title} — ${job.status}`, '', job.error ?? 'Ingen godkendt leverance.', '');
       for (const r of run.results ?? []) {
         lines.push(`## ${r.title}`, '', `Tjeneste: ${serviceById(r.serviceId)?.name ?? r.serviceId ?? '—'} · Dommer: ${r.score !== null && r.score !== undefined ? `${r.score}/10` : '—'}`, '', String(r.text ?? ''), '');
       }
@@ -405,10 +436,8 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     const availability = await serviceAvailability(cfg);
     const orchestratorId = await pickOrchestrator(cfg, availability);
     if (!orchestratorId) throw new Error('Ingen orkestrator tilgængelig (installér et CLI).');
-    const raw = await runChat({ serviceId: orchestratorId, messages: [{ role: 'user', text: prompt }], cfg, dirs });
-    const m = raw.match(/\{[\s\S]*\}/);
-    if (!m) throw new Error('AI\'en returnerede ikke JSON.');
-    return { data: JSON.parse(m[0]), orchestratorId };
+    const raw = await runChat({ serviceId: orchestratorId, messages: [{ role: 'user', text: prompt }], cfg, dirs, cwd: dirs.cwd, readOnly: true });
+    return { data: parseJsonObject(raw), orchestratorId };
   }
 
   const assistHandler = (buildPrompt) => async (req, res) => {
@@ -482,12 +511,12 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   // Chat: POST {service, messages} → SSE {delta}|{done}|{error}
   app.post('/api/ai/chat', async (req, res) => {
     const emit = sse(res);
-    const { service, messages } = req.body ?? {};
+    const { service, messages, bible } = req.body ?? {};
     const cfg = loadConfig();
     const ac = new AbortController();
     res.on('close', () => ac.abort());
     try {
-      const text = await runChat({ serviceId: service, messages, cfg, dirs, onDelta: (d) => emit({ type: 'delta', delta: d }), signal: ac.signal });
+      const text = await runChat({ serviceId: service, messages: [...(bible ? [{ role: 'system', text: `Projektets gældende bibel:\n${String(bible)}` }] : []), ...(messages ?? [])], cfg, dirs, cwd: dirs.cwd, readOnly: true, onDelta: (d) => emit({ type: 'delta', delta: d }), signal: ac.signal });
       emit({ type: 'done', text });
     } catch (e) {
       emit({ type: 'error', error: e.message });
@@ -501,27 +530,17 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     // overskrive den nye kørsel i Swarm, og to agenter kan ændre samme projekt.
     if (swarmState.active) return res.status(409).json({ ok: false, reason: 'En Auto-kørsel er allerede aktiv. Stop den, og vent til den er afsluttet, før du starter en ny.' });
     const emit = sse(res);
-    const { goal, bible, attachments, jobs, mode, pauseAfterPlan } = req.body ?? {};
+    const { goal, bible, attachments, jobs, mode, pauseAfterPlan, projectId, taskId, repositoryPath, checks } = req.body ?? {};
     const runId = randomUUID().slice(0, 12);
     const cfg = loadConfig();
-    const ac = new AbortController();
-    res.on('close', () => {
-      ac.abort();
-      // Ved afbrydelse: aflys evt. afventende godkendelse, så kørslen ikke hænger.
-      const h = activeRuns.get(runId);
-      if (h) {
-        h.cancelled = true;
-        h.abort?.abort();
-        if (h.resolveApproval) h.resolveApproval(h.jobsSnapshot ?? []);
-      }
-    });
     try {
-      if (ac.signal.aborted) return;
       await executeRun({
         runId,
         goal: String(goal ?? ''),
         bible: String(bible ?? ''),
-        attachments,
+        attachments, projectId, taskId,
+        repository: repositoryPath ? { source: String(repositoryPath) } : null,
+        checks: validateChecks(checks ?? []),
         predefinedJobs: jobs,
         cfg, dirs, emit,
         mode: ['standard', 'roles', 'debate', 'vote', 'race'].includes(mode) ? mode : 'standard',
@@ -530,6 +549,6 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     } catch (e) {
       emit({ type: 'error', runId, error: e.message });
     }
-    res.end();
+    if (!res.destroyed) res.end();
   });
 }

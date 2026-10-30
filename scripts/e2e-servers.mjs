@@ -1,0 +1,11 @@
+import { spawn } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+const root = mkdtempSync(join(tmpdir(), 'orbit-e2e-server-'));
+const env = { ...process.env, ORBIT_APP_DIR: join(root, 'app'), ORBIT_EXPORT_DIR: join(root, 'export') };
+const children = [spawn(process.execPath, ['server/companion.mjs'], { env, stdio: 'inherit' }), spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', '5173', '--strictPort'], { env, stdio: 'inherit' })];
+let stopping = false;
+const stop = code => { if (stopping) return; stopping = true; children.forEach(c => c.kill()); setTimeout(() => process.exit(code), 500); };
+children.forEach(c => c.on('exit', code => stop(code ?? 0)));
+process.on('SIGTERM', () => stop(0)); process.on('SIGINT', () => stop(0));

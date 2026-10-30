@@ -515,7 +515,7 @@ function JobCard({ j, services, runActive, onSkip }: { j: SwarmJob; services: Re
     .map((d) => ({ idx: d }))
     .length;
   const svcInfo = j.serviceId ? services?.[j.serviceId] : null;
-  const estKr = svcInfo?.kind === 'paid-api' ? 0.25 : 0;
+  const billingLabel = svcInfo?.kind === 'local' ? 'Lokalt forbrug' : svcInfo?.billing?.allowed ? 'Inkluderet · brugerbekræftet' : 'Betalingsform ukendt';
 
   return (
     <div
@@ -553,7 +553,7 @@ function JobCard({ j, services, runActive, onSkip }: { j: SwarmJob; services: Re
           {j.status === 'done' && <CheckCircle2 size={12} className="text-emerald-400" />}
           {j.status === 'error' && <AlertTriangle size={12} className="text-rose-400" />}
           {j.status === 'queued' && <CircleDashed size={12} className="opacity-40" />}
-          {runActive && (j.status === 'queued' || j.status === 'error') && onSkip && (
+          {runActive && j.status === 'queued' && onSkip && (
             <button
               onClick={() => onSkip(j.id)}
               title={t('swarm.skipJob')}
@@ -636,7 +636,7 @@ function JobCard({ j, services, runActive, onSkip }: { j: SwarmJob; services: Re
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[9.5px] opacity-45">
               <span className="flex items-center gap-1"><Clock size={9} /> {fmtDur(j.startedAt && j.finishedAt ? j.finishedAt - j.startedAt : null)}</span>
               <span className="flex items-center gap-1"><Activity size={9} /> {j.deltaCount.toLocaleString('da-DK')}</span>
-              <span className="flex items-center gap-1"><Coins size={9} /> {estKr > 0 ? `~${estKr.toFixed(2)} kr` : t('swarm.coveredShort')}</span>
+              <span className="flex items-center gap-1"><Coins size={9} /> {billingLabel}</span>
             </div>
             <CopyDeliverableButton text={j.text} />
             {j.judgeNote && (
@@ -651,9 +651,9 @@ function JobCard({ j, services, runActive, onSkip }: { j: SwarmJob; services: Re
           </p>
         )}
 
-        {j.status === 'error' && (
+        {['error', 'blocked', 'cancelled', 'interrupted', 'skipped'].includes(j.status) && (
           <div className="mt-2">
-            <p className="text-[10.5px] text-rose-300/90 leading-relaxed">{j.error}</p>
+            <p className="text-[10.5px] text-rose-300/90 leading-relaxed">{j.error ?? (j.status === 'skipped' ? 'Sprunget over; afhængige jobs kan ikke fortsætte.' : j.status)}</p>
             <p className="text-[9px] opacity-40 mt-1">{t('swarm.selfHealHint')}</p>
           </div>
         )}
@@ -1008,7 +1008,7 @@ function CostsPanel() {
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10.5px] mb-2">
                 <span className="opacity-60">{t('swarm.costRuns')}: <b>{costs.totalRuns}</b></span>
                 <span className="opacity-60">{t('swarm.costJobs')}: <b>{costs.totalJobs}</b></span>
-                <span className="text-emerald-400">{t('swarm.costEst')}: <b>{costs.estKr.toFixed(2)} kr</b></span>
+                <span className="text-emerald-400">{t('swarm.costEst')}: <b>{costs.estKr?.toFixed(2) ?? 'Ukendt'} kr</b></span>
               </div>
               <div className="space-y-1">
                 {costs.byService.map((u) => (
@@ -1016,7 +1016,7 @@ function CostsPanel() {
                     <span className="flex-1 truncate">{u.name}</span>
                     <span className="opacity-50 tabular-nums">{u.jobs} {t('swarm.costJobsShort')}</span>
                     <span className={cn('text-[9px] px-1.5 py-0.5 rounded-full border', u.subscriptionCovered ? 'border-emerald-400/30 text-emerald-300' : 'border-amber-400/30 text-amber-300')}>
-                      {u.subscriptionCovered ? t('swarm.covered') : `${u.estKr.toFixed(2)} kr`}
+                      {u.subscriptionCovered ? t('swarm.covered') : `${u.estKr?.toFixed(2) ?? 'Ukendt'} kr`}
                     </span>
                   </div>
                 ))}
@@ -1033,10 +1033,12 @@ function CostsPanel() {
 /* ================= hovedvisning ================= */
 
 interface RunSummary {
+  status?: SwarmRun['status'];
+  startedAt?: number;
   file: string;
   runId: string;
   goal: string;
-  finishedAt?: string;
+  finishedAt?: string | number;
   results?: { jobId: string; title: string; text?: string; artifacts?: SwarmJob['artifacts'] }[];
   jobs?: unknown[];
   orchestratorId?: string | null;
@@ -1126,19 +1128,19 @@ export function AiSwarmView() {
   const openArchived = (r: RunSummary) => {
     setReplay(null);
     const results = new Map((r.results ?? []).map((x) => [x.jobId, x]));
-    const finishedAt = Date.parse(r.finishedAt ?? '') || null;
+    const finishedAt = typeof r.finishedAt === 'number' ? r.finishedAt : Date.parse(r.finishedAt ?? '') || null;
     const base: SwarmRun = {
       runId: r.runId,
       goal: r.goal,
       mode: r.mode ?? 'standard',
       startedAt: finishedAt ? finishedAt - 60_000 : Date.now(),
       orchestratorId: r.orchestratorId ?? null,
-      status: 'done',
+      status: r.status ?? 'interrupted',
       notes: [],
       finishedAt,
       jobs: ((r.jobs ?? []) as SwarmJob[]).map((j) => {
         const res = results.get(j.id);
-        return { ...j, status: res ? 'done' as const : 'queued' as const, liveText: '', notes: [], deltaCount: 0, lastDeltaAt: null, startedAt: null, finishedAt: null, text: res?.text ?? '', artifacts: res?.artifacts ?? [], error: null };
+        return { ...j, status: j.status ?? (res ? 'done' as const : 'interrupted' as const), liveText: '', notes: [], deltaCount: 0, lastDeltaAt: null, startedAt: null, finishedAt: null, text: res?.text ?? '', artifacts: res?.artifacts ?? [], error: j.error ?? null };
       }),
     };
     setArchived(base);

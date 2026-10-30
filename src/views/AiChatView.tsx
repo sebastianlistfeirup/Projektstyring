@@ -1,3 +1,8 @@
+import ChatMarkdown from '../components/ChatMarkdown';
+import ProjectScopePanel from '../components/ProjectScopePanel';
+import { workLimitReason } from '../lib/workLimits';
+import OrbitRunPanel from '../components/OrbitRunPanel';
+import ProjectExecutionSettings from '../components/ProjectExecutionSettings';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
@@ -28,11 +33,13 @@ import { companionStatus } from '../lib/companion';
 import {
   deletePrompt,
   fetchAiServices,
+  fetchTemplates,
   fetchPrompts,
   saveAiPrefs,
   savePrompt,
   saveService,
   streamChat,
+  cancelRun,
   streamOrchestrate,
   suggestTemplate,
   uploadAiFile,
@@ -44,56 +51,13 @@ import type { AiAttachment, AiChat, AiMessage } from '../lib/types';
 
 const BASE_URL = 'http://127.0.0.1:4310';
 
-/* ---------- lille markdown-renderer (fed, kode, lister) ---------- */
-
-function RichText({ text }: { text: string }) {
-  const blocks = text.split(/```(\w*)\n?([\s\S]*?)(?:```|$)/g);
-  const out: React.ReactNode[] = [];
-  // split giver [før, sprog, kode, efter, sprog, kode, ...]
-  for (let i = 0; i < blocks.length; i++) {
-    if (i % 3 === 1) continue;
-    if (i % 3 === 2) {
-      out.push(
-        <pre key={i} className="my-2 overflow-x-auto rounded-xl bg-black/60 dark:bg-black/40 p-3 text-[12px] text-emerald-200 font-mono whitespace-pre-wrap">
-          {blocks[i]}
-        </pre>,
-      );
-      continue;
-    }
-    const parts = blocks[i].split('\n');
-    parts.forEach((line, li) => {
-      const idx = i * 1000 + li;
-      const formatted = formatInline(line);
-      if (/^\s*[-•]\s+/.test(line)) {
-        out.push(<div key={idx} className="pl-4 flex gap-2"><span>•</span><span>{formatted}</span></div>);
-      } else if (/^\s*\d+\.\s+/.test(line)) {
-        out.push(<div key={idx} className="pl-4 flex gap-2"><span>{line.trim().match(/^\d+/)?.[0]}.</span><span>{formatted}</span></div>);
-      } else if (line.trim() === '') {
-        out.push(<div key={idx} className="h-2" />);
-      } else {
-        out.push(<div key={idx}>{formatted}</div>);
-      }
-    });
-  }
-  return <div className="whitespace-pre-wrap break-words">{out}</div>;
-}
-
-function formatInline(line: string): React.ReactNode {
-  const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean);
-  return parts.map((p, i) => {
-    if (p.startsWith('**') && p.endsWith('**')) return <strong key={i} className="font-semibold">{p.slice(2, -2)}</strong>;
-    if (p.startsWith('`') && p.endsWith('`')) return <code key={i} className="rounded bg-black/50 dark:bg-white/10 px-1 py-0.5 text-[12px] font-mono">{p.slice(1, -1)}</code>;
-    return <span key={i}>{p}</span>;
-  });
-}
-
 /* ---------- vedhæftninger / artefakter ---------- */
 
 function AttachmentChip({ a, onRemove }: { a: AiAttachment; onRemove?: () => void }) {
   return (
     <span className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/20 dark:bg-white/5 px-2 py-1 text-[11px]">
-      {a.kind === 'image' && a.dataUrl ? (
-        <img src={a.dataUrl} alt={a.name} className="h-8 w-8 rounded object-cover" />
+      {a.kind === 'image' && (a.dataUrl || a.url) ? (
+        <img src={a.dataUrl ?? (a.url?.startsWith('/') ? `${BASE_URL}${a.url}` : a.url)} alt={a.name} className="h-8 w-8 rounded object-cover" />
       ) : (
         <FileText size={12} />
       )}
@@ -181,7 +145,7 @@ function MessageBubble({ m, color }: { m: AiMessage; color?: string }) {
                 : 'glass-panel rounded-tl-sm',
             )}
           >
-            {isUser ? <span className="whitespace-pre-wrap break-words">{m.text}</span> : <RichText text={m.text} />}
+            {isUser ? <span className="whitespace-pre-wrap break-words">{m.text}</span> : <ChatMarkdown text={m.text} />}
             {m.status === 'streaming' && <span className="inline-block w-1.5 h-3.5 ml-0.5 align-middle bg-current animate-pulse rounded-sm" />}
           </div>
         )}
@@ -199,14 +163,6 @@ function MessageBubble({ m, color }: { m: AiMessage; color?: string }) {
 }
 
 /* ---------- tilslutningspanel ---------- */
-
-const KIND_LABEL: Record<string, string> = {
-  cli: 'chat.kind.cli',
-  local: 'chat.kind.local',
-  'sub-api': 'chat.kind.subapi',
-  'paid-api': 'chat.kind.paidapi',
-  manual: 'chat.kind.manual',
-};
 
 function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void }) {
   const [open, setOpen] = useState(false);
@@ -243,7 +199,7 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
           s.kind === 'sub-api' ? 'border-sky-400/30 text-sky-300' :
           s.kind === 'paid-api' ? 'border-amber-400/30 text-amber-300' : 'border-slate-400/30 text-slate-400',
         )}>
-          {t(KIND_LABEL[s.kind])}
+          {s.kind === 'local' ? 'Lokal' : s.billing?.allowed ? 'Inkluderet · bekræftet af dig' : 'Adgang skal afklares'}
         </span>
       </button>
       {s.reason && <div className="px-2.5 pb-1.5 text-[10px] opacity-50 leading-snug">{s.reason}</div>}
@@ -258,6 +214,19 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
             />
             {t('chat.enabled')}
           </label>
+          {s.kind !== 'local' && (
+            <label className="flex items-start gap-2 text-[11px] leading-relaxed">
+              <input type="checkbox" className="mt-1 accent-indigo-500"
+                checked={s.billing?.allowed === true}
+                onChange={async e => {
+                  const checked = e.target.checked;
+                  const result = await saveService(s.id, { billingMode: checked ? 'included' : 'unknown', noExtraCharges: checked });
+                  setKeyFeedback({ ok: result.ok, text: result.ok ? 'Betalingsvalg gemt. Dette er din bekræftelse, ikke en måling af resterende kvote.' : result.reason ?? 'Kunne ikke gemme.' });
+                  onChanged();
+                }} />
+              Jeg har kontrolleret, at denne adgang bruger inkluderet abonnementsforbrug, og at ekstraforbrug er slået fra hos leverandøren.
+            </label>
+          )}
           {needsKey && (
             <>
               <div className="flex gap-1.5">
@@ -289,6 +258,10 @@ function ServiceRow({ s, onChanged }: { s: AiServiceInfo; onChanged: () => void 
               />
             </>
           )}
+          {s.id === 'heygen' && <div className="space-y-2">
+            <label className="block text-[11px]">Avatar-id<input className="input w-full" defaultValue={s.avatarId ?? ''} onBlur={async e => { await saveService(s.id, { avatarId: e.target.value.trim() }); onChanged(); }} /></label>
+            <label className="block text-[11px]">Stemme-id<input className="input w-full" defaultValue={s.voiceId ?? ''} onBlur={async e => { await saveService(s.id, { voiceId: e.target.value.trim() }); onChanged(); }} /></label>
+          </div>}
           {s.kind === 'cli' && (
             <div className="text-[10px] opacity-60">
               {t('chat.cliDetected')}: <code className="font-mono">{s.cmd}</code>
@@ -342,21 +315,6 @@ function ConnectionPanel({ services, prefs, onChanged }: {
 }) {
   const list = useMemo(() => (services ? Object.values(services) : []), [services]);
   const cliIds = list.filter((s) => (s.kind === 'cli' || s.kind === 'local') && s.available).map((s) => s.id);
-  const [savingPaid, setSavingPaid] = useState(false);
-  const [paidFeedback, setPaidFeedback] = useState<{ ok: boolean; text: string } | null>(null);
-  const savePaidPreference = async (allowPaidApis: boolean) => {
-    if (savingPaid) return;
-    setSavingPaid(true);
-    setPaidFeedback(null);
-    const result = await saveAiPrefs({ allowPaidApis });
-    if (result.ok && result.prefs?.allowPaidApis === allowPaidApis) {
-      setPaidFeedback({ ok: true, text: allowPaidApis ? 'Betalte API’er er tilladt og bekræftet.' : 'Betalte API’er er slået fra.' });
-    } else {
-      setPaidFeedback({ ok: false, text: result.reason ?? 'Indstillingen blev ikke gemt. Prøv igen.' });
-    }
-    setSavingPaid(false);
-    onChanged();
-  };
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between px-1">
@@ -365,22 +323,8 @@ function ConnectionPanel({ services, prefs, onChanged }: {
       </div>
       {prefs && (
         <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-2 space-y-1.5 mb-1">
-          <label className="flex items-center gap-2 text-[11px]">
-            <input
-              type="checkbox"
-              checked={prefs.allowPaidApis}
-              disabled={savingPaid}
-              onChange={(e) => savePaidPreference(e.target.checked)}
-              className="accent-amber-500"
-            />
-            <span className="text-amber-300">{savingPaid ? 'Gemmer betalingsindstilling…' : t('chat.allowPaid')}</span>
-          </label>
-          {paidFeedback && (
-            <div className={cn('text-[10px] leading-snug', paidFeedback.ok ? 'text-emerald-300' : 'text-rose-300')} role="status">
-              {paidFeedback.text}
-            </div>
-          )}
-          <p className="text-[10px] opacity-50 leading-snug">{t('chat.allowPaidHint')}</p>
+          <p className="text-[11px] font-semibold">Kun inkluderet forbrug</p>
+          <p className="text-[10px] opacity-70">Ingen automatisk ekstra betaling. Bekræft adgang og betalingsgrænser for hver tjeneste. Kvoter kontrolleres hos leverandøren.</p>
           <div className="flex items-center gap-1.5 text-[11px]">
             <span className="opacity-60 shrink-0">{t('chat.orchestrator')}:</span>
             <select
@@ -413,6 +357,8 @@ function ConnectionPanel({ services, prefs, onChanged }: {
 export function AiChatView() {
   useLang();
   const projects = useStore((s) => s.projects);
+  const tasks = useStore(s => s.tasks);
+  const [taskId, setTaskId] = useState('');
   const aiChats = useStore((s) => s.aiChats);
   const addAiChat = useStore((s) => s.addAiChat);
   const deleteAiChat = useStore((s) => s.deleteAiChat);
@@ -420,9 +366,12 @@ export function AiChatView() {
   const updateAiMessage = useStore((s) => s.updateAiMessage);
   const bibles = useStore((s) => s.bibles);
   const setBible = useStore((s) => s.setBible);
+  const bibleVersions = useStore(s => s.bibleVersions);
+  const publishBible = useStore(s => s.publishBible);
+  const [sendIssue, setSendIssue] = useState('');
 
-  const [chatId, setChatId] = useState<string | null>(null);
-  const [newProjectId, setNewProjectId] = useState<string>('p-game');
+  const [chatId, setChatId] = useState<string | null>(() => sessionStorage.getItem('orbit-active-chat'));
+  const [newProjectId, setNewProjectId] = useState<string>(() => useStore.getState().activeProjectId ?? projects[0]?.id ?? '');
   const [services, setServices] = useState<Record<string, AiServiceInfo> | null>(null);
   const [prefs, setPrefs] = useState<{ allowPaidApis: boolean; orchestrator: string; autoJudge?: boolean } | null>(null);
   const [companionOk, setCompanionOk] = useState<boolean | null>(null);
@@ -441,13 +390,29 @@ export function AiChatView() {
   const [bibleOpen, setBibleOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const runningIdRef = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const chat = aiChats.find((c) => c.id === chatId) ?? null;
   const chatProject = projects.find((p) => p.id === chat?.projectId) ?? null;
-  const bible = chat?.projectId ? bibles[chat.projectId] ?? '' : '';
+  const bibleDraft = chat?.projectId ? bibles[chat.projectId] ?? '' : '';
+  const publishedBible = chat?.projectId ? bibleVersions[chat.projectId]?.at(-1) : undefined;
+  const bible = publishedBible?.text ?? bibleDraft;
+  useEffect(() => { if (chatId) sessionStorage.setItem('orbit-active-chat', chatId); else sessionStorage.removeItem('orbit-active-chat'); }, [chatId]);
+
+  async function prepareTakeover() {
+    const serviceId = ['codex', 'claude'].find(id => services?.[id]?.available);
+    if (!serviceId) { setSendIssue('Tilslut Codex eller Claude Code først, så projektets kode kan læses.'); return; }
+    if (!chatProject?.repositoryPath) { setSendIssue('Tilknyt projektets repository under Repository og kvalitetskontroller først.'); return; }
+    const template = (await fetchTemplates()).find(t => t.id === 'tpl-project-takeover');
+    if (!template) { setSendIssue('Skabelonen kunne ikke hentes fra Companion.'); return; }
+    setSendIssue(''); setService('auto'); setRunMode('standard'); setTaskId('');
+    setPlanDraft(template.jobs.map(j => ({ ...j, serviceId })));
+    setText(`Overtag ${chatProject.name} som et eksisterende projekt. Kortlæg den faktiske status ud fra kode og gældende projektbibel. Foreslå derefter det nødvendige restarbejde for en færdig version. Bevar de vedtagne designvalg, og læg nye idéer til senere. Ændr ingen kode i denne gennemgang.`);
+    textareaRef.current?.focus();
+  }
 
   const refresh = useCallback(async () => {
     const ok = await companionStatus();
@@ -482,6 +447,7 @@ export function AiChatView() {
     for (const f of Array.from(files)) {
       const up = await uploadAiFile(f);
       if (up) setPending((p) => [...p, up]);
+      else setSendIssue(`Filen ${f.name} kunne ikke uploades. Kontrollér størrelse (maks. 25 MB) og forbindelsen.`);
     }
     setUploading(false);
   }, []);
@@ -495,8 +461,16 @@ export function AiChatView() {
   const send = useCallback(async () => {
     const body = text.trim();
     if ((!body && pending.length === 0) || running || !chat) return;
+    setSendIssue('');
+    if (taskId) {
+      const store = useStore.getState();
+      const task = store.tasks.find(t => t.id === taskId && t.projectId === chat.projectId);
+      if (!task || (chatProject?.scopeTaskIds && !chatProject.scopeTaskIds.includes(taskId))) { setSendIssue('Opgaven er ikke i projektets aktive scope. Vælg en arbejdsordre fra versionen.'); return; }
+      const reason = workLimitReason(store.tasks, store.rules, task, 'inprogress');
+      if (reason) { setSendIssue(reason); return; }
+    }
     setText('');
-    const atts = pending.map(({ dataUrl: _d, ...rest }) => rest); // undgå store dataUrls i localStorage
+    const atts = pending.map(({ dataUrl: _d, extractedText: _text, ...rest }) => rest); // undgå store dataUrls i localStorage
     setPending([]);
     addAiMessage(chat.id, { role: 'user', text: body, attachments: atts, status: 'done' });
     if (aiChats.find((c) => c.id === chat.id)?.title === t('chat.untitled') && body) {
@@ -512,9 +486,18 @@ export function AiChatView() {
       const msgText = () => (useStore.getState().aiChats.find((c) => c.id === chat.id)?.messages ?? []).find((x) => x.id === msg.id)?.text ?? '';
       const jobText: Record<string, string> = {};
       await streamOrchestrate(
-        { goal: body, bible: bible || undefined, mode: runMode, pauseAfterPlan: pausePlan, jobs: planDraft ?? undefined, attachments: atts },
+        { goal: taskId ? `${chatProject?.releaseGoal ? `Versionsmål: ${chatProject.releaseGoal}\n` : ''}${body}\n\nArbejdsordre: ${tasks.find(t => t.id === taskId)?.title ?? ''}\n${tasks.find(t => t.id === taskId)?.description ?? ''}` : body, bible: bible || undefined, projectId: chat.projectId ?? undefined, taskId: taskId || undefined, repositoryPath: chatProject?.repositoryPath, checks: chatProject?.verificationChecks, mode: runMode, pauseAfterPlan: pausePlan, jobs: planDraft ?? undefined, attachments: atts },
         {
           onEvent: (evt) => {
+            if (evt.type === 'run_start') {
+              runningIdRef.current = String(evt.runId);
+              updateAiMessage(chat.id, msg.id, { runId: String(evt.runId) });
+              if (taskId) {
+                const store = useStore.getState();
+                store.linkTaskToRun(taskId, String(evt.runId), body);
+                store.updateTask(taskId, { status: 'inprogress' });
+              }
+            }
             let out = msgText();
             if (evt.type === 'orchestrator') {
               out += `${t('chat.orchestratorLine')}: ${evt.serviceId ? services?.[String(evt.serviceId)]?.name ?? String(evt.serviceId) : t('chat.ruleBased')} (${evt.mode === 'llm' ? 'LLM' : t('chat.rules')})\n\n`;
@@ -534,24 +517,27 @@ export function AiChatView() {
             } else if (evt.type === 'job_done') {
               const r = evt.result as { title: string; text: string; artifacts?: AiAttachment[] };
               out = out.replace(`▶ **${r.title}** …\n`, `✅ **${r.title}**\n\n`);
-              out += `${r.text.slice(0, 6000)}\n\n`;
+              out += `${r.text.slice(0, 6000)}${r.text.length > 6000 ? `\n\n[Hent den fulde leverance](${BASE_URL}/api/ai/runs/${runningIdRef.current}/export)` : ''}\n\n`;
               if (r.artifacts?.length) {
                 const cur = (useStore.getState().aiChats.find((c) => c.id === chat.id)?.messages ?? []).find((x) => x.id === msg.id);
                 updateAiMessage(chat.id, msg.id, { artifacts: [...(cur?.artifacts ?? []), ...r.artifacts] });
               }
+            } else if (evt.type === 'job_blocked' || evt.type === 'job_cancelled') {
+              out += `⏸ ${String(evt.jobId)}: ${String(evt.error ?? 'Blokeret')}\n`;
             } else if (evt.type === 'job_error') {
               out += `⚠️ ${t('chat.jobFailed')}: ${String(evt.error ?? '')}\n`;
             } else if (evt.type === 'done') {
               const sum = (evt.summary as { title: string }[] | undefined) ?? [];
               out += `**${t('chat.runFinished')}** — ${sum.length} ${t('chat.jobsDelivered')}\n`;
             }
-            updateAiMessage(chat.id, msg.id, { text: out });
+            if (out !== msgText()) updateAiMessage(chat.id, msg.id, { text: out });
           },
           onError: (e) => updateAiMessage(chat.id, msg.id, { text: `${msgText()}\n\n⚠️ ${e}`, status: 'error' }),
         },
         ac.signal,
       );
-      updateAiMessage(chat.id, msg.id, { status: 'done' });
+      const finalMessage = useStore.getState().aiChats.find(c => c.id === chat.id)?.messages.find(m => m.id === msg.id);
+      if (finalMessage?.status === 'streaming') updateAiMessage(chat.id, msg.id, { status: ac.signal.aborted ? 'error' : 'done', ...(ac.signal.aborted ? { text: `${finalMessage.text}\n\nForbindelsen er stoppet. Se kørselsstatus i Orbit Live.` } : {}) });
       setPlanDraft(null);
     } else {
       const msg = addAiMessage(chat.id, { role: 'assistant', text: '', serviceId: service, status: 'streaming' });
@@ -562,28 +548,31 @@ export function AiChatView() {
       let acc = '';
       await streamChat(
         service,
-        [...history, { role: 'user' as const, text: body, attachments: atts }],
+        history,
         {
           onDelta: (_d, full) => { acc = full; updateAiMessage(chat.id, msg.id, { text: full }); },
           onDone: () => updateAiMessage(chat.id, msg.id, { status: 'done' }),
           onError: (e) => updateAiMessage(chat.id, msg.id, { text: acc ? `${acc}\n\n⚠️ ${e}` : `⚠️ ${e}`, status: 'error' }),
         },
         ac.signal,
+        bible || undefined,
       );
     }
     setRunning(false);
     abortRef.current = null;
+    runningIdRef.current = null;
     textareaRef.current?.focus();
-  }, [text, pending, running, chat, service, services, bible, aiChats, runMode, pausePlan, planDraft, addAiMessage, updateAiMessage, t]);
+  }, [text, pending, running, chat, chatProject, taskId, tasks, service, services, bible, aiChats, runMode, pausePlan, planDraft, addAiMessage, updateAiMessage]);
 
   const availableCount = useMemo(() => (services ? Object.values(services).filter((s) => s.available).length : 0), [services]);
 
   return (
-    <div className="flex h-full gap-4 p-4 md:p-6 max-w-[1500px] mx-auto">
+    <div className="flex h-full min-h-0 gap-4 p-3 md:p-6 max-w-[1500px] mx-auto overflow-hidden">
       {/* venstre: samtaler + tilslutning */}
       <aside className="w-64 shrink-0 hidden lg:flex flex-col gap-3 overflow-y-auto pr-1">
         <div className="flex items-center gap-1.5">
           <select
+            aria-label="Projekt til ny samtale"
             value={newProjectId}
             onChange={(e) => setNewProjectId(e.target.value)}
             className="flex-1 min-w-0 rounded-xl glass-panel px-2 py-1.5 text-[12px] bg-transparent outline-none"
@@ -591,7 +580,7 @@ export function AiChatView() {
             {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           <button
-            onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); }}
+            onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); setTaskId(''); }}
             className="rounded-xl btn-primary px-2.5 py-1.5 text-[12px] flex items-center gap-1"
           >
             <Plus size={13} /> {t('chat.newChat')}
@@ -602,22 +591,34 @@ export function AiChatView() {
           {aiChats.length === 0 && <p className="text-[11px] opacity-40 px-1">{t('chat.noChats')}</p>}
           {aiChats.map((c: AiChat) => (
             <div key={c.id} className={cn('group flex items-center gap-1 rounded-lg px-2 py-1.5 cursor-pointer transition', c.id === chatId ? 'bg-indigo-500/20 border border-indigo-400/30' : 'hover:bg-white/5 border border-transparent')}>
-              <div className="flex-1 min-w-0" onClick={() => setChatId(c.id)}>
+              <button className="flex-1 min-w-0 text-left" onClick={() => { setChatId(c.id); setTaskId(''); }}>
                 <div className="text-[12px] truncate">{c.title}</div>
                 <div className="text-[10px] opacity-40 truncate">{projects.find((p) => p.id === c.projectId)?.name ?? '—'}</div>
-              </div>
-              <button onClick={() => { deleteAiChat(c.id); if (chatId === c.id) setChatId(null); }} className="opacity-0 group-hover:opacity-40 hover:opacity-100 transition shrink-0">
+              </button>
+              <button aria-label={`Slet samtalen ${c.title}`} onClick={() => { deleteAiChat(c.id); if (chatId === c.id) setChatId(null); }} className="opacity-0 group-hover:opacity-40 focus:opacity-100 hover:opacity-100 transition shrink-0">
                 <Trash2 size={12} />
               </button>
             </div>
           ))}
         </div>
         <div className="flex-1" />
-        <ConnectionPanel services={services} prefs={prefs} onChanged={refresh} />
+        <details className="rounded-xl border border-current/10 p-3">
+          <summary className="cursor-pointer text-xs font-medium">Forbindelser · {availableCount} klar</summary>
+          <div className="mt-3"><ConnectionPanel services={services} prefs={prefs} onChanged={refresh} /></div>
+        </details>
       </aside>
 
       {/* hoved: beskeder + komponist */}
-      <main className="flex-1 min-w-0 flex flex-col gap-3">
+      <main className="flex-1 min-w-0 min-h-0 flex flex-col gap-3 overflow-y-auto pr-1 [&>*]:shrink-0">
+        <details className="lg:hidden rounded-xl border border-current/10 p-3 text-xs">
+          <summary className="cursor-pointer font-medium">Samtaler og forbindelser</summary>
+          <div className="mt-3 space-y-3">
+            <label className="block">Projekt<select aria-label="Projekt til ny mobil-samtale" className="input w-full mt-1" value={newProjectId} onChange={e => setNewProjectId(e.target.value)}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+            <button className="btn-primary text-xs" onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); setTaskId(''); }}>{t('chat.newChat')}</button>
+            <div className="max-h-48 overflow-auto">{aiChats.map(c => <button key={c.id} className="block w-full text-left rounded-lg p-2 hover:bg-indigo-500/10" onClick={() => { setChatId(c.id); setTaskId(''); }}>{c.title}</button>)}</div>
+            <details><summary className="cursor-pointer">Forbindelser · {availableCount} klar</summary><ConnectionPanel services={services} prefs={prefs} onChanged={refresh} /></details>
+          </div>
+        </details>
         {companionOk === false && (
           <div className="rounded-2xl border border-amber-400/30 bg-amber-400/10 p-4 text-[13px]">
             <div className="flex items-center gap-2 font-semibold text-amber-300"><WifiOff size={15} /> {t('chat.noCompanion')}</div>
@@ -638,7 +639,7 @@ export function AiChatView() {
             <h2 className="text-xl font-bold">{t('chat.emptyTitle')}</h2>
             <p className="text-[13px] opacity-60 max-w-sm leading-relaxed">{t('chat.emptyHint')}</p>
             <button
-              onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); }}
+              onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); setTaskId(''); }}
               className="btn-primary rounded-xl px-4 py-2 text-[13px] flex items-center gap-1.5"
             >
               <Plus size={14} /> {t('chat.newChat')}
@@ -647,6 +648,15 @@ export function AiChatView() {
         ) : (
           <>
             {/* bibel-bar */}
+            {chatProject && <ProjectScopePanel key={`scope-${chatProject.id}`} project={chatProject} />}
+            {chatProject && <ProjectExecutionSettings key={chatProject.id} project={chatProject} />}
+            <label className="flex items-center gap-2 text-xs">Arbejdsordre
+              <select aria-label="Arbejdsordre" value={taskId} onChange={e => setTaskId(e.target.value)} className="input flex-1" disabled={running}>
+                <option value="">Samtale uden tilknyttet opgave</option>
+                {tasks.filter(t => t.projectId === chat.projectId && !['done', 'canceled'].includes(t.status) && (!chatProject?.scopeTaskIds || chatProject.scopeTaskIds.includes(t.id))).map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+              </select>
+            </label>
+            <OrbitRunPanel projectId={chat.projectId} />
             {chat.projectId && (
               <div className="rounded-2xl border border-white/10 bg-black/10 dark:bg-white/5 overflow-hidden">
                 <button onClick={() => setBibleOpen((o) => !o)} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/5 transition">
@@ -657,12 +667,15 @@ export function AiChatView() {
                 {bibleOpen && (
                   <div className="px-3 pb-3 space-y-1.5">
                     <textarea
-                      value={bible}
+                      value={bibleDraft}
                       onChange={(e) => setBible(chat.projectId!, e.target.value)}
                       placeholder={t('chat.biblePlaceholder')}
                       rows={4}
                       className="w-full rounded-xl bg-black/20 dark:bg-black/30 border border-white/10 px-3 py-2 text-[12px] outline-none focus:border-indigo-400/60 resize-y"
                     />
+                    <p className="text-xs opacity-70">{publishedBible ? `Gældende version ${publishedBible.version}. ${bibleDraft !== publishedBible.text ? 'Der er upublicerede ændringer.' : 'Kladde og gældende version er ens.'}` : 'Ingen fastlagt version. Kørsler bruger den gemte kladde.'}</p>
+                    <button className="btn-primary text-xs" disabled={!bibleDraft.trim() || bibleDraft === publishedBible?.text} onClick={() => publishBible(chat.projectId!)}>Gør kladden gældende</button>
+                    {chat.projectId && (bibleVersions[chat.projectId]?.length ?? 0) > 0 && <details className="text-xs"><summary className="cursor-pointer">Tidligere versioner</summary>{[...(bibleVersions[chat.projectId] ?? [])].reverse().map(v => <button key={v.id} className="block underline mt-1" onClick={() => setBible(chat.projectId!, v.text)}>Hent version {v.version} som kladde</button>)}</details>}
                     <button
                       disabled={suggestingBible}
                       onClick={async () => {
@@ -690,9 +703,10 @@ export function AiChatView() {
               </div>
             )}
 
-            <div className="flex-1 overflow-y-auto rounded-2xl border border-white/10 bg-black/5 dark:bg-black/20 p-4 space-y-4 min-h-[300px]">
+            <div className="flex-1 overflow-y-auto rounded-2xl border border-white/10 bg-black/5 dark:bg-black/20 p-4 space-y-4 min-h-[300px] max-h-[65vh]">
+              {sendIssue && <p role="alert" className="text-rose-400 text-sm">{sendIssue}</p>}
               {chat.messages.length === 0 && (
-                <div className="h-full flex items-center justify-center text-center text-[12px] opacity-40 px-8">{t('chat.firstMessage')}</div>
+                <div className="h-full flex flex-col items-center justify-center text-center text-[12px] px-8 gap-4"><p className="opacity-60">{t('chat.firstMessage')}</p><div className="flex flex-wrap justify-center gap-2"><button className="btn-ghost text-xs" onClick={prepareTakeover}>Kortlæg eksisterende projekt</button><button className="btn-ghost text-xs" onClick={() => { setText('Undersøg og ret fejlen på det vedhæftede billede. Find årsagen i projektet, gennemfør den mindste nødvendige rettelse, og dokumentér en faktisk kontrol af det berørte forløb.'); textareaRef.current?.focus(); }}>Ret en fejl fra et billede</button><button className="btn-ghost text-xs" onClick={() => { fileInputRef.current?.click(); setBibleOpen(true); }}>Upload projektbibel</button></div></div>
               )}
               {chat.messages.map((m) => (
                 <MessageBubble key={m.id} m={m} color={m.serviceId ? services?.[m.serviceId]?.color : undefined} />
@@ -709,7 +723,7 @@ export function AiChatView() {
             >
               {pending.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 px-3 pt-2.5">
-                  {pending.map((a, i) => <AttachmentChip key={i} a={a} onRemove={() => setPending((p) => p.filter((_, j) => j !== i))} />)}
+                  {pending.map((a, i) => <div key={a.id ?? i} className="space-y-1"><AttachmentChip a={a} onRemove={() => setPending(p => p.filter((_, j) => j !== i))} />{a.extractedText && chat.projectId && <button className="text-[10px] underline text-indigo-400" onClick={() => { setBible(chat.projectId!, a.extractedText!); setBibleOpen(true); }}>Brug teksten som bibelkladde</button>}{a.extractionError && <p className="text-[10px] text-amber-400">Tekst kunne ikke udtrækkes: {a.extractionError}</p>}</div>)}
                 </div>
               )}
               <div className="flex items-end gap-2 p-2.5">
@@ -718,6 +732,7 @@ export function AiChatView() {
                 </button>
                 <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ''; }} />
                 <textarea
+                  aria-label="Besked til Orbit"
                   ref={textareaRef}
                   value={text}
                   onChange={(e) => setText(e.target.value)}
@@ -746,7 +761,7 @@ export function AiChatView() {
                   )}
                 </select>
                 {running ? (
-                  <button onClick={() => abortRef.current?.abort()} className="p-2.5 rounded-xl bg-rose-500/80 hover:bg-rose-500 text-white transition shrink-0" title={t('chat.stop')}>
+                  <button onClick={async () => { if (service === 'auto' && !runningIdRef.current) { setSendIssue('Afventer kørsels-id fra serveren. Prøv Stop igen om et øjeblik.'); return; } if (runningIdRef.current) { const stopped = await cancelRun(runningIdRef.current); if (!stopped) return; } abortRef.current?.abort(); }} className="p-2.5 rounded-xl bg-rose-500/80 hover:bg-rose-500 text-white transition shrink-0" title={t('chat.stop')}>
                     <Square size={15} />
                   </button>
                 ) : (

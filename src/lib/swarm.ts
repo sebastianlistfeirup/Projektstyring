@@ -1,3 +1,5 @@
+import { workLimitReason } from './workLimits';
+import { useStore } from '../store/useStore';
 import { create } from 'zustand';
 import { fetchAiServices, type AiServiceInfo } from './aiApi';
 
@@ -6,20 +8,21 @@ import { fetchAiServices, type AiServiceInfo } from './aiApi';
 export interface SwarmSubagent {
   subId: string;
   name: string;
-  status: 'running' | 'done';
+  status: 'running' | 'done' | 'error';
   startedAt: number;
   finishedAt: number | null;
   text: string;
 }
 
 export interface SwarmJob {
+  actions?: { id: string; kind: string; label: string; status: 'running' | 'done' | 'error'; detail: string; at: number }[];
   id: string;
   title: string;
   serviceId: string | null;
   phase: string;
   dependsOn: number[];
   description: string;
-  status: 'queued' | 'running' | 'done' | 'error';
+  status: 'queued' | 'running' | 'done' | 'error' | 'blocked' | 'skipped' | 'cancelled' | 'interrupted';
   liveText: string;
   notes: string[];
   deltaCount: number;
@@ -36,12 +39,17 @@ export interface SwarmJob {
 }
 
 export interface SwarmRun {
+  results?: { title: string; text: string; artifacts?: import('./types').AiAttachment[] }[];
+  projectId?: string | null;
+  taskId?: string | null;
+  evidence?: { commit: string; changedFiles: string[]; diffStat: string };
+  verification?: { status: string; checks: { name: string; status: string; exitCode: number | null; output: string }[] };
   runId: string;
   goal: string;
   mode?: string;
   startedAt: number;
   orchestratorId: string | null;
-  status: 'running' | 'done' | 'error';
+  status: 'running' | 'awaiting_approval' | 'done' | 'error' | 'partial' | 'blocked' | 'cancelled' | 'interrupted';
   jobs: SwarmJob[];
   notes: string[];
   instructions?: string[];
@@ -128,7 +136,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
   services: null,
   approval: null,
   setConnected: (v) => set({ connected: v }),
-  setRun: (r) => set({ run: r }),
+  setRun: (r) => set({ run: r, approval: r?.status === 'awaiting_approval' ? { runId: r.runId, jobs: r.jobs } : null }),
   setApproval: (a) => set({ approval: a }),
   refreshServices: async () => {
     const s = await fetchAiServices();
@@ -140,11 +148,17 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
     if (evt.type !== 'run_start' && cur && evt.runId && String(evt.runId) !== cur.runId) return;
     switch (evt.type) {
       case 'run_start':
+        if (evt.taskId && evt.runId) {
+          const store = useStore.getState();
+          if (store.tasks.some(t => t.id === evt.taskId)) store.linkTaskToRun(String(evt.taskId), String(evt.runId), String(evt.goal ?? ''));
+        }
         requestNotifyPermission();
         maybeNotify('start', 'AI-swarm', String(evt.goal ?? ''));
         set({
           run: {
             runId: String(evt.runId ?? ''),
+            projectId: evt.projectId as string | undefined,
+            taskId: evt.taskId as string | undefined,
             goal: String(evt.goal ?? ''),
             mode: String(evt.mode ?? 'standard'),
             startedAt: Date.parse(String(evt.startedAt ?? '')) || Date.now(),
@@ -179,10 +193,14 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
         }));
         // Godkendelsespause: planen afventer brugerens godkendelse/redigering.
         if (evt.paused) {
-          set({ run: { ...cur, jobs: mapped }, approval: { runId: cur.runId, jobs: mapped } });
+          set({ run: { ...cur, status: 'awaiting_approval', jobs: mapped }, approval: { runId: cur.runId, jobs: mapped } });
         } else {
-          set({ run: { ...cur, jobs: mapped }, approval: null });
+          set({ run: { ...cur, status: 'running', jobs: mapped }, approval: null });
         }
+        break;
+      }
+      case 'job_action': {
+        if (cur) set({ run: { ...cur, jobs: cur.jobs.map(j => j.id === evt.jobId ? { ...j, actions: [...(j.actions ?? []).filter(a => a.id !== (evt.action as NonNullable<SwarmJob['actions']>[number]).id).slice(-99), evt.action as NonNullable<SwarmJob['actions']>[number]] } : j) } });
         break;
       }
       case 'job_start': {
@@ -269,7 +287,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
                     ...j,
                     subagents: (j.subagents ?? []).map((s) =>
                       s.subId === sid
-                        ? { ...s, status: 'done' as const, text: String(evt.text ?? '').slice(0, 400), finishedAt: Date.now() }
+                        ? { ...s, status: (evt.error ? 'error' : 'done') as SwarmSubagent['status'], text: String(evt.text ?? '').slice(0, 400), finishedAt: Date.now() }
                         : s,
                     ),
                   }
@@ -333,7 +351,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
           run: {
             ...cur,
             jobs: cur.jobs.map((j) =>
-              j.id === id ? { ...j, status: 'done' as const, text: '(sprunget over)', finishedAt: Date.now() } : j,
+              j.id === id ? { ...j, status: 'skipped' as const, text: '(sprunget over)', finishedAt: Date.now() } : j,
             ),
           },
         });
@@ -356,6 +374,8 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
         });
         break;
       }
+      case 'job_blocked':
+      case 'job_cancelled':
       case 'job_error': {
         if (!cur) break;
         const id = String(evt.jobId ?? '');
@@ -365,12 +385,19 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
           run: {
             ...cur,
             jobs: cur.jobs.map((j) =>
-              j.id === id ? { ...j, status: 'error' as const, error: String(evt.error ?? ''), finishedAt: Date.now() } : j,
+              j.id === id ? { ...j, status: (evt.type === 'job_blocked' ? 'blocked' : evt.type === 'job_cancelled' ? 'cancelled' : 'error') as SwarmJob['status'], error: String(evt.error ?? ''), finishedAt: Date.now() } : j,
             ),
           },
         });
         break;
       }
+      case 'verification':
+        if (cur) set({ run: { ...cur, verification: evt.verification as SwarmRun['verification'], evidence: evt.evidence as SwarmRun['evidence'] } });
+        break;
+      case 'run_finished':
+        if (cur) reconcileTask({ ...cur, status: evt.status as SwarmRun['status'] });
+        if (cur) set({ run: { ...cur, status: evt.status as SwarmRun['status'], finishedAt: Date.now() }, approval: null });
+        break;
       case 'done':
         if (cur) {
           maybeNotify('done', 'AI-kørsel færdig', cur.goal);
@@ -380,7 +407,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
       case 'error':
         if (cur && evt.runId) {
           maybeNotify('error', 'AI-kørsel slog fejl', String(evt.error ?? cur.goal));
-          set({ run: { ...cur, status: 'error', finishedAt: Date.now() } });
+          set({ run: { ...cur, status: (evt.status as SwarmRun['status']) ?? 'error', finishedAt: Date.now() }, approval: null });
         }
         break;
       default:
@@ -388,6 +415,26 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
     }
   },
 }));
+
+function reconcileTask(run: SwarmRun) {
+  if (run.status !== 'running' && run.status !== 'awaiting_approval') {
+    const store = useStore.getState();
+    for (const chat of store.aiChats) for (const msg of chat.messages) {
+      if (msg.runId !== run.runId || !run.finishedAt || msg.runFinishedAt === run.finishedAt) continue;
+      const delivered = (run.results ?? []).map(r => `### ${r.title}\n\n${r.text.slice(0, 6000)}${r.text.length > 6000 ? '\n\nUddrag — resten findes i den fulde leverance.' : ''}`).join('\n\n');
+      store.updateAiMessage(chat.id, msg.id, { runFinishedAt: run.finishedAt, status: run.status === 'done' ? 'done' : 'error', text: `${delivered || msg.text}\n\n${run.status === 'done' ? 'Leveret til gennemgang.' : `Kørselsstatus: ${run.status}. Se Orbit Live for fejl og næste skridt.`}\n\n[Hent fuld leverance](http://127.0.0.1:4310/api/ai/runs/${run.runId}/export)`, artifacts: (run.results ?? []).flatMap(r => r.artifacts ?? []) });
+    }
+  }
+  if (!run.taskId || run.status === 'running' || run.status === 'awaiting_approval') return;
+  const store = useStore.getState();
+  if (store.aiTaskLinks[run.taskId]?.runId !== run.runId) return;
+  const task = store.tasks.find(t => t.id === run.taskId);
+  if (task?.status === 'inprogress' && run.status === 'done') {
+    if (workLimitReason(store.tasks, store.rules, task, 'inreview')) return;
+    store.updateTask(task.id, { status: 'inreview' });
+    store.addNotification(store.currentUserId, `AI-leverance klar til gennemgang: ${task.title}`, task.id);
+  }
+}
 
 /* ---------- WebSocket-forbindelse ---------- */
 
@@ -401,7 +448,7 @@ async function syncState() {
   try {
     const r = await fetch(`${API}/api/ai/swarm`);
     const j = await r.json();
-    if (j?.ok) useSwarm.getState().setRun(j.run ?? null);
+    if (j?.ok) { useSwarm.getState().setRun(j.run ?? null); if (j.run) reconcileTask(j.run); }
   } catch { /* companion offline */ }
 }
 
@@ -502,6 +549,10 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
           subagents: [],
         })),
       };
+    case 'job_action': {
+      const action = evt.action as NonNullable<SwarmJob['actions']>[number];
+      return { ...run, jobs: run.jobs.map(j => j.id === evt.jobId ? { ...j, actions: [...(j.actions ?? []).filter(a => a.id !== action.id).slice(-99), action] } : j) };
+    }
     case 'job_start': {
       const job = evt.job as { id: string } | undefined;
       return { ...run, jobs: run.jobs.map((j) => (j.id === job?.id ? { ...j, status: 'running' as const, startedAt: Number(evt.at) } : j)) };
@@ -549,7 +600,7 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
     case 'job_skipped':
       return {
         ...run,
-        jobs: run.jobs.map((j) => (j.id === String(evt.jobId ?? '') ? { ...j, status: 'done' as const, text: '(sprunget over)', finishedAt: Number(evt.at) } : j)),
+        jobs: run.jobs.map((j) => (j.id === String(evt.jobId ?? '') ? { ...j, status: 'skipped' as const, text: '(sprunget over)', finishedAt: Number(evt.at) } : j)),
       };
     case 'job_done': {
       const r = evt.result as { jobId: string; text: string; artifacts?: SwarmJob['artifacts'] } | undefined;
@@ -563,11 +614,13 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
         ),
       };
     }
+    case 'job_blocked':
+    case 'job_cancelled':
     case 'job_error':
       return {
         ...run,
         jobs: run.jobs.map((j) =>
-          j.id === String(evt.jobId ?? '') ? { ...j, status: 'error' as const, error: String(evt.error ?? ''), finishedAt: Number(evt.at) } : j,
+          j.id === String(evt.jobId ?? '') ? { ...j, status: (evt.type === 'job_blocked' ? 'blocked' : evt.type === 'job_cancelled' ? 'cancelled' : 'error') as SwarmJob['status'], error: String(evt.error ?? ''), finishedAt: Number(evt.at) } : j,
         ),
       };
     case 'job_judged':
@@ -579,10 +632,14 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
             : j,
         ),
       };
+    case 'verification':
+      return { ...run, verification: evt.verification as SwarmRun['verification'], evidence: evt.evidence as SwarmRun['evidence'] };
     case 'done':
       return { ...run, status: 'done', finishedAt: Number(evt.at) };
+    case 'run_finished':
+      return { ...run, status: evt.status as SwarmRun['status'], finishedAt: Number(evt.at) };
     case 'error':
-      return { ...run, status: 'error', finishedAt: Number(evt.at) };
+      return { ...run, status: (evt.status as SwarmRun['status']) ?? 'error', finishedAt: Number(evt.at) };
     default:
       return run;
   }
@@ -597,7 +654,7 @@ export function replayEvents(base: SwarmRun, events: SwarmEvent[], upTo: number)
     run = applyEventPure(run, evt);
   }
   if (upTo >= (sorted[sorted.length - 1]?.at ?? Infinity) && run.status === 'running') {
-    run = { ...run, status: base.status === 'error' ? 'error' : 'done', finishedAt: sorted[sorted.length - 1]?.at ?? base.finishedAt };
+    run = { ...run, status: base.status, finishedAt: sorted[sorted.length - 1]?.at ?? base.finishedAt };
   }
   return run;
 }

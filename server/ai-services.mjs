@@ -1,10 +1,15 @@
 // Orbit AI-motor — abonnement-first orkestrering.
 // Primære motorer: lokale CLI-værktøjer (Codex, Claude Code, Kimi Code, Gemini CLI, Ollama/Qwen).
-// API-baserede tjenester grupperes: 'sub-api' (dækket af abonnement: Meshy, ElevenLabs, HeyGen)
-// og 'paid-api' (betalt pr. brug — kræver eksplicit tilladelse i aiPrefs.allowPaidApis).
+// The historical kind names do not establish billing. Every external connection
+// requires a separately confirmed, included allowance with no extra charges.
 
+import { readProviderSse as readSse, readLines } from './ai-stream.mjs';
+import { hydrateAttachment } from './ai-documents.mjs';
+import { billingPolicy } from './ai-billing.mjs';
+import { agentEvents } from './ai-events.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { spawn, execFile, execFileSync } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, appendFileSync, chmodSync, statSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, chmodSync, statSync } from 'fs';
 import { dirname, join } from 'path';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
@@ -151,7 +156,7 @@ function pickOllamaModel(models, wanted) {
 
 // Må tjenesten bruges nu? Cost-gate: paid-api kræver allowPaidApis.
 export async function serviceAvailability(cfg) {
-  const { providers, prefs } = aiCfg(cfg);
+  const { providers } = aiCfg(cfg);
   const clis = await detectClis(providers);
   const out = {};
   for (const s of AI_SERVICES) {
@@ -186,29 +191,33 @@ export async function serviceAvailability(cfg) {
       available = Boolean(p.apiKey) && p.enabled !== false;
       reason = p.apiKey ? null : 'API-nøgle mangler';
     } else if (s.kind === 'paid-api') {
-      available = Boolean(p.apiKey) && p.enabled !== false && prefs.allowPaidApis;
-      reason = !p.apiKey ? 'API-nøgle mangler' : !prefs.allowPaidApis ? 'Betalt API låst (tillad i indstillinger)' : (p.enabled === false ? 'Deaktiveret' : null);
+      available = Boolean(p.apiKey) && p.enabled !== false;
+      reason = !p.apiKey ? 'API-nøgle mangler' : (p.enabled === false ? 'Deaktiveret' : null);
     } else {
       reason = 'Klar til manuel tilslutning';
     }
+    if (s.id === 'heygen' && available && (!p.avatarId || !p.voiceId)) { available = false; reason = 'Angiv avatar-id og stemme-id fra din HeyGen-konto.'; }
+    const billing = billingPolicy(s, p);
+    if (!billing.allowed) { available = false; reason = billing.reason; }
     out[s.id] = {
+      billing,
+      avatarId: p.avatarId ?? null, voiceId: p.voiceId ?? null,
       id: s.id, name: s.name, kind: s.kind, color: s.color, strengths: s.strengths,
       available, reason, enabled: p.enabled !== false,
       hasKey: Boolean(p.apiKey), keyMask: mask(p.apiKey),
       model: resolvedModel ?? (p.model ?? s.model ?? null),
       models, cmd: p.cmd ?? s.cmd ?? null,
-      subscriptionCovered: s.kind === 'sub-api',
+      subscriptionCovered: billing.mode === 'included' && billing.allowed,
     };
   }
   return out;
 }
 
 export function assertUsable(svc, cfg) {
-  const { providers, prefs } = aiCfg(cfg);
+  const { providers } = aiCfg(cfg);
   const p = providers[svc.id] ?? {};
-  if (svc.kind === 'paid-api' && !prefs.allowPaidApis) {
-    throw new Error(`${svc.name} er betalt pr. brug og låst. Slå 'Tillad betalte API'er' til i AI-indstillinger for at bruge det.`);
-  }
+  const billing = billingPolicy(svc, p);
+  if (!billing.allowed) throw new Error(`${svc.name}: ${billing.reason}`);
   if ((svc.kind === 'sub-api' || svc.kind === 'paid-api') && !p.apiKey) {
     throw new Error(`${svc.name}: API-nøgle mangler. Indtast den i tilslutningspanelet.`);
   }
@@ -220,6 +229,7 @@ export function assertUsable(svc, cfg) {
 function contentToText(msg) {
   let t = msg.text ?? '';
   for (const a of msg.attachments ?? []) {
+    if (a.extractedText) t += `\n\nDokumentindhold fra ${a.name}:\n${a.extractedText}\n`;
     t += `\n\n[Vedhæftet ${a.kind === 'image' ? 'billede' : 'fil'}: ${a.name}${a.path ? ` — tilgængelig på disk: ${a.path}` : ''}]`;
   }
   return t;
@@ -265,22 +275,6 @@ function toGeminiContents(messages) {
 }
 
 // ---- Provider-kald (alle streamer delta via onDelta) -----------------------
-async function readSse(res, onData) {
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop();
-    for (const line of lines) {
-      if (line.startsWith('data: ')) onData(line.slice(6));
-    }
-  }
-}
-
 async function chatOpenAiCompat({ baseUrl, apiKey, model, messages, onDelta, signal }) {
   const r = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST', signal,
@@ -330,16 +324,12 @@ async function chatOllama({ baseUrl, model, messages, onDelta, signal }) {
     body: JSON.stringify({ model, messages: messages.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: contentToText(m) })), stream: true }),
   });
   if (!r.ok) throw new Error(`Ollama fejl ${r.status}`);
-  const reader = r.body.getReader();
-  const dec = new TextDecoder();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    for (const line of dec.decode(value, { stream: true }).split('\n')) {
-      if (!line.trim()) continue;
-      try { const j = JSON.parse(line); if (j.message?.content) onDelta(j.message.content); } catch { /* deltastreng */ }
-    }
-  }
+  await readLines(r, line => {
+    if (!line.trim()) return;
+    const data = JSON.parse(line);
+    if (data.error) throw new Error(String(data.error));
+    if (data.message?.content) onDelta(data.message.content);
+  });
 }
 
 // Npm's Windows-shims kan ikke startes direkte uden en shell. Find shim'ens
@@ -492,130 +482,123 @@ export function cliAccessDirectories(messages, platform = process.platform) {
 
 // CLI: prompt som argument ud fra skabelon; stdout streames linjevis.
 // jsonl: stdout parses som Claude stream-json (én JSON pr. linje) → onEvent i stedet for rå delta.
-async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, jsonl, claude = false, extraArgs = [], signal }) {
+export function parseCliTemplate(template) {
+  const tokens = []; let token = '', quote = null, present = false;
+  for (const char of template) {
+    if (quote) { if (char === quote) quote = null; else token += char; present = true; }
+    else if (char === '"' || char === "'") { quote = char; present = true; }
+    else if (/\s/.test(char)) { if (present) { tokens.push(token); token = ''; present = false; } }
+    else { token += char; present = true; }
+  }
+  if (quote) throw new Error('CLI-skabelonen har et uafsluttet anførselstegn.');
+  if (present) tokens.push(token);
+  return tokens;
+}
+
+export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, onProcess, jsonl, claude = false, extraArgs = [], signal }) {
+  signal?.throwIfAborted();
   const resolvedCmd = await resolveCliCommand(cmd);
   if (!resolvedCmd) throw new Error(`Kunne ikke starte '${cmd}': CLI'en blev ikke fundet`);
-  const tokens = (cliTemplate || '-p {prompt}').split(' ');
-  const parts = [];
-  let promptInserted = false;
+  const tokens = parseCliTemplate(cliTemplate || '-p {prompt}');
+  const parts = []; let promptInserted = false;
   for (const token of tokens) {
-    if (token === '{prompt}') {
-      // Indstillinger og mapper skal stå før prompten; array-elementer bevarer
-      // stier med mellemrum som nøjagtigt ét argument uden shell-evaluering.
-      parts.push(...extraArgs, prompt);
-      promptInserted = true;
-    } else parts.push(token);
+    if (token === '{prompt}') { parts.push(...extraArgs, prompt); promptInserted = true; }
+    else parts.push(token);
   }
   if (!promptInserted) parts.push(...extraArgs);
   const launch = cliSpawnSpec(resolvedCmd, parts);
   return new Promise((resolve, reject) => {
     const env = cliChildEnv({ ...process.env, NO_COLOR: '1' }, { claude });
-    const child = spawn(launch.cmd, launch.args, { cwd: cwd ?? process.cwd(), env });
-    // Prompten ligger allerede i argv. Luk stdin, så Claude ikke venter på input,
-    // og så headless CLI'er aldrig hænger på en åben datakanal.
-    try { child.stdin.end(); } catch { /* processen kan allerede være afsluttet */ }
-    const kill = () => { try { child.kill('SIGTERM'); } catch { /* */ } };
-    signal?.addEventListener('abort', kill);
-    const timer = setTimeout(kill, 15 * 60 * 1000);
-    let out = '';
-    let lineBuf = '';
-    const feed = (chunk) => {
-      if (jsonl) {
-        lineBuf += chunk;
-        const lines = lineBuf.split('\n');
-        lineBuf = lines.pop() ?? '';
-        for (const line of lines) {
-          const t = line.trim();
-          if (!t) continue;
-          try { onEvent?.(JSON.parse(t)); } catch { onDelta?.(`${line}\n`); }
-        }
-        return;
-      }
-      out += chunk;
-      onDelta(chunk);
+    for (const key of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'MOONSHOT_API_KEY']) delete env[key];
+    const child = spawn(launch.cmd, launch.args, { cwd: cwd ?? process.cwd(), env, detached: process.platform !== 'win32' });
+    let terminationTimer, callbackError, stopped = false, out = '', lineBuf = '', bytes = 0;
+    const kill = () => {
+      if (stopped) return;
+      stopped = true;
+      try { if (process.platform === 'win32') execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => {}); else process.kill(-child.pid, 'SIGTERM'); } catch { /* already stopped */ }
+      terminationTimer = setTimeout(() => { try { if (process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL'); else child.kill(); } catch { /* already stopped */ } }, 5000);
+      terminationTimer.unref();
     };
-    child.stdout.on('data', (d) => feed(d.toString()));
-    child.stderr.on('data', (d) => { const s = d.toString(); if (!s.startsWith('∆')) feed(s); });
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', kill);
-      reject(new Error(`Kunne ikke starte '${cmd}': ${e.message}`));
+    const call = fn => { try { fn(); } catch (e) { callbackError ??= e; kill(); } };
+    const line = text => {
+      if (!text.trim()) return;
+      let event;
+      try { event = JSON.parse(text); } catch { out += text + '\n'; return; }
+      // Event-handler failures must not be misclassified as invalid JSON.
+      call(() => onEvent?.(event));
+    };
+    const timer = setTimeout(kill, 60 * 60 * 1000);
+    const clean = () => { clearTimeout(timer); clearTimeout(terminationTimer); signal?.removeEventListener('abort', kill); };
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+    child.stdout.on('data', chunk => {
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > 20 * 1024 * 1024) { callbackError ??= new Error('Agentens output overskred 20 MB. Del opgaven i mindre jobs.'); kill(); return; }
+      if (jsonl) {
+        lineBuf += chunk; const lines = lineBuf.split('\n'); lineBuf = lines.pop() ?? '';
+        for (const value of lines) line(value);
+      } else { out += chunk; call(() => onDelta?.(chunk)); }
     });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', kill);
-      if (signal?.aborted) reject(new Error('Afbrudt'));
+    child.stderr.on('data', chunk => { out = (out + chunk).slice(-20000); });
+    child.on('error', e => { clean(); reject(new Error(`Kunne ikke starte '${cmd}': ${e.message}`)); });
+    child.on('close', code => {
+      if (jsonl && lineBuf.trim()) line(lineBuf);
+      if (child.pid) call(() => onProcess?.({ pid: child.pid, finished: true }));
+      clean();
+      if (callbackError) reject(callbackError);
+      else if (signal?.aborted) reject(new Error('Afbrudt'));
+      else if (stopped) reject(new Error('Jobbet nåede tidsgrænsen på 60 minutter.'));
       else if (code === 0) resolve(out);
-      else {
-        const detail = out.trim().slice(-1200);
-        reject(new Error(`'${cmd}' afsluttede med kode ${code}${detail ? `: ${detail}` : ' uden output'}`));
-      }
+      else reject(new Error(`'${cmd}' afsluttede med kode ${code}${out.trim() ? `: ${out.trim().slice(-1200)}` : ' uden output'}`));
     });
+    signal?.addEventListener('abort', kill);
+    if (signal?.aborted) kill();
+    if (child.pid) call(() => onProcess?.({ pid: child.pid, startedAt: Date.now(), finished: false }));
+    try { child.stdin.end(); } catch { /* process may have exited */ }
   });
-}
-
-// Claude Code stream-json → tekst-delta + Task-underagent-hændelser.
-// Gør det muligt at vise Claude's egne subagenter som separate underlinjer i sværmen.
-function watchClaudeStreamJson({ onText, onSubagent }) {
-  const byTool = new Map(); // tool_use_id → subagent
-  return (ev) => {
-    if (!ev || typeof ev !== 'object') return;
-    if (ev.type === 'assistant' && Array.isArray(ev.message?.content)) {
-      for (const b of ev.message.content) {
-        if (b.type === 'text' && b.text) onText?.(b.text);
-        else if (b.type === 'tool_use' && b.name === 'Task') {
-          const desc = String(b.input?.description ?? b.input?.prompt ?? 'Underagent').slice(0, 180);
-          byTool.set(b.id, { subId: b.id });
-          onSubagent?.({ phase: 'start', subId: b.id, name: desc });
-        }
-      }
-    } else if (ev.type === 'user' && Array.isArray(ev.message?.content)) {
-      for (const b of ev.message.content) {
-        if (b.type === 'tool_result' && byTool.has(b.tool_use_id)) {
-          const txt = typeof b.content === 'string'
-            ? b.content
-            : Array.isArray(b.content) ? b.content.map((c) => c?.text ?? '').join('') : '';
-          onSubagent?.({ phase: 'done', subId: b.tool_use_id, text: String(txt).slice(0, 600) });
-          byTool.delete(b.tool_use_id);
-        }
-      }
-    }
-  };
 }
 
 // Samlet chat-dispatcher. Returnerer samlet tekst.
 // onSubagent: kun for CLI'er der streamer strukturerede events (Claude stream-json).
-export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubagent, signal, cwd, readOnly = false }) {
+export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubagent, onProcess, onAction, signal, cwd, readOnly = false }) {
+  messages = (messages ?? []).map(m => ({ ...m, attachments: m.attachments?.map(a => hydrateAttachment(a, dirs)) }));
+  if (readOnly) messages = [{ role: 'system', text: 'Denne tur er kun til læsning og rådgivning. Du må læse relevant materiale, men ikke ændre filer, installere noget, sende beskeder eller udføre andre eksterne ændringer. Returnér dit resultat til samtalen.' }, ...messages];
   const svc = serviceById(serviceId);
   if (!svc) throw new Error(`Ukendt tjeneste: ${serviceId}`);
   assertUsable(svc, cfg);
+  if (['meshy', 'elevenlabs', 'heygen'].includes(serviceId)) throw new Error('Denne tjeneste producerer medier. Vælg Auto og beskriv den ønskede leverance.');
   const { providers } = aiCfg(cfg);
   const p = providers[serviceId] ?? {};
   let acc = '';
   const delta = (d) => { acc += d; onDelta?.(d, acc); };
   if (svc.kind === 'cli') {
-    const prompt = messages.map(contentToText).join('\n\n---\n\n');
+    let prompt = messages.map(contentToText).join('\n\n---\n\n');
+    if (prompt.length > 6000) {
+      const contextDir = join(dirs.runs ?? dirs.uploads ?? dirs.cwd, 'contexts');
+      mkdirSync(contextDir, { recursive: true });
+      const contextPath = join(contextDir, `${randomUUID()}.txt`);
+      writeFileSync(contextPath, prompt, { mode: 0o600 });
+      prompt = `Læs hele opgaven og alle gældende instruktioner i UTF-8-filen ${contextPath}. Filen indeholder den fulde samtale og projektkontekst. Følg opgavens fase og afgrænsning. Udfør ikke arbejde før du har læst filen.`;
+    }
     const template = p.cliTemplate ?? svc.cliTemplate;
     const useDefaultTemplate = template === svc.cliTemplate;
     // Claude køres med stream-json så Task-underagenter kan spores som egne linjer.
     // Brugerdefinerede skabeloner respekteres uden ekstra permissions eller mapper.
-    const useJson = serviceId === 'claude' && useDefaultTemplate;
+    const useJson = ['claude', 'codex'].includes(serviceId) && useDefaultTemplate;
     const accessDirs = useDefaultTemplate && (serviceId === 'codex' || serviceId === 'claude')
-      ? cliAccessDirectories(messages) : [];
+      ? cliAccessDirectories(cwd ? messages.map(m => ({ attachments: m.attachments })) : messages) : [];
     const extraArgs = [];
     if (serviceId === 'codex' && useDefaultTemplate) {
-      // Orbit bruger ikke Codex' valgfrie app-/connector-integration. Slå den
-      // fra pr. kørsel, så dens eksterne MCP-opstart ikke forstyrrer lokale jobs.
-      extraArgs.push('--disable', 'apps');
+      // Preserve user-configured MCP/app integrations in the coding agent.
       // Orkestratorens planfase må læse projektet, men aldrig udføre ændringer.
       extraArgs.push('--sandbox', readOnly ? 'read-only' : 'workspace-write');
       for (const dir of accessDirs) extraArgs.push('--add-dir', dir);
     } else if (serviceId === 'claude' && useDefaultTemplate) {
       // Print-mode er ikke-interaktiv. Planfasen er læse-only; job må skrive.
-      extraArgs.push('--permission-mode', readOnly ? 'plan' : 'bypassPermissions');
+      extraArgs.push('--permission-mode', readOnly ? 'plan' : 'acceptEdits');
       if (accessDirs.length) extraArgs.push('--add-dir', ...accessDirs);
     }
-    if (useJson) extraArgs.push('--output-format', 'stream-json', '--verbose');
+    if (useJson && serviceId === 'claude') extraArgs.push('--output-format', 'stream-json', '--verbose');
+    if (useJson && serviceId === 'codex') extraArgs.push('--json');
     await chatCli({
       cmd: p.cmd ?? svc.cmd,
       cliTemplate: template,
@@ -625,7 +608,8 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
       jsonl: useJson,
       claude: serviceId === 'claude',
       onDelta: delta,
-      onEvent: useJson ? watchClaudeStreamJson({ onText: delta, onSubagent }) : undefined,
+      onProcess,
+      onEvent: useJson ? agentEvents(serviceId, { onText: delta, onSubagent, onAction }) : undefined,
       signal,
     });
   } else if (svc.kind === 'local') {
@@ -641,15 +625,17 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
   return acc;
 }
 
+function requestSignal(signal) { return signal ? AbortSignal.any([signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000); }
+
 // ---- Medie-produktion (sub-api) ---------------------------------------------
-async function elevenTts({ text, cfg, dirs }) {
+async function elevenTts({ text, cfg, dirs, signal }) {
   const { providers } = aiCfg(cfg);
   const p = providers.elevenlabs ?? {};
-  const voice = p.model ?? '21m00Tcm4TlvDq8ikWAM';
+  const voice = p.voiceId ?? p.model ?? '21m00Tcm4TlvDq8ikWAM';
   const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}?output_format=mp3_44100_128`, {
-    method: 'POST',
+    method: 'POST', signal: requestSignal(signal),
     headers: { 'Content-Type': 'application/json', 'xi-api-key': p.apiKey },
-    body: JSON.stringify({ text: text.slice(0, 4500), model_id: 'eleven_multilingual_v2' }),
+    body: JSON.stringify({ text, model_id: 'eleven_multilingual_v2' }),
   });
   if (!r.ok) throw new Error(`ElevenLabs fejl ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const buf = Buffer.from(await r.arrayBuffer());
@@ -657,47 +643,78 @@ async function elevenTts({ text, cfg, dirs }) {
   return saveArtifact(buf, name, dirs);
 }
 
-async function meshyTextTo3d({ prompt, cfg, dirs, onStatus }) {
+async function meshyTextTo3d({ prompt, cfg, dirs, onStatus, signal, existingId, onSubmitted }) {
   const { providers } = aiCfg(cfg);
   const p = providers.meshy ?? {};
+  let result = existingId;
+  if (!result) {
   const r = await fetch('https://api.meshy.ai/v1/text-to-3d', {
-    method: 'POST',
+    method: 'POST', signal: requestSignal(signal),
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${p.apiKey}` },
     body: JSON.stringify({ mode: 'preview', prompt, art_style: 'realistic' }),
   });
   if (!r.ok) throw new Error(`Meshy fejl ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  const { result } = await r.json();
+  ({ result } = await r.json());
+  if (!result) throw new Error('Meshy returnerede ikke et job-id.');
+  onSubmitted(result);
+  }
   for (let i = 0; i < 60; i++) {
-    await new Promise((r2) => setTimeout(r2, 5000));
-    const st = await (await fetch(`https://api.meshy.ai/v1/text-to-3d/${result}`, { headers: { Authorization: `Bearer ${p.apiKey}` } })).json();
+    if (i > 0) await delay(5000, undefined, { signal });
+    const st = await (await fetch(`https://api.meshy.ai/v1/text-to-3d/${result}`, { signal: requestSignal(signal), headers: { Authorization: `Bearer ${p.apiKey}` } })).json();
     onStatus?.(`Meshy: ${st.status}`);
     if (st.status === 'SUCCEEDED') {
-      const glb = await (await fetch(st.model_urls.glb)).arrayBuffer();
-      return saveArtifact(Buffer.from(glb), ` model-${Date.now()}.glb`, dirs);
+      const glb = await downloadMedia(st.model_urls.glb, signal);
+      if (glb.subarray(0, 4).toString() !== 'glTF') throw new Error('Meshy returnerede ikke en gyldig GLB-fil.');
+      return saveArtifact(glb, ` model-${Date.now()}.glb`, dirs);
     }
     if (st.status === 'FAILED') throw new Error('Meshy 3D-generering slog fejl');
   }
   throw new Error('Meshy: timeout efter 5 minutter');
 }
 
-async function heygenAvatar({ text, cfg, dirs, onStatus }) {
+async function heygenAvatar({ text, cfg, dirs, onStatus, signal, existingId, onSubmitted }) {
   const { providers } = aiCfg(cfg);
   const p = providers.heygen ?? {};
+  if (!p.avatarId || !p.voiceId) throw new Error('HeyGen kræver et valgt avatar-id og stemme-id fra din konto.');
+  let videoId = existingId;
+  if (!videoId) {
   const r = await fetch('https://api.heygen.com/v2/video/generate', {
-    method: 'POST',
+    method: 'POST', signal: requestSignal(signal),
     headers: { 'Content-Type': 'application/json', 'X-Api-Key': p.apiKey },
-    body: JSON.stringify({ video_inputs: [{ character: { type: 'avatar', avatar_id: p.avatarId ?? 'Kristin_public_3_20240108' }, voice: { type: 'text', input_text: text.slice(0, 1800), voice_id: p.voiceId ?? '2d5b0e6cf36f460aa60fa5876e7c0bc6' } }] }),
+    body: JSON.stringify({ video_inputs: [{ character: { type: 'avatar', avatar_id: p.avatarId }, voice: { type: 'text', input_text: text, voice_id: p.voiceId } }] }),
   });
   if (!r.ok) throw new Error(`HeyGen fejl ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const { data } = await r.json();
+  videoId = data?.video_id;
+  if (!videoId) throw new Error('HeyGen returnerede ikke et job-id.');
+  onSubmitted(videoId);
+  }
   for (let i = 0; i < 60; i++) {
-    await new Promise((r2) => setTimeout(r2, 6000));
-    const st = await (await fetch(`https://api.heygen.com/v1/video_status.get?video_id=${data.video_id}`, { headers: { 'X-Api-Key': p.apiKey } })).json();
+    if (i > 0) await delay(6000, undefined, { signal });
+    const st = await (await fetch(`https://api.heygen.com/v1/video_status.get?video_id=${videoId}`, { signal: requestSignal(signal), headers: { 'X-Api-Key': p.apiKey } })).json();
     onStatus?.(`HeyGen: ${st.data?.status}`);
-    if (st.data?.status === 'completed') return { kind: 'link', name: 'heygen-video.mp4', url: st.data.video_url, mime: 'video/mp4' };
+    if (st.data?.status === 'completed') {
+      const video = await downloadMedia(st.data.video_url, signal);
+      if (video.subarray(4, 8).toString() !== 'ftyp') throw new Error('HeyGen returnerede ikke en gyldig MP4-fil.');
+      return saveArtifact(video, ` video-${Date.now()}.mp4`, dirs);
+    }
     if (st.data?.status === 'failed') throw new Error('HeyGen-video slog fejl');
   }
   throw new Error('HeyGen: timeout efter 6 minutter');
+}
+
+async function downloadMedia(url, signal) {
+  if (new URL(url).protocol !== 'https:') throw new Error('Mediefilen skal hentes via HTTPS.');
+  const response = await fetch(url, { signal: requestSignal(signal) });
+  if (!response.ok || !response.body) throw new Error(`Mediefilen kunne ikke hentes (${response.status}).`);
+  const chunks = []; let size = 0;
+  for await (const chunk of response.body) {
+    size += chunk.length;
+    if (size > 256 * 1024 * 1024) throw new Error('Mediefilen er over 256 MB. Hent den hos leverandøren.');
+    chunks.push(Buffer.from(chunk));
+  }
+  if (!size) throw new Error('Leverandøren returnerede en tom fil.');
+  return Buffer.concat(chunks);
 }
 
 function saveArtifact(buf, name, dirs) {
@@ -715,14 +732,31 @@ function guessMime(n) {
   if (/\.mp4$/i.test(n)) return 'video/mp4';
   return 'application/octet-stream';
 }
-export async function produceMedia(job, text, cfg, dirs, emit) {
-  const p = (job.description + ' ' + text).toLowerCase();
+export async function produceMedia(job, text, cfg, dirs, emit, signal) {
+  assertUsable(serviceById(job.serviceId), cfg);
+  signal?.throwIfAborted();
+  const media = { ...(job.media ?? {}) };
+  const checkpoint = patch => {
+    Object.assign(media, patch);
+    emit({ type: 'job_media', jobId: job.id, media: { ...media } });
+  };
+  if (media.state === 'completed' && media.artifacts?.length) return media.artifacts;
+  if (media.state === 'submitting' && !media.remoteId) throw new Error('En tidligere mediebestilling kan være modtaget af leverandøren, men kvitteringen mangler. Kontrollér leverandørens historik før en ny bestilling. Orbit genbestiller ikke automatisk.');
+  if (!media.remoteId) checkpoint({ state: 'submitting', serviceId: job.serviceId, submittedAt: Date.now() });
+  const options = {
+    cfg, dirs, signal, existingId: media.remoteId,
+    onSubmitted: remoteId => checkpoint({ state: 'processing', remoteId }),
+    onStatus: status => emit({ type: 'job_status', jobId: job.id, status }),
+  };
   try {
-    if (job.serviceId === 'elevenlabs') return [await elevenTts({ text: text || job.description, cfg, dirs })];
-    if (job.serviceId === 'meshy') return [await meshyTextTo3d({ prompt: job.description || text.slice(0, 500), cfg, dirs, onStatus: (s) => emit({ type: 'job_status', jobId: job.id, status: s }) })];
-    if (job.serviceId === 'heygen') return [await heygenAvatar({ text: text || job.description, cfg, dirs, onStatus: (s) => emit({ type: 'job_status', jobId: job.id, status: s }) })];
+    let artifact;
+    if (job.serviceId === 'elevenlabs') artifact = await elevenTts({ text: text || job.description, ...options });
+    else if (job.serviceId === 'meshy') artifact = await meshyTextTo3d({ prompt: job.description || text, ...options });
+    else if (job.serviceId === 'heygen') artifact = await heygenAvatar({ text: text || job.description, ...options });
+    else throw new Error('Ukendt medietjeneste.');
+    checkpoint({ state: 'completed', artifacts: [artifact] });
+    return [artifact];
   } catch (e) {
-    emit({ type: 'job_note', jobId: job.id, note: `Medieproduktion: ${e.message}` });
+    throw new Error(`Medieproduktion fejlede: ${e.message}`);
   }
-  return [];
 }

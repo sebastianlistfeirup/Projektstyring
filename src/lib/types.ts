@@ -65,6 +65,9 @@ export interface Task {
     adopsId?: number;
     gitProvider?: 'github' | 'gitlab';
     gitIssue?: number;
+    gitOwner?: string;
+    gitRepo?: string;
+    gitUrl?: string;
     jiraKey?: string;
     trelloId?: string;
     plannerId?: string;
@@ -246,6 +249,11 @@ export interface Sprint {
 }
 
 export interface Project {
+  releaseGoal?: string;
+  scopeTaskIds?: string[];
+  scopeCapturedAt?: string;
+  repositoryPath?: string;
+  verificationChecks?: { name: string; command: string; args: string[] }[];
   id: string;
   name: string;
   key: string; // fx "APP"
@@ -324,6 +332,9 @@ export interface AiJob {
 /* ---------- AI-chat (ChatGPT-lignende, drevet af companion) ---------- */
 
 export interface AiAttachment {
+  id?: string;
+  extractedText?: string | null;
+  extractionError?: string | null;
   kind: 'image' | 'file';
   name: string;
   mime: string;
@@ -336,6 +347,8 @@ export interface AiAttachment {
 export type AiMessageStatus = 'streaming' | 'done' | 'error';
 
 export interface AiMessage {
+  runId?: string;
+  runFinishedAt?: number;
   id: string;
   role: 'user' | 'assistant' | 'system';
   text: string;

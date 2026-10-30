@@ -5,10 +5,15 @@ import { useStore } from '../store/useStore';
 import type { SyncSnapshotPayload } from './companion';
 import { syncPull, syncPush, getSyncToken, companionBase } from './companion';
 import type { ActivityEntry, Label, Project, Sprint, Task, User } from './types';
+import { localFields, mergeWorkspaceExtras } from './workspaceSync';
 
 const CLIENT_KEY = 'orbit-client-id';
 const SYNC_URL_KEY = 'orbit-sync-url';
 const POLL_KEY = 'orbit-sync-poll';
+const VERSION_KEY = 'orbit-workspace-versions';
+let fieldVersions: Record<string, string> = {};
+try { fieldVersions = JSON.parse(localStorage.getItem(VERSION_KEY) ?? '{}'); } catch { /* old browser data */ }
+function saveVersions() { localStorage.setItem(VERSION_KEY, JSON.stringify(fieldVersions)); }
 
 export function getClientId(): string {
   let id = localStorage.getItem(CLIENT_KEY);
@@ -35,9 +40,12 @@ export function setSyncEnabled(on: boolean) {
   localStorage.setItem(POLL_KEY, on ? 'on' : 'off');
 }
 
-function snapshotFromStore(): SyncSnapshotPayload {
+export function snapshotFromStore(): SyncSnapshotPayload {
   const s = useStore.getState();
   return {
+    schemaVersion: 2,
+    workspaceVersions: { ...fieldVersions },
+    workspaceState: Object.fromEntries(Object.entries(s).filter(([, value]) => typeof value !== 'function')),
     tasks: s.tasks,
     projects: s.projects,
     sprints: s.sprints,
@@ -81,7 +89,9 @@ function mergeSnapshot(remote: SyncSnapshotPayload, excludeIds?: Set<string>) {
   const activity = [...s.activity, ...(remote.activity as ActivityEntry[]).filter((a) => !activityIds.has(a.id))]
     .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
     .slice(0, 300);
-  useStore.setState({ tasks, projects, sprints, users, labels, activity });
+  const extra = mergeWorkspaceExtras(s as unknown as Record<string, unknown>, remote.workspaceState ?? {}, fieldVersions, remote.workspaceVersions ?? {});
+  fieldVersions = extra.versions; saveVersions();
+  useStore.setState({ ...extra.patch, tasks, projects, sprints, users, labels, activity });
   applying = false;
 }
 
@@ -110,23 +120,42 @@ export async function pullAndMerge(): Promise<boolean> {
   return true;
 }
 
-// Bruges ved gendannelse fra backup: fletter et vilkårligt snapshot ind lokalt
+// Restore is replacement, not conflict merging. Only known data fields may be
+// restored; actions and methods always remain the current application version.
 export function applySnapshot(snapshot: SyncSnapshotPayload): void {
-  mergeSnapshot(snapshot);
-  lastSyncedAt = snapshot.updatedAt ?? '';
+  const current = useStore.getState();
+  const data = snapshot.schemaVersion === 2 && snapshot.workspaceState
+    ? snapshot.workspaceState
+    : { tasks: snapshot.tasks, projects: snapshot.projects, sprints: snapshot.sprints, users: snapshot.users, labels: snapshot.labels, activity: snapshot.activity };
+  for (const key of ['tasks', 'projects', 'sprints', 'users', 'labels', 'activity']) {
+    if (!Array.isArray(data[key])) throw new Error(`Backup mangler ${key}.`);
+  }
+  const restored = Object.fromEntries(Object.entries(data).filter(([key]) => Object.hasOwn(current, key) && typeof current[key as keyof typeof current] !== 'function'));
+  applying = true;
+  try {
+    useStore.setState({ ...restored, selectedTaskId: null, syncConflicts: [] });
+    fieldVersions = Object.fromEntries(Object.keys(restored).map(key => [key, new Date().toISOString()]));
+    saveVersions();
+    lastSyncedAt = '';
+  } finally { applying = false; }
+  void pushNow();
 }
 
 export async function pushNow(): Promise<boolean> {
   const s = useStore.getState();
   const me = s.users.find((u) => u.id === s.currentUserId);
   const r = await syncPush(getClientId(), { id: s.currentUserId, name: me?.name ?? 'Ukendt' }, snapshotFromStore());
-  if (r.ok && r.updatedAt) lastSyncedAt = r.updatedAt;
+  if (r.ok && r.updatedAt) {
+    if (r.merged) { lastSyncedAt = ''; await pullAndMerge(); }
+    else lastSyncedAt = r.updatedAt;
+  }
   return r.ok;
 }
 
 function schedulePush() {
-  if (pushTimer) window.clearTimeout(pushTimer);
+  if (pushTimer) return;
   pushTimer = window.setTimeout(() => {
+    pushTimer = null;
     void pushNow();
   }, 1500);
 }
@@ -168,7 +197,11 @@ export function startSync(): () => void {
 
   const unsubscribe = useStore.subscribe((state, prev) => {
     if (applying || !isSyncEnabled()) return;
-    if (state.tasks !== prev.tasks || state.projects !== prev.projects || state.sprints !== prev.sprints || state.users !== prev.users) {
+    const changed = Object.keys(state).filter(key => !localFields.has(key) && typeof state[key as keyof typeof state] !== 'function' && state[key as keyof typeof state] !== prev[key as keyof typeof prev]);
+    if (changed.length) {
+      const now = new Date().toISOString();
+      for (const key of changed) fieldVersions[key] = now;
+      saveVersions();
       schedulePush();
     }
   });
