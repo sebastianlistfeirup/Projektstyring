@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { cliSpawnSpec } from './ai-services.mjs';
 import { promisify } from 'node:util';
 import { realpathSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 const exec = promisify(execFile);
 const git = async (cwd, args) => (await exec('git', args, { cwd, timeout: 30000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
 
@@ -38,7 +39,7 @@ export async function verifyRepository(cwd, checks, signal) {
     const startedAt = Date.now();
     try {
       let command = check.command;
-      if (process.platform === 'win32') {
+      if (process.platform === 'win32' && !isAbsolute(command)) {
         const found = await exec('where', [command], { timeout: 5000 });
         command = found.stdout.trim().split(/\r?\n/)[0];
       }

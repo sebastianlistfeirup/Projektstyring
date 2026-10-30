@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { registerAiRoutes } from '../server/ai-engine.mjs';
 import { localAiAccess } from '../server/local-access.mjs';
+import { activeRuns } from '../server/ai-runtime.mjs';
 
 test('HTTP approval, validation, browser disconnect and persisted results', async t => {
   const root = mkdtempSync(join(tmpdir(), 'orbit-http-'));
@@ -14,7 +15,10 @@ test('HTTP approval, validation, browser disconnect and persisted results', asyn
   const app = express(); app.use(express.json()); app.use('/api/ai', localAiAccess);
   registerAiRoutes(app, { loadConfig: () => cfg, saveConfig: c => { cfg = c; }, APP_DIR: root });
   const server = app.listen(0, '127.0.0.1'); await new Promise(r => server.once('listening', r));
-  t.after(() => server.close());
+  t.after(() => {
+    for (const handle of activeRuns.values()) { handle.cancelled = true; handle.abort.abort(); handle.resolveApproval?.([]); }
+    server.closeAllConnections(); server.close();
+  });
   const base = `http://127.0.0.1:${server.address().port}`;
   const nativeFetch = globalThis.fetch;
   globalThis.fetch = (url, options) => String(url).startsWith(base) ? nativeFetch(url, options) : Promise.reject(new Error('External network disabled'));
@@ -23,11 +27,13 @@ test('HTTP approval, validation, browser disconnect and persisted results', asyn
   const plan = [{ id: 'a', title: 'One', serviceId: 'codex', description: 'Execute', dependsOn: [], phase: 'test' }];
   const response = await post('/api/ai/orchestrate', { goal: 'HTTP test', bible: 'Persistent bible', pauseAfterPlan: true, jobs: plan });
   const textPromise = response.text();
+  // Attach rejection handling immediately so assertion failures can safely close SSE.
+  void textPromise.catch(() => {});
   let run;
-  for (let i = 0; i < 100; i++) {
+  for (const deadline = Date.now() + 20000; Date.now() < deadline;) {
     run = (await (await fetch(`${base}/api/ai/swarm`)).json()).run;
     if (run?.status === 'awaiting_approval') break;
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise(r => setTimeout(r, 50));
   }
   assert.equal(run.status, 'awaiting_approval');
   const id = run.runId;
@@ -44,10 +50,10 @@ test('HTTP approval, validation, browser disconnect and persisted results', asyn
   const ac = new AbortController();
   const stream = await fetch(`${base}/api/ai/orchestrate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal: 'Detached', jobs: plan }), signal: ac.signal });
   assert.equal(stream.status, 200); ac.abort();
-  for (let i = 0; i < 100; i++) {
+  for (const deadline = Date.now() + 20000; Date.now() < deadline;) {
     run = (await (await fetch(`${base}/api/ai/swarm`)).json()).run;
     if (run?.goal === 'Detached' && run.status === 'done') break;
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise(r => setTimeout(r, 50));
   }
   assert.equal(run.goal, 'Detached'); assert.equal(run.status, 'done');
 });
