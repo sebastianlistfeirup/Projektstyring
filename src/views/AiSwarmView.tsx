@@ -1149,7 +1149,7 @@ export function AiSwarmView() {
       if (request !== historyRequest.current) return;
       setReplay(null);
       setArchived(presentRun(data.run));
-      setArchivedEvents((data.run.events ?? []).filter((event: SwarmEvent) => timestamp(event.at)).sort((a: SwarmEvent, b: SwarmEvent) => a.at - b.at));
+      setArchivedEvents((data.run.eventsTruncated ? [] : data.run.events ?? []).filter((event: SwarmEvent) => timestamp(event.at)).sort((a: SwarmEvent, b: SwarmEvent) => a.at - b.at));
     } catch { if (request === historyRequest.current) showToast('Historikken kunne ikke hentes. Kontrollér forbindelsen.'); }
   };
 
@@ -1198,6 +1198,7 @@ export function AiSwarmView() {
         )}
       </div>
 
+      {shown?.eventsJournal && <div className="text-xs opacity-65 flex flex-wrap gap-2"><a className="underline" href={`${BASE_URL}/api/ai/runs/${encodeURIComponent(shown.runId)}/events`} target="_blank" rel="noreferrer">Hent fuld aktivitetslog · {shown.eventCount ?? '—'} hændelser</a>{shown.eventsTruncated && <span>Loggen kan ikke indlæses komplet til genafspilning. Brug den fulde aktivitetslog.</span>}</div>}
       <RunQueuePanel />
 
       {/* pulserende banner når en plan afventer godkendelse */}

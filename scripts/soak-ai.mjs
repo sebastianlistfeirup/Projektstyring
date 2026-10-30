@@ -1,8 +1,9 @@
 // Offline endurance check for the old ten-minute auto-approval bug.
 // Example: ORBIT_SOAK_MINUTES=12 node scripts/soak-ai.mjs
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { executeRun, activeRuns } from '../server/ai-runtime.mjs';
@@ -19,6 +20,7 @@ globalThis.fetch = async () => { throw new Error('Offline endurance test'); };
 const fake = join(root, 'fake.mjs'); writeFileSync(fake, "console.log('Approved only after explicit decision');");
 const cfg = { aiProviders: { codex: { cmd: process.execPath, cliTemplate: `"${fake}" {prompt}`, billingMode: 'included', noExtraCharges: true } }, aiPrefs: { autoJudge: false, selfHeal: false } };
 const jobs = [{ id: 'job-0', title: 'Explicit approval', serviceId: 'codex', phase: 'test', dependsOn: [], description: 'Execute only after approval' }];
+const sourceHashes = Object.fromEntries(['ai-runtime.mjs', 'ai-state.mjs', 'ai-services.mjs'].map(name => [name, createHash('sha256').update(readFileSync(new URL(`../server/${name}`, import.meta.url))).digest('hex')]));
 const started = Date.now();
 let ready;
 const waiting = new Promise(resolve => { ready = resolve; });
@@ -41,7 +43,7 @@ try {
   activeRuns.get('soak').resolveApproval(jobs);
   await running;
   assert.equal(readRun(dirs, 'soak').status, 'done');
-  const report = { ok: true, startedAt: new Date(started).toISOString(), durationMs: Date.now() - started, samples, root, finalStatus: 'done' };
+  const report = { ok: true, scenario: 'approval waits for an explicit decision', sourceHashes, startedAt: new Date(started).toISOString(), durationMs: Date.now() - started, samples, root, finalStatus: 'done' };
   writeFileSync(join(root, 'report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
 } catch (error) {

@@ -50,6 +50,11 @@ test('HTTP approval, validation, browser disconnect and persisted results', asyn
   assert.deepEqual(saved.instructions, ['Keep compatibility']);
   assert.equal(saved.attachments[0].name, 'clarification.txt');
   assert.equal(saved.processes.length, 0);
+  const live = (await (await fetch(`${base}/api/ai/swarm?view=live`)).json()).run;
+  assert.equal(live.bible, undefined); assert.equal(live.runId, saved.runId);
+  assert.equal(saved.bible, 'Persistent bible');
+  const activityLog = await (await fetch(`${base}/api/ai/runs/${id}/events`)).text();
+  assert.ok(activityLog.split('\n').filter(Boolean).map(line => JSON.parse(line)).some(event => event.type === 'run_finished'));
   const forbidden = await post('/api/ai/orchestrate', { goal: 'must not run' }, { Origin: 'https://untrusted.example' });
   assert.equal(forbidden.status, 403);
   // Disconnect after headers. The next run still finishes and is recoverable by GET.

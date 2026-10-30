@@ -176,6 +176,7 @@ test('bounded verification repair uses actual failing output and repeats the sam
     assert.equal(run.verificationHistory[1].status, succeeds ? 'passed' : 'failed');
     assert.deepEqual(run.verificationHistory[1].checks[0].args, checks[0].args);
     assert.ok(run.events.some(event => event.type === 'job_added'));
+    assert.equal(run.events.find(event => event.type === 'plan').jobs.length, 1);
     assert.equal(readFileSync(join(source, 'game.txt'), 'utf8'), 'original');
   }
 });

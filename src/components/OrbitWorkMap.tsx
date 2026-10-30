@@ -61,7 +61,7 @@ export default function OrbitWorkMap({ run, services, connected, historical = fa
               <p className="text-xs opacity-65 mt-2 line-clamp-2 min-h-8">{waitingReason(job, run)}</p>
               <div className="mt-3 flex flex-wrap gap-2 text-[10px] opacity-65">
                 {job.dependsOn.length > 0 && <span className={related.has(index) ? 'text-indigo-600 dark:text-indigo-300' : ''}>Efter {job.dependsOn.map(i => String(i + 1).padStart(2, '0')).join(', ')}</span>}
-                {!!job.actions?.length && <span>{job.actions.length} værktøjshændelser</span>}
+                {!!job.actions?.length && <span>{job.actions.length} seneste hændelser</span>}
                 {!!job.subagents?.length && <span>{job.subagents.length} underagenter</span>}
               </div>
             </button>)}
@@ -78,7 +78,7 @@ export default function OrbitWorkMap({ run, services, connected, historical = fa
           {!!selected.contextDocuments?.length && <details className="text-xs"><summary className="cursor-pointer opacity-70">Filer indsat som kontekst</summary><ul className="mt-2 space-y-2">{selected.contextDocuments.map((doc, i) => <li key={i}><p className="font-mono break-all">{doc.path}</p><p className="opacity-60">{doc.status === 'included' ? `Hele filen · ${doc.bytes} bytes` : doc.reason}</p></li>)}</ul></details>}
           {!!selected.subagents?.length && <div><h4 className="text-xs font-semibold flex items-center gap-1.5"><Bot size={14} />Underagenter</h4><ul className="mt-2 border-l border-indigo-400/30 pl-3 space-y-2">{selected.subagents.map(agent => <li key={agent.subId} className="text-xs"><p className="font-medium">{agent.name} · {runLabels[agent.status]}</p><p className="opacity-55">{clock(agent.startedAt)}{agent.finishedAt ? ` → ${clock(agent.finishedAt)}` : ''}</p>{agent.text && <p className="mt-1 opacity-70 whitespace-pre-wrap">{agent.text}</p>}</li>)}</ul></div>}
           <JobReview job={selected} services={services} />
-          {selected.text && <details className="text-sm"><summary className="cursor-pointer flex items-center gap-2 text-xs font-semibold"><FileText size={14} />Leverance fra opgaven</summary><div className="mt-3 max-h-96 overflow-auto"><ChatMarkdown text={selected.text} /></div></details>}
+          {selected.text && <details className="text-sm"><summary className="cursor-pointer flex items-center gap-2 text-xs font-semibold"><FileText size={14} />Leverance fra opgaven</summary><div className="mt-3 max-h-96 overflow-auto"><ChatMarkdown text={selected.text} />{selected.textTruncated && <a className="text-xs text-indigo-500 underline" href={`http://127.0.0.1:4310/api/ai/runs/${encodeURIComponent(run.runId)}/export`} target="_blank" rel="noreferrer">Uddrag — hent hele leverancen</a>}</div></details>}
           {!!selected.artifacts.length && <ul className="text-xs space-y-1">{selected.artifacts.map((artifact, i) => <li key={i}>{artifact.url && /^(https?:|\/)/.test(artifact.url) ? <a className="underline text-indigo-600 dark:text-indigo-300" href={artifact.url} target="_blank" rel="noreferrer">{artifact.name}</a> : artifact.name}</li>)}</ul>}
         </div>
         <div className="min-w-0">

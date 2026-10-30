@@ -2,7 +2,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'node:util';
 import { createRunWorktree, verifyRepository, repositoryEvidence } from './ai-repository.mjs';
-import { validatePlan, executeGraph, runOutcome, saveRun } from './ai-state.mjs';
+import { validatePlan, executeGraph, runOutcome, saveRun, appendRunEvent, saveRunHeartbeat } from './ai-state.mjs';
 import { validateProjectPlan, PROJECT_PLAN_FORMAT } from './project-plan.mjs';
 import { serviceCapabilities } from './ai-capabilities.mjs';
 import { loadJobContext } from './ai-job-context.mjs';
@@ -419,6 +419,7 @@ function updateSwarm(run, obj) {
       if (j) {
         j.status = 'done';
         j.text = String(r.text ?? '').slice(0, 2000);
+        j.textTruncated = String(r.text ?? '').length > 2000;
         j.artifacts = r.artifacts ?? [];
         j.finishedAt = Date.now();
       }
@@ -513,6 +514,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     attachments: [...attachments],
     mode,
     startedAt: Date.now(),
+    heartbeatAt: Date.now(),
     orchestratorId: null,
     status: 'running',
     jobs: [],
@@ -526,20 +528,23 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
   const handle = { run, instructions: run.instructions, skip: new Set(), runDir: run.workDir, cancelled: false, abort: new AbortController() };
   activeRuns.set(runId, handle);
   swarmState.active = run;
-  // Event-log til replay/simulering: alle strukturelle hændelser med tidsstempel.
+  // Public activity is append-only; frequent live snapshots are bounded.
+  const checkpoints = new Set(['run_start', 'plan', 'job_added', 'job_start', 'job_done', 'job_error', 'job_cancelled', 'job_blocked', 'job_skipped', 'job_process', 'job_judged', 'verification', 'run_finished', 'done', 'error']);
+  let lastSnapshotAt = 0;
   const track = (obj) => {
-    if (!['job_delta', 'delta', 'subagent_delta'].includes(obj.type)) run.events.push({ at: Date.now(), ...obj });
-    else if ((run.events.length === 0 || run.events[run.events.length - 1].type !== 'job_delta')) run.events.push({ at: Date.now(), type: 'job_delta', jobId: obj.jobId });
+    const transient = ['job_delta', 'delta', 'subagent_delta'].includes(obj.type);
+    if (!transient) appendRunEvent(dirs, run, { at: Date.now(), ...obj });
+    else if (run.events.at(-1)?.type !== 'job_delta') appendRunEvent(dirs, run, { at: Date.now(), type: 'job_delta', jobId: obj.jobId });
     if (obj.type === 'job_process') run.processes = [...run.processes.filter(p => p.pid !== obj.pid), ...(obj.finished ? [] : [{ pid: obj.pid, jobId: obj.jobId, startedAt: obj.startedAt }])];
     updateSwarm(run, obj);
-    if (!['job_delta', 'delta', 'subagent_delta'].includes(obj.type)) saveRun(dirs, run);
+    if (checkpoints.has(obj.type) || (!transient && Date.now() - lastSnapshotAt >= 1000)) { saveRun(dirs, run); lastSnapshotAt = Date.now(); }
     try { emit({ ...obj, runId, goal }); } catch { /* client disconnect does not cancel work */ }
   };
   handle.track = track;
   handle.persist = () => saveRun(dirs, run);
   const heartbeat = setInterval(() => {
     run.heartbeatAt = Date.now();
-    try { saveRun(dirs, run); } catch { handle.cancelled = true; handle.abort.abort(); handle.resolveApproval?.([]); }
+    try { saveRunHeartbeat(dirs, run); } catch { handle.cancelled = true; handle.abort.abort(); handle.resolveApproval?.([]); }
   }, 10000);
   heartbeat.unref();
   try {

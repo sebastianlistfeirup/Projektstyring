@@ -1,5 +1,6 @@
-import { mkdirSync, writeFileSync, readFileSync, renameSync, readdirSync, openSync, fsyncSync, closeSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, statSync, readdirSync, openSync, fsyncSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeAtomicJson } from './atomic-json.mjs';
 
 export const TERMINAL = new Set(['done', 'error', 'partial', 'cancelled', 'blocked', 'interrupted']);
 
@@ -72,15 +73,59 @@ export function runPath(dirs, runId) {
 
 export function saveRun(dirs, run) {
   mkdirSync(dirs.runs, { recursive: true });
-  const path = runPath(dirs, run.runId), temp = `${path}.tmp`;
-  const fd = openSync(temp, 'w', 0o600);
-  try { writeFileSync(fd, JSON.stringify({ ...run, schemaVersion: 2 }, null, 2)); fsyncSync(fd); }
+  writeAtomicJson(runPath(dirs, run.runId), { ...run, schemaVersion: 2 });
+}
+
+export function eventJournalPath(dirs, runId) {
+  runPath(dirs, runId); // Validate id before deriving another filename.
+  return join(dirs.runs, `${runId}.events.ndjson`);
+}
+
+export function appendRunEvent(dirs, run, event) {
+  mkdirSync(dirs.runs, { recursive: true });
+  // Freeze events now: a later repair job must not mutate the earlier plan.
+  const captured = JSON.parse(JSON.stringify(event));
+  if (captured.type === 'job_done' && captured.result?.text?.length > 2000) {
+    captured.result.text = captured.result.text.slice(0, 2000);
+    captured.result.textTruncated = true;
+  }
+  const fd = openSync(eventJournalPath(dirs, run.runId), 'a', 0o600);
+  try { writeFileSync(fd, `${JSON.stringify(captured)}\n`); fsyncSync(fd); }
   finally { closeSync(fd); }
-  renameSync(temp, path);
+  run.eventsJournal = true;
+  run.eventCount = (run.eventCount ?? run.events?.length ?? 0) + 1;
+  run.events = [...(run.events ?? []).slice(-399), captured];
+}
+
+export function saveRunHeartbeat(dirs, run) {
+  runPath(dirs, run.runId);
+  writeAtomicJson(join(dirs.runs, `${run.runId}.pulse`), { runId: run.runId, heartbeatAt: run.heartbeatAt });
 }
 
 export function readRun(dirs, runId) {
-  return JSON.parse(readFileSync(runPath(dirs, runId), 'utf8'));
+  const run = JSON.parse(readFileSync(runPath(dirs, runId), 'utf8'));
+  try {
+    const pulse = JSON.parse(readFileSync(join(dirs.runs, `${runId}.pulse`), 'utf8'));
+    if (pulse.runId === runId && Number.isFinite(pulse.heartbeatAt) && pulse.heartbeatAt > (run.heartbeatAt ?? 0)) run.heartbeatAt = pulse.heartbeatAt;
+  } catch { /* Old runs have no separate heartbeat. */ }
+  return run;
+}
+
+export function withRunEvents(dirs, run) {
+  if (!run.eventsJournal) return run;
+  try {
+    const path = eventJournalPath(dirs, run.runId);
+    // Large journals are downloaded as a stream, never expanded into browser
+    // memory for replay. The saved run still contains current jobs and evidence.
+    if (statSync(path).size > 8 * 1024 * 1024) return { ...run, events: [], eventsTruncated: true };
+    const events = [], lines = readFileSync(path, 'utf8').split('\n');
+    let incomplete = false;
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try { events.push(JSON.parse(line)); } catch { incomplete = true; }
+    }
+    return { ...run, events, eventsTruncated: incomplete };
+  } catch { return { ...run, eventsTruncated: true }; }
 }
 
 // A process cannot prove that an interrupted external action never happened.
@@ -100,4 +145,20 @@ export function recoverRuns(dirs) {
     }
   }
   return recovered;
+}
+
+export function liveRunView(run) {
+  if (!run) return null;
+  // The full bible and long deliveries stay in the durable run. Five-second UI
+  // polling needs status, context identities and bounded previews only.
+  const { bible: _bible, attachments: _attachments, events: _events, ...view } = run;
+  const preview = (text, limit) => String(text ?? '').slice(0, limit);
+  return {
+    ...view,
+    jobs: (run.jobs ?? []).map(job => ({ ...job, description: preview(job.description, 2000),
+      text: preview(job.text, 2000), textTruncated: Boolean(job.textTruncated || String(job.text ?? '').length > 2000),
+      actions: (job.actions ?? []).slice(-12),
+    })),
+    results: (run.results ?? []).map(result => ({ ...result, text: preview(result.text, 6000), textTruncated: String(result.text ?? '').length > 6000 })),
+  };
 }

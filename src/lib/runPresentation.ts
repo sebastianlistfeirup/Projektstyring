@@ -26,6 +26,7 @@ export function presentRun(raw: SwarmRun): SwarmRun {
         startedAt: timestamp(job.startedAt), finishedAt: timestamp(job.finishedAt),
         notes: job.notes ?? [], liveText: job.liveText ?? '', deltaCount: job.deltaCount ?? 0,
         lastDeltaAt: timestamp(job.lastDeltaAt), text: result?.text ?? job.text ?? '',
+        textTruncated: result ? Boolean(result.textTruncated) : Boolean(job.textTruncated),
         artifacts: result?.artifacts ?? job.artifacts ?? [], error: job.error ?? null,
       };
     }),

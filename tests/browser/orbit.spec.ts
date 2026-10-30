@@ -218,7 +218,7 @@ test('work map explains dependencies and preserves historical tool evidence and 
     events: [{ at: start, type: 'run_start', goal: 'Realmread · dokumenteret forløb' }, { at: start + 7_200_000, type: 'run_finished', status: 'partial' }],
   };
   await page.addInitScript(() => { localStorage.setItem('orbit-toured', '1'); localStorage.setItem('swarm-sound', 'off'); });
-  await page.route(`${base}/api/ai/swarm`, route => route.fulfill({ json: { ok: true, run } }));
+  await page.route(`${base}/api/ai/swarm*`, route => route.fulfill({ json: { ok: true, run } }));
   await page.route(`${base}/api/ai/runs`, route => route.fulfill({ json: { ok: true, runs: [{ ...run, file: 'map-fixture.json' }] } }));
   await page.route(`${base}/api/ai/runs/map-fixture`, route => route.fulfill({ json: { ok: true, run } }));
   await page.goto('/#/swarm');

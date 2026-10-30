@@ -1,5 +1,5 @@
 // Orbit AI HTTP-ruter.
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, realpathSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, realpathSync, createReadStream } from 'fs';
 import { join, basename, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { serviceById, serviceAvailability, runChat, setSecretsDir, loadKeySecrets, saveKeySecrets, aiCfg, inspectCliInstallation, parseCliTemplate } from './ai-services.mjs';
@@ -8,7 +8,7 @@ import { inspectRepository, validateChecks } from './ai-repository.mjs';
 import { projectExecution } from './task-execution.mjs';
 import { importProjectPlan } from './project-plan.mjs';
 import { DurableRunQueue } from './ai-queue.mjs';
-import { readRun, recoverRuns, validatePlan, runPath } from './ai-state.mjs';
+import { readRun, recoverRuns, validatePlan, runPath, withRunEvents, eventJournalPath, liveRunView } from './ai-state.mjs';
 import { executeRun, swarmState, activeRuns, loadTemplates, saveUserTemplates, startTriggerScheduler, validateCron, pickOrchestrator, planWithLLM, parseJsonObject, projectMemoryDirs } from './ai-runtime.mjs';
 
 // ---- HTTP-ruter --------------------------------------------------------------
@@ -234,8 +234,9 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   });
 
   // Live swarm-tilstand: aktiv kørsel eller seneste afsluttede.
-  app.get('/api/ai/swarm', (_req, res) => {
-    res.json({ ok: true, run: swarmState.active ?? swarmState.last });
+  app.get('/api/ai/swarm', (req, res) => {
+    const run = swarmState.active ?? swarmState.last;
+    res.json({ ok: true, run: req.query.view === 'live' ? liveRunView(run) : run });
   });
 
   app.get('/api/ai/runs', (_req, res) => {
@@ -247,8 +248,21 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
 
   app.get('/api/ai/runs/:runId', (req, res) => {
     try {
-      res.json({ ok: true, run: activeRuns.get(req.params.runId)?.run ?? readRun(dirs, req.params.runId) });
+      res.json({ ok: true, run: withRunEvents(dirs, activeRuns.get(req.params.runId)?.run ?? readRun(dirs, req.params.runId)) });
     } catch (e) { res.status(404).json({ ok: false, reason: e.message }); }
+  });
+
+  app.get('/api/ai/runs/:runId/events', (req, res) => {
+    try {
+      const run = readRun(dirs, req.params.runId), path = eventJournalPath(dirs, req.params.runId);
+      res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="orbit-events-${run.runId}.ndjson"`);
+      if (run.eventsJournal && existsSync(path)) {
+        const stream = createReadStream(path);
+        stream.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.destroy(); });
+        res.on('close', () => stream.destroy()); stream.pipe(res);
+      } else res.send((run.events ?? []).map(event => JSON.stringify(event)).join('\n'));
+    } catch (error) { res.status(404).json({ ok: false, reason: error.message }); }
   });
 
   app.post('/api/ai/runs/:runId/import-plan', (req, res) => {

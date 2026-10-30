@@ -33,6 +33,7 @@ export interface SwarmJob {
   startedAt: number | null;
   finishedAt: number | null;
   text: string;
+  textTruncated?: boolean;
   artifacts: { kind: string; name: string; mime: string; url?: string }[];
   error: string | null;
   subagents?: SwarmSubagent[];
@@ -42,6 +43,9 @@ export interface SwarmJob {
 }
 
 export interface SwarmRun {
+  eventsJournal?: boolean;
+  eventCount?: number;
+  eventsTruncated?: boolean;
   contextManifest?: {
     version: number; capturedAt: string; projectId: string; projectName: string; releaseGoal: string; scopeTaskIds: string[] | null;
     documents: { kind: string; id: string; title: string; sha256: string; characters: number; version?: number | null; state?: string; updatedAt?: string | null }[];
@@ -49,7 +53,7 @@ export interface SwarmRun {
   projectPlan?: import('./types').ProjectPlan;
   projectPlanError?: string;
   heartbeatAt?: number;
-  results?: { jobId?: string; title: string; text: string; artifacts?: import('./types').AiAttachment[] }[];
+  results?: { jobId?: string; title: string; text: string; textTruncated?: boolean; artifacts?: import('./types').AiAttachment[] }[];
   projectId?: string | null;
   taskId?: string | null;
   evidence?: { commit: string; changedFiles: string[]; diffStat: string };
@@ -370,7 +374,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
       }
       case 'job_done': {
         if (!cur) break;
-        const r = evt.result as { jobId: string; title?: string; text: string; artifacts?: SwarmJob['artifacts'] } | undefined;
+        const r = evt.result as { jobId: string; title?: string; text: string; textTruncated?: boolean; artifacts?: SwarmJob['artifacts'] } | undefined;
         if (!r) break;
         maybeNotify('done', 'AI-job færdigt', r.title ?? cur.goal);
         set({
@@ -378,7 +382,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
             ...cur,
             jobs: cur.jobs.map((j) =>
               j.id === r.jobId
-                ? { ...j, status: 'done' as const, text: String(r.text ?? '').slice(0, 2000), artifacts: r.artifacts ?? [], finishedAt: Date.now() }
+                ? { ...j, status: 'done' as const, text: String(r.text ?? '').slice(0, 2000), textTruncated: Boolean(r.textTruncated || String(r.text ?? '').length > 2000), artifacts: r.artifacts ?? [], finishedAt: Date.now() }
                 : j,
             ),
           },
@@ -434,7 +438,7 @@ function reconcileTask(run: SwarmRun) {
       if (msg.runId !== run.runId || !run.finishedAt || msg.runFinishedAt === run.finishedAt) continue;
       const delivered = (run.results ?? []).map(r => {
         const text = run.projectPlan && r.text.includes('"orbitProjectPlan"') ? `${run.projectPlan.summary}\n\n**Første milepæl:** ${run.projectPlan.firstMilestone}\n\n${run.projectPlan.tasks.length} opgaveforslag er klar under **Gennemse projektplan** i Orbit Live.` : r.text;
-        return `### ${r.title}\n\n${text.slice(0, 6000)}${text.length > 6000 ? '\n\nUddrag — resten findes i den fulde leverance.' : ''}`;
+        return `### ${r.title}\n\n${text.slice(0, 6000)}${text.length > 6000 || r.textTruncated ? '\n\nUddrag — resten findes i den fulde leverance.' : ''}`;
       }).join('\n\n');
       store.updateAiMessage(chat.id, msg.id, { runFinishedAt: run.finishedAt, status: run.status === 'done' ? 'done' : 'error', text: `${delivered || msg.text}\n\n${run.status === 'done' ? 'Leveret til gennemgang.' : `Kørselsstatus: ${run.status}. Se Orbit Live for fejl og næste skridt.`}\n\n[Hent fuld leverance](http://127.0.0.1:4310/api/ai/runs/${run.runId}/export)`, artifacts: (run.results ?? []).flatMap(r => r.artifacts ?? []) });
     }
@@ -451,7 +455,7 @@ let started = false;
 
 async function syncState() {
   try {
-    const r = await fetch(`${API}/api/ai/swarm`);
+    const r = await fetch(`${API}/api/ai/swarm?view=live`);
     const j = await r.json();
     if (j?.ok) { useSwarm.getState().setRun(j.run ? presentRun(j.run) : null); if (j.run) reconcileTask(j.run); }
   } catch { /* companion offline */ }
@@ -616,13 +620,13 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
         jobs: run.jobs.map((j) => (j.id === String(evt.jobId ?? '') ? { ...j, status: 'skipped' as const, text: '(sprunget over)', finishedAt: Number(evt.at) } : j)),
       };
     case 'job_done': {
-      const r = evt.result as { jobId: string; text: string; artifacts?: SwarmJob['artifacts'] } | undefined;
+      const r = evt.result as { jobId: string; text: string; textTruncated?: boolean; artifacts?: SwarmJob['artifacts'] } | undefined;
       if (!r) return run;
       return {
         ...run,
         jobs: run.jobs.map((j) =>
           j.id === r.jobId
-            ? { ...j, status: 'done' as const, text: String(r.text ?? '').slice(0, 2000), artifacts: r.artifacts ?? [], finishedAt: Number(evt.at) }
+            ? { ...j, status: 'done' as const, text: String(r.text ?? '').slice(0, 2000), textTruncated: Boolean(r.textTruncated || String(r.text ?? '').length > 2000), artifacts: r.artifacts ?? [], finishedAt: Number(evt.at) }
             : j,
         ),
       };
