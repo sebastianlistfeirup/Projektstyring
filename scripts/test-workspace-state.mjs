@@ -9,8 +9,19 @@ test('older tabs and legacy clients cannot erase newer chat and bible collection
   assert.equal(merged, true);
   assert.deepEqual(snapshot.workspaceState.bibles, { p: 'approved' });
   assert.deepEqual(snapshot.workspaceState.aiChats, [{ id: 'new' }]);
-  assert.deepEqual(snapshot.workspaceState.tasks, []);
+  assert.deepEqual(snapshot.workspaceState.tasks, prior.tasks);
   assert.deepEqual(acceptSnapshot(prior, { tasks: [] }).snapshot.workspaceState.bibles, prior.workspaceState.bibles);
+});
+
+test('server-created tasks survive stale snapshots; explicit deletion and newer restoration synchronize', () => {
+  const initial = { tasks: [{ id: 'a', updatedAt: '2026-01-01T00:00:00.000Z' }, { id: 'server-created', updatedAt: '2026-01-02T00:00:00.000Z' }] };
+  const stale = { tasks: [initial.tasks[0]] };
+  assert.equal(acceptSnapshot(initial, stale).snapshot.tasks.length, 2);
+  const removed = acceptSnapshot(initial, { tasks: [initial.tasks[0]], deletedEntities: { tasks: { 'server-created': '2026-01-03T00:00:00.000Z' } } }).snapshot;
+  assert.equal(removed.tasks.length, 1);
+  assert.equal(acceptSnapshot(removed, initial).snapshot.tasks.length, 1);
+  const restored = acceptSnapshot(removed, { tasks: [{ ...initial.tasks[1], updatedAt: '2026-01-04T00:00:00.000Z' }] }).snapshot;
+  assert.equal(restored.tasks.length, 2);
 });
 
 test('server-side task updates are normalized before backup and persistence', () => {

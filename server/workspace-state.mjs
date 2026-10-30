@@ -1,3 +1,4 @@
+import { entityCollections, mergeEntityLists, mergeTombstones } from '../shared/workspace-merge.mjs';
 const core = ['tasks', 'projects', 'sprints', 'users', 'labels', 'activity'];
 
 export function normalizeSnapshot(snapshot) {
@@ -5,15 +6,21 @@ export function normalizeSnapshot(snapshot) {
   return { ...snapshot, workspaceState: { ...snapshot.workspaceState, ...Object.fromEntries(core.filter(key => Array.isArray(snapshot[key])).map(key => [key, snapshot[key]])) } };
 }
 
-// Do not let an older tab replace a newer bible/chat collection. Core entity
-// merging remains the existing client protocol; extra collections have their
-// own timestamps and are preserved when an old client omits them.
+// Older tabs cannot erase newer entities or replace newer bible/chat collections.
+// Core deletions carry tombstones; extra collections retain per-field versions.
 export function acceptSnapshot(previous, incoming) {
   let merged = false;
+  const deletedEntities = mergeTombstones(previous?.deletedEntities, incoming.deletedEntities);
+  incoming = { ...incoming, deletedEntities };
   if (previous) {
-    incoming = { ...incoming };
     for (const key of core) {
       if (!Array.isArray(incoming[key])) continue;
+      if (entityCollections.includes(key)) {
+        const combined = mergeEntityLists(previous[key], incoming[key], deletedEntities[key]);
+        if (JSON.stringify(combined) !== JSON.stringify(incoming[key])) merged = true;
+        incoming[key] = combined;
+        continue;
+      }
       const old = new Map((previous[key] ?? []).map(item => [item.id, item]));
       incoming[key] = incoming[key].map(item => {
         const stored = old.get(item.id);

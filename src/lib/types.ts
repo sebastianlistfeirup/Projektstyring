@@ -74,6 +74,7 @@ export interface Task {
     plannerEtag?: string;
   }; // eksterne systemer
   aiDelivery?: { runId: string; status: string; verification: string; commit?: string; updatedAt: string };
+  aiProposal?: { runId: string; itemId: string; scope: 'version1' | 'later' };
   approval?: Approval | null; // kundegodkendelse via offentligt link
   emoji?: string; // lille visuel markør på kortet
   pinnedDay?: string | null; // fastgjort til "Min dag" (ISO-dato, ryddes automatisk)
@@ -367,4 +368,13 @@ export interface AiChat {
   messages: AiMessage[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProjectPlan {
+  version: 1;
+  releaseGoal: string;
+  summary: string;
+  firstMilestone: string;
+  unknowns: string[];
+  tasks: { id: string; title: string; description: string; priority: string; scope: 'version1' | 'later'; acceptanceCriteria: string[]; verification: string[]; evidence: string[]; dependsOn: string[] }[];
 }

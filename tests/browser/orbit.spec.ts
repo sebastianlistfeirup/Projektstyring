@@ -17,6 +17,8 @@ test.beforeAll(async ({ request }) => {
   writeFileSync(fake, `import fs from 'node:fs'; let p=process.argv.at(-1); const file=p.match(/UTF-8-filen (.*)\\. Filen indeholder/); if(file) p=fs.readFileSync(file[1],'utf8');
 if(p.includes('PLANLÆGNINGSFASE')) console.log(JSON.stringify({jobs:[{title:'Verificeret rettelse',service:'codex',phase:'produktion',dependsOn:[],description:p.includes('FAIL_MARKER')?'FAIL_MARKER':'Ret game.txt efter biblen'}]}));
 else if(p.includes('FAIL_MARKER')) { console.error('Reproduced test failure'); process.exit(9); }
+else if(p.includes('"orbitProjectPlan"')) console.log(JSON.stringify({orbitProjectPlan:{version:1,releaseGoal:'En stabil save/load-cyklus',summary:'Et afgrænset restarbejde',firstMilestone:'Gem og indlæs en kampagne',unknowns:['Gameplay skal afprøves manuelt'],tasks:[{id:'save',title:'Verificér save-format',description:'Bevar kompatibilitet',priority:'high',scope:'version1',acceptanceCriteria:['Data bevares'],verification:['Kør save/load-test'],evidence:['game.txt'],dependsOn:[]}]}}));
+else if(p.includes('Kortlæg kode og gældende beslutninger')) console.log('game.txt er læst. Ingen tests er kørt i denne analyse.');
 else { await new Promise(r=>setTimeout(r,1800)); fs.writeFileSync('game.txt','fixed'); console.log('## Leverance\\n\\n| Fil | Resultat |\\n| --- | --- |\\n| game.txt | fixed |\\n\\nÆndringen er implementeret.'); }`);
   expect((await request.post(`${base}/api/ai/services/codex`, { data: { cmd: process.execPath, cliTemplate: `"${fake}" {prompt}`, billingMode: 'included', noExtraCharges: true } })).ok()).toBeTruthy();
   await request.post(`${base}/api/ai/prefs`, { data: { autoJudge: false, selfHeal: false, orchestrator: 'codex' } });
@@ -132,4 +134,63 @@ test('mobile chat can create a project without the desktop sidebar', async ({ pa
   await page.getByRole('button', { name: 'Opret og åbn samtale' }).last().click();
   await expect(page.getByLabel('Besked til Orbit')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('existing project audit imports reviewed work orders once and preserves them against a stale client', async ({ page, request }) => {
+  const projectId = await setup(page);
+  await page.getByRole('button', { name: 'Kortlæg eksisterende projekt', exact: true }).click();
+  await expect(page.getByLabel('Besked til Orbit')).toHaveValue(/Overtag/);
+  await page.getByLabel('Besked til Orbit').press('Enter');
+  const proposal = page.getByRole('group', { name: 'Forslag til projektplan' });
+  await expect(proposal).toBeVisible();
+  await proposal.locator('summary').first().click();
+  await expect(proposal.getByText('Verificér save-format', { exact: true })).toBeVisible();
+  const stale = (await (await request.get(`${base}/api/sync/state`)).json()).snapshot;
+  await proposal.getByLabel('Optag de valgte Version 1-opgaver', { exact: false }).check();
+  await proposal.getByRole('button', { name: 'Opret 1 valgte opgaver' }).click();
+  await expect(proposal.getByText('1 opgaver oprettet i backlog.', { exact: false })).toBeVisible();
+  await request.post(`${base}/api/sync/push`, { data: { clientId: 'stale-fixture', snapshot: stale } });
+  const after = (await (await request.get(`${base}/api/sync/state`)).json()).snapshot;
+  const created = after.tasks.filter((t: { projectId: string; aiProposal?: unknown }) => t.projectId === projectId && t.aiProposal);
+  expect(created).toHaveLength(1);
+  expect(created[0].status).toBe('backlog');
+  expect(after.projects.find((p: { id: string }) => p.id === projectId).scopeTaskIds).toContain(created[0].id);
+  await proposal.getByRole('button', { name: 'Opret 1 valgte opgaver' }).click();
+  await expect(proposal.getByText('0 opgaver oprettet i backlog. 1 fandtes allerede', { exact: false })).toBeVisible();
+  expect(readFileSync(join(source, 'game.txt'), 'utf8')).toBe('original');
+});
+
+test('task deletion and restoration reach another open tab without stale resurrection', async ({ page, context, request }) => {
+  const projectId = await setup(page);
+  const taskId = await page.evaluate(async id => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts');
+    // @ts-expect-error Vite browser module
+    const { pushNow } = await import('/src/lib/sync.ts');
+    await pushNow();
+    return useStore.getState().tasks.find((t: { projectId: string }) => t.projectId === id).id;
+  }, projectId);
+  const stale = (await (await request.get(`${base}/api/sync/state`)).json()).snapshot;
+  const second = await context.newPage(); await second.goto('/#/chat');
+  const hasTask = (target: Page) => target.evaluate(async id => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts');
+    return useStore.getState().tasks.some((t: { id: string }) => t.id === id);
+  }, taskId);
+  await expect.poll(() => hasTask(second)).toBe(true);
+  await page.evaluate(async id => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts');
+    useStore.getState().deleteTask(id);
+  }, taskId);
+  await expect.poll(() => hasTask(second)).toBe(false);
+  await request.post(`${base}/api/sync/push`, { data: { clientId: 'stale-fixture', snapshot: stale } });
+  expect((await (await request.get(`${base}/api/sync/state`)).json()).snapshot.tasks.some((t: { id: string }) => t.id === taskId)).toBe(false);
+  await page.evaluate(async id => {
+    // @ts-expect-error Vite browser module
+    const { useStore } = await import('/src/store/useStore.ts');
+    useStore.getState().restoreTask(id);
+  }, taskId);
+  await expect.poll(() => hasTask(second)).toBe(true);
+  await second.close();
 });

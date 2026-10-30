@@ -6,11 +6,16 @@ import type { SyncSnapshotPayload } from './companion';
 import { syncPull, syncPush, getSyncToken, companionBase } from './companion';
 import type { ActivityEntry, Label, Project, Sprint, Task, User } from './types';
 import { localFields, mergeWorkspaceExtras } from './workspaceSync';
+import { entityCollections, mergeEntityLists, mergeTombstones, type Tombstones } from '../../shared/workspace-merge.mjs';
 
 const CLIENT_KEY = 'orbit-client-id';
 const SYNC_URL_KEY = 'orbit-sync-url';
 const POLL_KEY = 'orbit-sync-poll';
 const VERSION_KEY = 'orbit-workspace-versions';
+const DELETION_KEY = 'orbit-deleted-entities';
+let deletedEntities: Tombstones = {};
+try { deletedEntities = mergeTombstones(JSON.parse(localStorage.getItem(DELETION_KEY) ?? '{}')); } catch { /* old data */ }
+const saveDeletions = () => localStorage.setItem(DELETION_KEY, JSON.stringify(deletedEntities));
 let fieldVersions: Record<string, string> = {};
 try { fieldVersions = JSON.parse(localStorage.getItem(VERSION_KEY) ?? '{}'); } catch { /* old browser data */ }
 function saveVersions() { localStorage.setItem(VERSION_KEY, JSON.stringify(fieldVersions)); }
@@ -44,6 +49,7 @@ export function snapshotFromStore(): SyncSnapshotPayload {
   const s = useStore.getState();
   return {
     schemaVersion: 2,
+    deletedEntities,
     workspaceVersions: { ...fieldVersions },
     workspaceState: Object.fromEntries(Object.entries(s).filter(([, value]) => typeof value !== 'function')),
     tasks: s.tasks,
@@ -80,9 +86,10 @@ function mergeSnapshot(remote: SyncSnapshotPayload, excludeIds?: Set<string>) {
   applying = true;
   const s = useStore.getState();
   const remoteTasks = excludeIds ? (remote.tasks as Task[]).filter((t) => !excludeIds.has(t.id)) : (remote.tasks as Task[]);
-  const tasks = mergeById(s.tasks as Task[], remoteTasks);
-  const projects = mergeById(s.projects as Project[], remote.projects as Project[]);
-  const sprints = mergeById(s.sprints as Sprint[], remote.sprints as Sprint[]);
+  deletedEntities = mergeTombstones(deletedEntities, remote.deletedEntities); saveDeletions();
+  const tasks = mergeEntityLists(s.tasks as Task[], remoteTasks, deletedEntities.tasks);
+  const projects = mergeEntityLists(s.projects as Project[], remote.projects as Project[], deletedEntities.projects);
+  const sprints = mergeEntityLists(s.sprints as Sprint[], remote.sprints as Sprint[], deletedEntities.sprints);
   const users = mergeById(s.users as User[], remote.users as User[]);
   const labels = mergeById(s.labels as Label[], remote.labels as Label[]);
   const activityIds = new Set(s.activity.map((a) => a.id));
@@ -109,7 +116,7 @@ export async function pullAndMerge(): Promise<boolean> {
     );
     for (const rt of remote.snapshot.tasks as Task[]) {
       const lt = locallyChanged.get(rt.id);
-      if (lt && lt.updatedAt !== rt.updatedAt) {
+      if (lt && rt.updatedAt > lastSyncedAt && lt.updatedAt !== rt.updatedAt) {
         exclude.add(rt.id);
         local.addSyncConflict({ taskId: rt.id, local: lt, remote: rt });
       }
@@ -134,6 +141,7 @@ export function applySnapshot(snapshot: SyncSnapshotPayload): void {
   applying = true;
   try {
     useStore.setState({ ...restored, selectedTaskId: null, syncConflicts: [] });
+    deletedEntities = mergeTombstones(snapshot.deletedEntities); saveDeletions();
     fieldVersions = Object.fromEntries(Object.keys(restored).map(key => [key, new Date().toISOString()]));
     saveVersions();
     lastSyncedAt = '';
@@ -196,7 +204,17 @@ export function startSync(): () => void {
   started = true;
 
   const unsubscribe = useStore.subscribe((state, prev) => {
-    if (applying || !isSyncEnabled()) return;
+    if (applying) return;
+    for (const key of entityCollections) {
+      if (state[key] === prev[key]) continue;
+      const remaining = new Set(state[key].map(item => item.id));
+      for (const item of prev[key]) if (!remaining.has(item.id)) {
+        deletedEntities[key] ??= {};
+        deletedEntities[key][item.id] = new Date().toISOString();
+      }
+    }
+    saveDeletions();
+    if (!isSyncEnabled()) return;
     const changed = Object.keys(state).filter(key => !localFields.has(key) && typeof state[key as keyof typeof state] !== 'function' && state[key as keyof typeof state] !== prev[key as keyof typeof prev]);
     if (changed.length) {
       const now = new Date().toISOString();

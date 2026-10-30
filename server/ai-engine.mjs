@@ -6,11 +6,12 @@ import { serviceById, serviceAvailability, runChat, setSecretsDir, loadKeySecret
 import { extractDocument, hydrateAttachment } from './ai-documents.mjs';
 import { inspectRepository, validateChecks } from './ai-repository.mjs';
 import { projectExecution } from './task-execution.mjs';
+import { importProjectPlan } from './project-plan.mjs';
 import { readRun, recoverRuns, validatePlan, runPath } from './ai-state.mjs';
 import { executeRun, swarmState, activeRuns, loadTemplates, saveUserTemplates, startTriggerScheduler, cronMatches, pickOrchestrator, planWithLLM, parseJsonObject, projectMemoryDirs } from './ai-runtime.mjs';
 
 // ---- HTTP-ruter --------------------------------------------------------------
-export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, getSnapshot }) {
+export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, getSnapshot, updateSnapshot }) {
   setSecretsDir(APP_DIR); // nøgleboksen bor ved siden af companion.json i ~/.orbit
   const dirs = {
     uploads: join(APP_DIR, 'ai-uploads'),
@@ -167,6 +168,19 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     try {
       res.json({ ok: true, run: activeRuns.get(req.params.runId)?.run ?? readRun(dirs, req.params.runId) });
     } catch (e) { res.status(404).json({ ok: false, reason: e.message }); }
+  });
+
+  app.post('/api/ai/runs/:runId/import-plan', (req, res) => {
+    try {
+      if (!updateSnapshot) throw new Error('Projektlageret er ikke tilgængeligt.');
+      const run = readRun(dirs, req.params.runId);
+      let imported;
+      updateSnapshot(snapshot => {
+        imported = importProjectPlan(snapshot, run, req.body?.selectedIds, { includeInScope: req.body?.includeInScope === true });
+        return imported.snapshot;
+      });
+      res.json({ ok: true, createdIds: imported.createdIds, existingIds: imported.existingIds });
+    } catch (e) { res.status(400).json({ ok: false, reason: e.message }); }
   });
 
   // ---- kørselskontrol: godkend plan / besked til orkestrator / skip / aflys ----

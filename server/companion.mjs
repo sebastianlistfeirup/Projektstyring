@@ -1673,7 +1673,14 @@ app.post('/api/economic/draft', async (req, res) => {
 });
 
 // ---- AI-motor (abonnement-first orkestrering) ----
-registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, EXPORT_DIR, getSnapshot: () => lastSnapshot?.snapshot });
+registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_DIR, EXPORT_DIR, getSnapshot: () => lastSnapshot?.snapshot,
+  updateSnapshot: transform => {
+    const next = { ...lastSnapshot, snapshot: normalizeSnapshot(transform(lastSnapshot?.snapshot)), updatedAt: new Date().toISOString(), from: { clientId: 'orbit-runtime', name: 'Orbit' } };
+    writeAtomicJson(SNAPSHOT_PATH, next);
+    lastSnapshot = next;
+    broadcast({ type: 'sync', from: 'orbit-runtime', updatedAt: next.updatedAt });
+  },
+});
 
 server.listen(PORT, '0.0.0.0', () => {
   startTelegram();

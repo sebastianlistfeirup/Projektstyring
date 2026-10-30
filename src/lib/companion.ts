@@ -222,6 +222,7 @@ export async function graphEvents(): Promise<{ ok: boolean; items?: GraphEvent[]
 
 // ---------------- Synkronisering ----------------
 export interface SyncSnapshotPayload {
+  deletedEntities?: Record<string, Record<string, string>>;
   workspaceVersions?: Record<string, string>;
   schemaVersion?: number;
   workspaceState?: Record<string, unknown>;

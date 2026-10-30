@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Activity, CheckCircle2, Circle, GitBranch, PauseCircle, ShieldCheck } from 'lucide-react';
 import { useSwarm, connectSwarm } from '../lib/swarm';
 import { approvePlan, cancelRun, resumeRun, sendRunMessage } from '../lib/aiApi';
+import ProjectPlanReview from './ProjectPlanReview';
 
 const labels: Record<string, string> = { running: 'Arbejder', awaiting_approval: 'Afventer din planbeslutning', done: 'Leveret til gennemgang', error: 'Fejlet', blocked: 'Blokeret', partial: 'Delvist leveret', cancelled: 'Stoppet', interrupted: 'Afbrudt ved genstart', queued: 'I kø', skipped: 'Sprunget over' };
 
@@ -42,6 +43,8 @@ export default function OrbitRunPanel({ projectId }: { projectId?: string | null
     </ol>
     {run.evidence && <p className="text-xs break-all flex gap-2"><GitBranch size={14} className="shrink-0" />Commit {run.evidence.commit} · {run.evidence.changedFiles.length} ændrede filer</p>}
     {run.verification && <details className="text-xs"><summary className="cursor-pointer flex items-center gap-2"><ShieldCheck size={14} />Kontroller: {run.verification.status === 'passed' ? 'Bestået' : run.verification.status === 'failed' ? 'Fejlet' : 'Ikke kørt / ikke konfigureret'}</summary><div className="mt-2 space-y-2">{run.verification.checks.map((c, i) => <div key={i}><b>{c.name}: {c.status} (exit {c.exitCode ?? 'ukendt'})</b><pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-black/10 p-2 rounded">{c.output}</pre></div>)}</div></details>}
+    {run.status === 'done' && run.projectId && run.projectPlan && <ProjectPlanReview key={run.runId} runId={run.runId} plan={run.projectPlan} />}
+    {run.projectPlanError && <p className="text-amber-500 text-xs">{run.projectPlanError} Gennemgå tekstleverancen; ingen opgaver er oprettet.</p>}
     <div className="flex flex-wrap gap-2">
       {run.status === 'awaiting_approval' && <button disabled={busy} className="btn-primary text-xs" onClick={() => act(() => approvePlan(run.runId, run.jobs), 'Planen er godkendt. Hvis kørslen er gendannet, brug Genoptag først.')}>Godkend planen</button>}
       {active && <button disabled={busy} className="btn-ghost text-xs" onClick={() => act(() => cancelRun(run.runId), 'Stop sendt. Afventer igangværende proces.')}><PauseCircle size={14} />Stop</button>}

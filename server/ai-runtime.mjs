@@ -3,6 +3,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'node:util';
 import { createRunWorktree, verifyRepository, repositoryEvidence } from './ai-repository.mjs';
 import { validatePlan, executeGraph, runOutcome, saveRun } from './ai-state.mjs';
+import { validateProjectPlan, PROJECT_PLAN_FORMAT } from './project-plan.mjs';
 const execFileAsync = promisify(execFile);
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync } from 'fs';
 import { join } from 'path';
@@ -746,6 +747,13 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     track({ type: 'verification', verification: run.verification, evidence: run.evidence });
   }
   run.status = handle.cancelled ? 'cancelled' : outcome;
+  if (run.status === 'done') {
+    const proposalText = [...run.results].reverse().find(r => r.text?.includes('"orbitProjectPlan"'))?.text;
+    if (proposalText) {
+      try { run.projectPlan = validateProjectPlan(parseJsonObject(proposalText, x => Boolean(x.orbitProjectPlan)).orbitProjectPlan); }
+      catch (e) { run.projectPlanError = `Opgaveforslaget kunne ikke valideres: ${e.message}`; }
+    }
+  }
   run.finishedAt = Date.now();
   appendRunMemory(dirs, run);
   track({ type: 'run_finished', status: run.status });
@@ -774,7 +782,7 @@ const BUILTIN_TEMPLATES = [
     description: 'Læs kode og bibel → dokumentér faktisk status → foreslå afgrænset restarbejde. Ingen kodeændringer.',
     jobs: [
       { id: 'job-0', title: 'Kortlæg kode og gældende beslutninger', serviceId: 'codex', phase: 'design', readOnly: true, dependsOn: [], description: 'Læs repository, gældende projektbibel og eksisterende testresultater. Skeln for hvert centralt spillerforløb mellem besluttet, implementeret, faktisk afprøvet og godkendt. Henvis til filer. Udfør ingen ændringer, og påstå aldrig at en test er kørt, hvis du kun har læst koden.' },
-      { id: 'job-1', title: 'Forslag til færdiggørelsesplan', serviceId: 'codex', phase: 'design', readOnly: true, dependsOn: [0], description: 'Udled en prioriteret liste fra de dokumenterede huller. Hver opgave skal have formål, afgrænsning, acceptkriterier, afhængigheder og en konkret kontrol. Gruppér i nødvendigt for version 1 og senere idéer. Markér ukendte forhold. Foreslå ét lille, spilbart første mål. Ændr ingen kode eller godkendte designbeslutninger.' },
+      { id: 'job-1', title: 'Forslag til færdiggørelsesplan', serviceId: 'codex', phase: 'design', readOnly: true, dependsOn: [0], description: `Udled en prioriteret liste fra de dokumenterede huller. Hver opgave skal have formål, afgrænsning, acceptkriterier, afhængigheder og en konkret kontrol. Gruppér i nødvendigt for version 1 og senere idéer. Markér ukendte forhold. Foreslå ét lille, spilbart første mål. Ændr ingen kode eller godkendte designbeslutninger.\n\n${PROJECT_PLAN_FORMAT}` },
     ],
   },
   {

@@ -38,6 +38,8 @@ export interface SwarmJob {
 }
 
 export interface SwarmRun {
+  projectPlan?: import('./types').ProjectPlan;
+  projectPlanError?: string;
   results?: { title: string; text: string; artifacts?: import('./types').AiAttachment[] }[];
   projectId?: string | null;
   taskId?: string | null;
@@ -416,7 +418,10 @@ function reconcileTask(run: SwarmRun) {
     const store = useStore.getState();
     for (const chat of store.aiChats) for (const msg of chat.messages) {
       if (msg.runId !== run.runId || !run.finishedAt || msg.runFinishedAt === run.finishedAt) continue;
-      const delivered = (run.results ?? []).map(r => `### ${r.title}\n\n${r.text.slice(0, 6000)}${r.text.length > 6000 ? '\n\nUddrag — resten findes i den fulde leverance.' : ''}`).join('\n\n');
+      const delivered = (run.results ?? []).map(r => {
+        const text = run.projectPlan && r.text.includes('"orbitProjectPlan"') ? `${run.projectPlan.summary}\n\n**Første milepæl:** ${run.projectPlan.firstMilestone}\n\n${run.projectPlan.tasks.length} opgaveforslag er klar under **Gennemse projektplan** i Orbit Live.` : r.text;
+        return `### ${r.title}\n\n${text.slice(0, 6000)}${text.length > 6000 ? '\n\nUddrag — resten findes i den fulde leverance.' : ''}`;
+      }).join('\n\n');
       store.updateAiMessage(chat.id, msg.id, { runFinishedAt: run.finishedAt, status: run.status === 'done' ? 'done' : 'error', text: `${delivered || msg.text}\n\n${run.status === 'done' ? 'Leveret til gennemgang.' : `Kørselsstatus: ${run.status}. Se Orbit Live for fejl og næste skridt.`}\n\n[Hent fuld leverance](http://127.0.0.1:4310/api/ai/runs/${run.runId}/export)`, artifacts: (run.results ?? []).flatMap(r => r.artifacts ?? []) });
     }
   }

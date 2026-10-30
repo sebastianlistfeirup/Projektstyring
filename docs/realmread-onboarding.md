@@ -10,6 +10,8 @@ Bed om konkrete filhenvisninger og fire adskilte tilstande: besluttet, implement
 
 Resultatet skal ende i en kort afgrænsning af version 1 og en prioriteret backlog. Importér ikke hele historikken over ønsker som obligatorisk arbejde. Gem senere idéer uden for det fastlagte scope.
 
+Når gennemgangen leverer et gyldigt struktureret forslag, vises **Gennemse projektplan** i Orbit Live. Her kan du læse grundlag, acceptkriterier, kontroller og afhængigheder og vælge de relevante opgaver. **Opret valgte opgaver** opretter almindelige backlog-opgaver. Det særskilte scope-valg optager kun de valgte Version 1-opgaver i versionen; senere idéer forbliver udenfor. Samme forslag kan importeres igen uden dubletter. Et allerede godkendt versionsmål overskrives ikke.
+
 ## Den første arbejdsordre
 
 Vælg ét konkret problem, som gennemgangen har dokumenteret. Et eksempel kunne være genopfyldning af et kompagni efter tab, men kun hvis den aktuelle kode faktisk har et problem dér.
