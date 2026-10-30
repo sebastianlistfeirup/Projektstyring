@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { createRunWorktree, verifyRepository, repositoryEvidence } from './ai-repository.mjs';
 import { validatePlan, executeGraph, runOutcome, saveRun, appendRunEvent, saveRunHeartbeat } from './ai-state.mjs';
 import { validateProjectPlan, PROJECT_PLAN_FORMAT } from './project-plan.mjs';
-import { serviceCapabilities } from './ai-capabilities.mjs';
+import { serviceCapabilities, assertJobCapability } from './ai-capabilities.mjs';
 import { loadJobContext } from './ai-job-context.mjs';
 import { validateAttachmentList } from './ai-documents.mjs';
 import { minimumReviewScore, validateReview } from './ai-review.mjs';
@@ -475,6 +475,8 @@ async function runTeamJob({ job, handle, goal, bible, attachments, cfg, dirs, av
       const subId = `${job.id}:${sj.id}`;
       track({ type: 'subagent_start', jobId: job.id, subId, name: sj.title });
       try {
+        assertJobCapability(sj, serviceById(sj.serviceId), handle.run.repository);
+        if (serviceCapabilities(serviceById(sj.serviceId) ?? {}).produces) throw new Error('Underteams kan ikke producere medier. Læg mediejobbet i hovedplanen, så kvittering og fil bliver gemt.');
         const text = await runChat({ serviceId: sj.serviceId, cfg, dirs, cwd: handle.runDir, signal: handle.abort.signal, readOnly: job.readOnly === true,
           messages: [
             { role: 'system', text: `Overordnet mål: ${goal}\nProjektbibel: ${bible ?? ''}` },
@@ -659,8 +661,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     const baseCommit = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: handle.runDir })).stdout.trim();
     let candidateCommit = null;
     try {
-      const capabilities = serviceCapabilities(serviceById(job.serviceId) ?? { id: '' });
-      if (run.repository && ['prototype', 'produktion', 'polering'].includes(job.phase) && !capabilities.repository && !capabilities.produces) throw new Error('Dette repository-job kræver en coding-agent med fil- og kommandoadgang.');
+      assertJobCapability(job, serviceById(job.serviceId), run.repository);
       const isMedia = ['meshy', 'elevenlabs', 'heygen'].includes(job.serviceId);
       const judgeId = !isMedia && prefs.autoJudge !== false ? ['claude', 'kimi', 'gemini', 'codex', 'qwen-code'].find(id => id !== job.serviceId && availability[id]?.available) : null;
       if (!isMedia && prefs.autoJudge !== false && !judgeId) throw new Error('Uafhængigt modelreview er krævet, men ingen anden coding-tjeneste er tilgængelig. Tilslut en reviewer eller fravælg kravet i AI-indstillingerne.');

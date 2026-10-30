@@ -368,13 +368,15 @@ export async function cancelRun(runId: string): Promise<boolean> {
   }
 }
 
-export async function approvePlan(runId: string, jobs: unknown[]): Promise<boolean> {
+export async function approvePlanResult(runId: string, jobs: unknown[]): Promise<{ ok: boolean; reason?: string }> {
   try {
-    const r = await fetch(`${BASE}/api/ai/runs/${runId}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobs }) });
-    return r.ok;
-  } catch {
-    return false;
-  }
+    const response = await fetch(`${BASE}/api/ai/runs/${encodeURIComponent(runId)}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobs }) });
+    const result = await response.json();
+    return { ok: response.ok && result.ok === true, reason: result.reason };
+  } catch { return { ok: false, reason: 'Godkendelsen kunne ikke bekræftes. Kontrollér kørselsstatus før et nyt forsøg.' }; }
+}
+export async function approvePlan(runId: string, jobs: unknown[]): Promise<boolean> {
+  return (await approvePlanResult(runId, jobs)).ok;
 }
 
 /* ---------- nye funktioner (30-ideer-pakken) ---------- */

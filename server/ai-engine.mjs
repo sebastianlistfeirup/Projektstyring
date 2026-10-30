@@ -338,7 +338,8 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     try {
       const h = activeRuns.get(req.params.runId);
       if (!h?.resolveApproval) return res.status(409).json({ ok: false, reason: 'Genoptag den gemte kørsel for at godkende planen.' });
-      const jobs = validatePlan(req.body?.jobs ?? h.jobsSnapshot);
+      const requested = req.body?.jobs ?? h.jobsSnapshot;
+      const jobs = validatePlan(Array.isArray(requested) ? requested.map(job => ({ ...h.jobsSnapshot?.find(original => original.id === job?.id), ...job })) : requested);
       const resolve = h.resolveApproval;
       h.resolveApproval = null;
       resolve(jobs);

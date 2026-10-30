@@ -31,7 +31,7 @@ test('HTTP approval, validation, browser disconnect and persisted results', asyn
   }
   assert.equal((await post('/api/ai/prefs', { minimumReviewScore: 9 })).status, 200);
   assert.equal(cfg.aiPrefs.minimumReviewScore, 9);
-  const plan = [{ id: 'a', title: 'One', serviceId: 'codex', description: 'Execute', dependsOn: [], phase: 'test' }];
+  const plan = [{ id: 'a', title: 'One', serviceId: 'codex', description: 'Execute', dependsOn: [], phase: 'test', readOnly: true, context: ['missing-context.md'] }];
   const response = await post('/api/ai/orchestrate', { goal: 'HTTP test', bible: 'Persistent bible', pauseAfterPlan: true, jobs: plan });
   const textPromise = response.text();
   // Attach rejection handling immediately so assertion failures can safely close SSE.
@@ -50,10 +50,11 @@ test('HTTP approval, validation, browser disconnect and persisted results', asyn
   assert.equal((await post(`/api/ai/runs/${id}/message`, { text: 'Invalid attachment', attachments: [{ name: 'outside', path: '/etc/passwd' }] })).status, 400);
   assert.equal((await post(`/api/ai/runs/${id}/approve`, { jobs: [{ ...plan[0], dependsOn: [3] }] })).status, 400);
   assert.equal((await (await fetch(`${base}/api/ai/swarm`)).json()).run.status, 'awaiting_approval');
-  assert.equal((await post(`/api/ai/runs/${id}/approve`, { jobs: plan })).status, 200);
+  assert.equal((await post(`/api/ai/runs/${id}/approve`, { jobs: plan.map(({ readOnly, context, ...legacy }) => legacy) })).status, 200);
   assert.match(await textPromise, /"type":"done"/);
   const saved = (await (await fetch(`${base}/api/ai/runs/${id}`)).json()).run;
   assert.equal(saved.status, 'done'); assert.equal(saved.bible, 'Persistent bible');
+  assert.equal(saved.jobs[0].readOnly, true); assert.deepEqual(saved.jobs[0].context, ['missing-context.md']);
   assert.deepEqual(saved.instructions, ['Keep compatibility']);
   assert.equal(saved.attachments[0].name, 'clarification.txt');
   assert.equal(saved.processes.length, 0);

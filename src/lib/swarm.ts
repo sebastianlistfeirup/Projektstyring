@@ -17,6 +17,8 @@ export interface SwarmSubagent {
 export interface SwarmJob {
   review?: { serviceId: string; commit: string; score: number; minimumScore: number; note: string; status: string; examinedFiles: string[]; findings: { severity: string; file: string; message: string }[] };
   repairFor?: number;
+  readOnly?: boolean;
+  context?: string[];
   contextDocuments?: { path: string; status: string; bytes?: number; sha256?: string; reason?: string }[];
   actions?: { id: string; kind: string; label: string; status: 'running' | 'done' | 'error'; detail: string; at: number }[];
   id: string;

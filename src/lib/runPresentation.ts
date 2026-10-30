@@ -1,3 +1,4 @@
+import { normalizePhase } from '../../shared/ai-plan.mjs';
 import type { SwarmJob, SwarmRun } from './swarm';
 
 export const runLabels: Record<string, string> = {
@@ -27,7 +28,7 @@ export function presentRun(raw: SwarmRun): SwarmRun {
     notes: raw.notes ?? [],
     jobs: (raw.jobs ?? []).map(job => {
       const result = results.find(r => r.jobId === job.id);
-      return { ...job, dependsOn: job.dependsOn ?? [], status: job.status ?? 'interrupted',
+      return { ...job, phase: normalizePhase(job.phase), dependsOn: job.dependsOn ?? [], status: job.status ?? 'interrupted',
         startedAt: timestamp(job.startedAt), finishedAt: timestamp(job.finishedAt),
         notes: job.notes ?? [], liveText: job.liveText ?? '', deltaCount: job.deltaCount ?? 0,
         lastDeltaAt: timestamp(job.lastDeltaAt), text: result?.text ?? job.text ?? '',

@@ -162,6 +162,17 @@ test('failed code is preserved separately; independent jobs see the clean base',
   assert.equal(git(source, 'show', 'orbit-attempt/test/a:game.txt'), 'broken');
 });
 
+test('English production jobs cannot claim repository execution through a text-only provider', async () => {
+  const dirs = fixture(), source = join(dirs.cwd, 'source'); mkdirSync(source);
+  const git = (...args) => execFileSync('git', args, { cwd: source, encoding: 'utf8' });
+  git('init', '-q'); writeFileSync(join(source, 'game.txt'), 'original'); git('add', '.');
+  git('-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'base');
+  await start(dirs, { repository: { source }, predefinedJobs: [{ ...job('a', 'Implement'), phase: 'production', serviceId: 'qwen' }] });
+  const run = readRun(dirs, 'test');
+  assert.equal(run.status, 'error'); assert.match(run.jobs[0].error, /coding-agent med fil- og kommandoadgang/);
+  assert.equal(run.results.length, 0); assert.equal(readFileSync(join(source, 'game.txt'), 'utf8'), 'original');
+});
+
 test('actual runtime verifies repository, blocks failed checks and detects mutation', async () => {
   for (const mode of ['pass', 'fail', 'mutate']) {
     const dirs = fixture(), source = join(dirs.cwd, 'source'); mkdirSync(source);

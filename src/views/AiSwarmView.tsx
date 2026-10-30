@@ -1,3 +1,4 @@
+import { AI_PHASES, normalizePhase, removePlanJob } from '../../shared/ai-plan.mjs';
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   Activity,
@@ -46,7 +47,7 @@ import {
   type SwarmRun,
 } from '../lib/swarm';
 import {
-  approvePlan,
+  approvePlanResult,
   cancelRun,
   deleteTemplate,
   deleteTrigger,
@@ -73,7 +74,7 @@ import { presentRun, timestamp } from '../lib/runPresentation';
 import { AnalysisPanel, CompareRunsPanel, CopyDeliverableButton, JudgePanel, MiniMap, RunActionsBar } from './AiSwarmExtras';
 
 const BASE_URL = 'http://127.0.0.1:4310';
-const PHASES = ['concept', 'design', 'prototype', 'production', 'testing', 'polish', 'release'];
+const PHASES = AI_PHASES;
 
 const SERVICE_HEX: Record<string, string> = {
   emerald: '#34d399',
@@ -720,17 +721,19 @@ function RunControls({ run }: { run: SwarmRun }) {
 
 /* ================= godkendelse/redigering af plan (idé 1/2) ================= */
 
-interface PlanDraft { id: string; title: string; serviceId: string | null; phase: string; dependsOn: number[]; description: string; team?: boolean }
+interface PlanDraft { id: string; title: string; serviceId: string | null; phase: string; dependsOn: number[]; description: string; team?: boolean; readOnly?: boolean; context?: string[] }
 
 function ApprovalModal({ services, onClose }: { services: Record<string, AiServiceInfo> | null; onClose: () => void }) {
   const approval = useSwarm((s) => s.approval);
   const setApproval = useSwarm((s) => s.setApproval);
   const [draft, setDraft] = useState<PlanDraft[]>([]);
   const [ready, setReady] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (approval && !ready) {
-      setDraft(approval.jobs.map((j) => ({ id: j.id, title: j.title, serviceId: j.serviceId, phase: j.phase, dependsOn: [...(j.dependsOn ?? [])], description: j.description, team: j.team })));
+      setDraft(approval.jobs.map(j => ({ ...j, phase: normalizePhase(j.phase), dependsOn: [...(j.dependsOn ?? [])] })));
       setReady(true);
     }
     if (!approval) { setReady(false); onClose(); }
@@ -741,10 +744,24 @@ function ApprovalModal({ services, onClose }: { services: Record<string, AiServi
 
   const patch = (i: number, p: Partial<PlanDraft>) => setDraft((d) => d.map((x, xi) => (xi === i ? { ...x, ...p } : x)));
 
+  const remove = (index: number) => {
+    try { setDraft(removePlanJob(draft, index)); setError(''); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Jobbet kunne ikke fjernes.'); }
+  };
   const approve = async () => {
-    const jobs = draft.filter((j) => j.title.trim()).map((j, i) => ({ ...j, id: j.id || `job-${i}`, dependsOn: (j.dependsOn ?? []).filter((d) => d !== i && d < draft.length) }));
-    const ok = await approvePlan(approval.runId, jobs);
+    if (!draft.length || draft.some(job => !job.title.trim())) { setError('Alle jobs skal have en titel. Tomme jobs fjernes ikke automatisk.'); return; }
+    setBusy(true); setError('');
+    const result = await approvePlanResult(approval.runId, draft);
+    setBusy(false);
+    if (result.ok) { setApproval(null); onClose(); }
+    else setError(result.reason ?? 'Planen kunne ikke godkendes.');
+  };
+  const cancel = async () => {
+    setBusy(true); setError('');
+    const ok = await cancelRun(approval.runId);
+    setBusy(false);
     if (ok) { setApproval(null); onClose(); }
+    else setError('Stop kunne ikke bekræftes. Kontrollér forbindelsen.');
   };
 
   const serviceOpts = (current: string | null) => {
@@ -755,28 +772,28 @@ function ApprovalModal({ services, onClose }: { services: Record<string, AiServi
   };
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center p-4" role="dialog" aria-modal>
+    <div className="fixed inset-0 z-50 grid place-items-center p-4" role="dialog" aria-modal aria-label="Gennemgå jobplan">
       <div className="absolute inset-0 bg-zinc-950/70 backdrop-blur-sm" />
       <div className="glass-panel animate-fade-in relative max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-3xl p-5">
         <h3 className="text-base font-bold flex items-center gap-2">
           <Check size={16} className="text-emerald-400" /> {t('swarm.approvalTitle')}
         </h3>
         <p className="text-[11px] opacity-55 mt-1 mb-3">{t('swarm.approvalHint')}</p>
-        <div className="space-y-2">
+        <fieldset disabled={busy} className="space-y-2">
           {draft.map((j, i) => (
-            <div key={j.id || i} className="rounded-2xl border border-white/10 bg-black/15 dark:bg-black/25 p-2.5 space-y-1.5">
+            <div key={j.id || i} role="group" aria-label={`Planjob ${i + 1}`} className="rounded-2xl border border-white/10 bg-black/15 dark:bg-black/25 p-2.5 space-y-1.5">
               <div className="flex gap-1.5">
-                <input value={j.title} onChange={(e) => patch(i, { title: e.target.value })} className="flex-1 rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[12px] outline-none focus:border-indigo-400/50" placeholder={t('swarm.jobTitle')} />
-                <button onClick={() => setDraft((d) => d.filter((_, xi) => xi !== i))} className="rounded-lg p-1.5 opacity-40 hover:opacity-100 hover:text-rose-400 transition" title={t('ai.delete')}>
+                <input aria-label="Jobtitel" value={j.title} onChange={(e) => patch(i, { title: e.target.value })} className="flex-1 rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[12px] outline-none focus:border-indigo-400/50" placeholder={t('swarm.jobTitle')} />
+                <button aria-label={`Fjern job ${i + 1}`} onClick={() => remove(i)} className="rounded-lg p-1.5 opacity-40 hover:opacity-100 hover:text-rose-400 transition" title={t('ai.delete')}>
                   <Trash2 size={13} />
                 </button>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                <select value={j.serviceId ?? ''} onChange={(e) => patch(i, { serviceId: e.target.value || null })} className="rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none">
+                <select aria-label="Tjeneste" value={j.serviceId ?? ''} onChange={(e) => patch(i, { serviceId: e.target.value || null })} className="rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none">
                   <option value="">—</option>
                   {serviceOpts(j.serviceId)}
                 </select>
-                <select value={j.phase} onChange={(e) => patch(i, { phase: e.target.value })} className="rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none">
+                <select aria-label="Fase" value={j.phase} onChange={(e) => patch(i, { phase: e.target.value })} className="rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none">
                   {PHASES.map((p) => <option key={p} value={p}>{t(`ai.phase.${p}`) === `ai.phase.${p}` ? p : t(`ai.phase.${p}`)}</option>)}
                 </select>
                 <label className="flex items-center gap-1 text-[10px] opacity-60 px-1">
@@ -784,22 +801,26 @@ function ApprovalModal({ services, onClose }: { services: Record<string, AiServi
                   {t('swarm.team')}
                 </label>
               </div>
-              <textarea value={j.description} onChange={(e) => patch(i, { description: e.target.value })} rows={2} className="w-full rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none focus:border-indigo-400/50 resize-none" placeholder={t('ai.descriptionPlaceholder')} />
+              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={j.readOnly === true} onChange={e => patch(i, { readOnly: e.target.checked })} />Kun læsning · må ikke ændre repository</label>
+              {!!j.context?.length && <p className="text-[11px] opacity-60 break-all">Kontekstfiler: {j.context.join(', ')}</p>}
+              {draft.length > 1 && <details className="text-xs"><summary className="cursor-pointer opacity-70">Afhænger af {j.dependsOn.length} jobs</summary><div className="flex flex-col gap-1 mt-2">{draft.map((other, index) => index !== i && <label key={other.id} className="flex items-center gap-2"><input type="checkbox" checked={j.dependsOn.includes(index)} onChange={e => patch(i, { dependsOn: e.target.checked ? [...j.dependsOn, index] : j.dependsOn.filter(value => value !== index) })} />{index + 1}. {other.title || 'Uden titel'}</label>)}</div></details>}
+              <textarea aria-label="Jobbeskrivelse" value={j.description} onChange={(e) => patch(i, { description: e.target.value })} rows={2} className="w-full rounded-lg bg-black/30 border border-white/10 px-2 py-1 text-[11px] outline-none focus:border-indigo-400/50 resize-none" placeholder={t('ai.descriptionPlaceholder')} />
             </div>
           ))}
-        </div>
+        </fieldset>
         <button
-          onClick={() => setDraft((d) => [...d, { id: `job-${d.length}`, title: '', serviceId: null, phase: 'produktion', dependsOn: [], description: '' }])}
+          disabled={busy} onClick={() => setDraft((d) => [...d, { id: `job-${crypto.randomUUID()}`, title: '', serviceId: null, phase: 'production', dependsOn: [], description: '' }])}
           className="mt-2 rounded-xl border border-dashed border-white/15 px-3 py-1.5 text-[11px] opacity-60 hover:opacity-100 transition flex items-center gap-1"
         >
           <PlusIcon /> {t('swarm.addJob')}
         </button>
+        {error && <p role="alert" className="mt-3 text-xs text-rose-500">{error}</p>}
         <div className="mt-4 flex items-center gap-2">
-          <button onClick={() => { setApproval(null); void cancelRun(approval.runId); onClose(); }} className="rounded-xl border border-rose-400/30 text-rose-300 px-3 py-2 text-[11px] hover:bg-rose-400/10 transition">
+          <button disabled={busy} onClick={() => void cancel()} className="rounded-xl border border-rose-400/30 text-rose-300 px-3 py-2 text-[11px] hover:bg-rose-400/10 transition">
             {t('swarm.cancelRun')}
           </button>
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={approve} className="btn-primary rounded-xl px-4 py-2 text-[12px] flex items-center gap-1.5">
+            <button disabled={busy} onClick={approve} className="btn-primary rounded-xl px-4 py-2 text-[12px] flex items-center gap-1.5">
               <Check size={13} /> {t('swarm.approve')}
             </button>
           </div>
@@ -1111,7 +1132,7 @@ export function AiSwarmView() {
   const eta = active && avg && remaining > 0 ? remaining * avg : null;
 
   const phaseStats = useMemo(() => PHASES.map((p) => {
-    const inPhase = jobs.filter((j) => j.phase === p);
+    const inPhase = jobs.filter((j) => normalizePhase(j.phase) === p);
     return { phase: p, total: inPhase.length, done: inPhase.filter((j) => j.status === 'done').length };
   }), [jobs]);
 

@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync, readFileSync, statSync, readdirSync, openSync
 import { join } from 'node:path';
 import { writeAtomicJson } from './atomic-json.mjs';
 import { saveRunSummary } from './ai-history.mjs';
+import { AI_PHASES, normalizePhase } from '../shared/ai-plan.mjs';
 
 export const TERMINAL = new Set(['done', 'error', 'partial', 'cancelled', 'blocked', 'interrupted']);
 
@@ -16,10 +17,13 @@ export function validatePlan(input) {
     if (!/^[a-zA-Z0-9_-]{1,100}$/.test(id) || ids.has(id)) throw new Error('Job-id skal være entydigt og uden stitegn.');
     ids.add(id);
     if (!String(j.title ?? '').trim()) throw new Error(`Job ${i + 1} mangler en titel.`);
+    const phase = normalizePhase(j.phase);
+    if (!AI_PHASES.includes(phase)) throw new Error(`Job ${id} har en ukendt fase.`);
+    for (const field of ['readOnly', 'team']) if (j[field] !== undefined && typeof j[field] !== 'boolean') throw new Error(`Job ${id}: ${field} skal være sand eller falsk.`);
     if (!Array.isArray(j.dependsOn ?? [])) throw new Error(`Job ${id} har ugyldige afhængigheder.`);
     const dependsOn = [...new Set(j.dependsOn ?? [])];
     if (dependsOn.some(d => !Number.isInteger(d) || d < 0 || d >= input.length || d === i)) throw new Error(`Job ${id} har en ugyldig afhængighed.`);
-    return { ...j, id, title: String(j.title).trim(), description: String(j.description ?? ''), dependsOn };
+    return { ...j, id, phase, title: String(j.title).trim(), description: String(j.description ?? ''), dependsOn };
   });
   const visited = new Set(), visiting = new Set();
   function visit(i) {

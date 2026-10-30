@@ -31,6 +31,7 @@ test.beforeAll(async ({ request }) => {
   const fake = join(root, 'fake.mjs');
   writeFileSync(fake, `import fs from 'node:fs'; let p=process.argv.at(-1); const file=p.match(/UTF-8-filen (.*)\\. Filen indeholder/); if(file) p=fs.readFileSync(file[1],'utf8');
 if(p.includes('PLANLÆGNINGSFASE')) console.log(JSON.stringify({jobs:[{title:'Verificeret rettelse',service:'codex',phase:'produktion',dependsOn:[],description:p.includes('FAIL_MARKER')?'FAIL_MARKER':'Ret game.txt efter biblen'}]}));
+else if(p.includes('READ_ONLY_PLAN')) console.log('Read-only inspection completed');
 else if(p.includes('FAIL_MARKER')) { console.error('Reproduced test failure'); process.exit(9); }
 else if(p.includes('REPAIR_TEST')&&!p.includes('RETTELSE EFTER FAKTISK TESTFEJL')) { fs.writeFileSync('game.txt','broken'); console.log('First implementation requires a test repair'); }
 else if(p.includes('"orbitProjectPlan"')) console.log(JSON.stringify({orbitProjectPlan:{version:1,releaseGoal:'En stabil save/load-cyklus',summary:'Et afgrænset restarbejde',firstMilestone:'Gem og indlæs en kampagne',unknowns:['Gameplay skal afprøves manuelt'],tasks:[{id:'save',title:'Verificér save-format',description:'Bevar kompatibilitet',priority:'high',scope:'version1',acceptanceCriteria:['Data bevares'],verification:['Kør save/load-test'],evidence:['game.txt'],dependsOn:[]}]}}));
@@ -518,4 +519,43 @@ test('run history searches, filters and pages without fetching full deliveries u
   await page.setViewportSize({ width: 390, height: 844 });
   await history.scrollIntoViewIfNeeded();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+
+test('plan editing retains read-only context, dependency identities and visible validation errors', async ({ page, request }) => {
+  await setup(page);
+  await page.evaluate(async () => {
+    await fetch('http://127.0.0.1:4310/api/ai/orchestrate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      goal: 'READ_ONLY_PLAN', pauseAfterPlan: true, jobs: [
+        { id: 'spare', title: 'Fjernbart job', serviceId: 'codex', phase: 'design', description: 'READ_ONLY_PLAN', dependsOn: [], readOnly: true },
+        { id: 'read', title: 'Læs reglerne', serviceId: 'codex', phase: 'koncept', description: 'READ_ONLY_PLAN', dependsOn: [], readOnly: true, context: ['missing-context.md'] },
+        { id: 'use', title: 'Sammenhold reglerne', serviceId: 'codex', phase: 'test', description: 'READ_ONLY_PLAN', dependsOn: [1], readOnly: true },
+      ],
+    }) });
+  });
+  await page.goto('/#/swarm');
+  const modal = page.getByRole('dialog', { name: 'Gennemgå jobplan' });
+  await expect(modal).toBeVisible();
+  await modal.getByRole('button', { name: 'Fjern job 1', exact: true }).click();
+  const first = modal.getByRole('group', { name: 'Planjob 1', exact: true });
+  const second = modal.getByRole('group', { name: 'Planjob 2', exact: true });
+  await expect(first.getByLabel('Kun læsning', { exact: false })).toBeChecked();
+  await expect(first).toContainText('missing-context.md');
+  await expect(first.getByLabel('Fase', { exact: true })).toHaveValue('concept');
+  await modal.getByRole('button', { name: 'Fjern job 1', exact: true }).click();
+  await expect(modal.getByRole('alert')).toContainText('Sammenhold reglerne afhænger');
+  await second.getByText('Afhænger af 1 jobs', { exact: true }).click();
+  await expect(second.getByRole('checkbox', { name: '1. Læs reglerne', exact: true })).toBeChecked();
+  await first.getByText('Afhænger af 0 jobs', { exact: true }).click();
+  await first.getByRole('checkbox', { name: '2. Sammenhold reglerne', exact: true }).check();
+  await modal.getByRole('button', { name: 'Godkend og kør', exact: false }).click();
+  await expect(modal.getByRole('alert')).toContainText('cirkulær afhængighed');
+  await first.getByRole('checkbox', { name: '2. Sammenhold reglerne', exact: true }).uncheck();
+  await modal.getByRole('button', { name: 'Godkend og kør', exact: false }).click();
+  await expect(modal).not.toBeVisible();
+  await expect.poll(async () => (await (await request.get(`${base}/api/ai/swarm`)).json()).run?.status).toBe('done');
+  const run = (await (await request.get(`${base}/api/ai/swarm`)).json()).run;
+  expect(run.jobs.map((job: { id: string }) => job.id)).toEqual(['read', 'use']);
+  expect(run.jobs[1].dependsOn).toEqual([0]); expect(run.jobs[0].readOnly).toBe(true);
+  expect(run.jobs[0].context).toEqual(['missing-context.md']);
 });
