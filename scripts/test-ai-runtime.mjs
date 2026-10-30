@@ -180,4 +180,41 @@ test('bounded verification repair uses actual failing output and repeats the sam
   }
 });
 
+
+
+
+test('independent review is tied to a commit and rejects weak scores, serious findings and reviewer writes', async () => {
+  for (const mode of ['pass', 'low', 'major', 'mutate']) {
+    const dirs = fixture(), source = join(dirs.cwd, 'source'), agent = join(dirs.cwd, 'review-agent.mjs'); mkdirSync(source);
+    const git = (...args) => execFileSync('git', args, { cwd: source, encoding: 'utf8' });
+    git('init', '-q'); writeFileSync(join(source, 'game.txt'), 'original'); git('add', '.');
+    git('-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'base');
+    writeFileSync(agent, `import fs from 'node:fs'; let p=process.argv.at(-1); const f=p.match(/UTF-8-filen (.*)\\. Filen indeholder/); if(f) p=fs.readFileSync(f[1],'utf8'); if(p.includes('uafhængig reviewer')) { if(fs.readFileSync('game.txt','utf8')!=='fixed') process.exit(4); if('${mode}'==='mutate') fs.writeFileSync('game.txt','reviewer-change'); console.log(JSON.stringify({score:'${mode}'==='low'?7:9,note:'Checked actual game file',examinedFiles:['game.txt'],findings:'${mode}'==='major'?[{severity:'major',file:'game.txt',message:'Missing integration'}]:[]})); } else { fs.writeFileSync('game.txt','fixed'); console.log('Implemented game file'); }`);
+    const provider = { cmd: process.execPath, cliTemplate: `"${agent}" {prompt}`, billingMode: 'included', noExtraCharges: true };
+    const localCfg = { aiProviders: { codex: provider, claude: provider }, aiPrefs: { selfHeal: false, autoJudge: true } };
+    await start(dirs, { cfg: localCfg, repository: { source }, predefinedJobs: [job('a', 'Implement')] });
+    const run = readRun(dirs, 'test');
+    assert.equal(run.status, mode === 'pass' ? 'done' : 'error', JSON.stringify(run.jobs));
+    if (mode === 'pass') {
+      assert.equal(run.jobs[0].review.minimumScore, 8); assert.equal(run.jobs[0].review.serviceId, 'claude');
+      assert.equal(run.results[0].commit, run.jobs[0].review.commit);
+      assert.deepEqual(run.jobs[0].review.examinedFiles, ['game.txt']);
+      assert.equal(run.processes.length, 0);
+    } else if (mode === 'mutate') assert.match(run.jobs[0].error, /Reviewer ændrede/);
+    else assert.equal(run.jobs[0].review.status, 'blocked');
+    assert.equal(readFileSync(join(source, 'game.txt'), 'utf8'), 'original');
+  }
+});
+
+
+
+
+test('required review cannot silently disappear when no independent service is available', async () => {
+  const dirs = fixture();
+  await start(dirs, { cfg: { ...cfg, aiPrefs: { selfHeal: false, autoJudge: true } }, predefinedJobs: [job('a', 'Implement')] });
+  const run = readRun(dirs, 'test');
+  assert.equal(run.status, 'error'); assert.match(run.jobs[0].error, /ingen anden coding-tjeneste/);
+  assert.equal(run.results.length, 0);
+});
+
 test('cleanup leaves no active run', () => { assert.equal(activeRuns.size, 0); assert.equal(swarmState.active, null); globalThis.fetch = originalFetch; });

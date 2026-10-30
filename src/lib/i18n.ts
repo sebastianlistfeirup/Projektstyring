@@ -613,8 +613,8 @@ const da = {
   'ai.runPipeline': 'Kør pipeline',
   'ai.runPipelineHint': 'Sender alle kø-jobs til AI-motoren, som eksekverer dem i rækkefølge via de tilknyttede tjenester',
   // 30-ideer-pakken: chat
-  'chat.autoJudge': 'Kvalitets-dommer',
-  'chat.autoJudgeHint': 'En anden tjeneste reviewer leverancen. En lav score blokerer jobbet; modelreview erstatter ikke kørte tests.',
+  'chat.autoJudge': 'Kræv uafhængigt modelreview',
+  'chat.autoJudgeHint': 'En anden tilsluttet coding-tjeneste skal gennemgå leverancen. Væsentlige fund, lav score eller manglende reviewer blokerer jobbet. Modelreview erstatter ikke kørte tests.',
   'chat.unavailable': 'Utilgængelige',
   'chat.suggestPlan': 'Foreslå plan',
   'chat.suggestPlanHint': 'Lad orkestratoren foreslå jobs, før du sender — rediger dem og brug planen',
@@ -1287,8 +1287,8 @@ const en: Record<DictKey, string> = {
   'ai.runPipeline': 'Run pipeline',
   'ai.runPipelineHint': 'Sends all queued jobs to the AI engine, which executes them in order via the assigned services',
   // 30-ideas package: chat
-  'chat.autoJudge': 'Quality judge',
-  'chat.autoJudgeHint': 'Another service reviews each delivery. A low score blocks the job; model review does not replace executed tests.',
+  'chat.autoJudge': 'Require independent model review',
+  'chat.autoJudgeHint': 'Another connected coding service must review the delivery. Major findings, a low score or an unavailable reviewer block the job. Model review does not replace executed tests.',
   'chat.unavailable': 'Unavailable',
   'chat.suggestPlan': 'Suggest plan',
   'chat.suggestPlanHint': 'Let the orchestrator suggest jobs before you send — edit them and use the plan',

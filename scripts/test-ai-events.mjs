@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { agentEvents } from '../server/ai-events.mjs';
-import { chatCli, cliArguments, inspectCliInstallation, setSecretsDir } from '../server/ai-services.mjs';
+import { chatCli, cliArguments, inspectCliInstallation, runChat, setSecretsDir } from '../server/ai-services.mjs';
 import { nativeCliOptions } from '../server/ai-cli-options.mjs';
 import { serviceCapabilities } from '../server/ai-capabilities.mjs';
 
@@ -101,4 +101,15 @@ test('CLI reads final JSON line and callback failures terminate without crashing
   assert.deepEqual(messages, ['æøå']);
   writeFileSync(script, `setInterval(()=>{},100);`);
   await assert.rejects(chatCli({ cmd: process.execPath, cliTemplate: `"${script}" {prompt}`, prompt: 'test', cwd: root, onProcess: p => { if (!p.finished) throw new Error('Disk full'); } }), /Disk full/);
+});
+
+
+test('separate native calls cannot overwrite each others tool or subagent events', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-event-ids-'));
+  writeFileSync(join(root, 'exec'), `console.log(JSON.stringify({type:'item.completed',item:{id:'item_0',type:'command_execution',command:'test',exit_code:0}})); console.log(JSON.stringify({type:'item.started',item:{type:'collab_tool_call',tool:'spawn_agent',receiver_thread_ids:['child_0']}}));`);
+  const cfg = { aiProviders: { codex: { cmd: process.execPath, billingMode: 'included', noExtraCharges: true } } };
+  const actions = [], children = [];
+  for (let i = 0; i < 2; i++) await runChat({ serviceId: 'codex', messages: [{ role: 'user', text: 'Task' }], cfg, dirs: { runs: root, cwd: root }, cwd: root, onAction: action => actions.push(action), onSubagent: child => children.push(child) });
+  assert.equal(actions.length, 2); assert.notEqual(actions[0].id, actions[1].id);
+  assert.equal(children.length, 2); assert.notEqual(children[0].subId, children[1].subId);
 });

@@ -91,7 +91,7 @@ export function aiCfg(cfg) {
   }
   return {
     providers,
-    prefs: { allowPaidApis: false, orchestrator: 'claude', selfHeal: true, ...(cfg.aiPrefs ?? {}) },
+    prefs: { allowPaidApis: false, orchestrator: 'claude', selfHeal: true, minimumReviewScore: 8, ...(cfg.aiPrefs ?? {}) },
   };
 }
 
@@ -611,6 +611,7 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
       ? cliAccessDirectories(cwd ? messages.map(m => ({ attachments: m.attachments })) : messages) : [];
     if (useDefaultTemplate && contextPath) accessDirs.push(contextDir);
     const native = useDefaultTemplate ? nativeCliOptions(serviceId, { readOnly, accessDirs, contextDir, model: p.model }) : { args: [], jsonl: false };
+    const callId = randomUUID().slice(0, 12);
     await chatCli({
       cmd: p.cmd ?? svc.cmd,
       cliTemplate: template,
@@ -621,7 +622,7 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
       claude: serviceId === 'claude',
       onDelta: delta,
       onProcess,
-      onEvent: native.jsonl ? agentEvents(serviceId, { onText: delta, onSubagent, onAction }) : undefined,
+      onEvent: native.jsonl ? agentEvents(serviceId, { onText: delta, onSubagent: event => onSubagent?.({ ...event, subId: `${callId}:${event.subId}` }), onAction: action => onAction?.({ ...action, id: `${callId}:${action.id}` }) }) : undefined,
       signal,
     });
   } else if (svc.kind === 'local') {

@@ -4,6 +4,7 @@ export function agentEvents(provider, { onText, onAction, onSubagent }) {
   const tools = new Map();
   const action = (id, kind, label, status, detail = '') => onAction?.({ id, kind, label: String(label).slice(0, 300), status, detail: String(detail).slice(-3000), at: Date.now() });
   const beginTool = (id, name, input = {}) => {
+    input = input && typeof input === 'object' ? input : {};
     const sub = ['Task', 'Agent', 'AgentSwarm'].includes(name);
     const command = ['Bash', 'run_shell_command', 'shell'].includes(name);
     const label = sub ? input.description ?? 'Underagent' : command ? input.command ?? name : input.file_path ?? input.path ?? name;

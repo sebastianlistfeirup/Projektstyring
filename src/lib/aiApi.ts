@@ -30,7 +30,7 @@ export interface AiServiceInfo {
 export interface AiServicesResponse {
   ok: boolean;
   services: Record<string, AiServiceInfo>;
-  prefs: { allowPaidApis: boolean; orchestrator: string; autoJudge?: boolean; selfHeal?: boolean };
+  prefs: { allowPaidApis: boolean; orchestrator: string; autoJudge?: boolean; selfHeal?: boolean; minimumReviewScore?: number };
 }
 
 export async function fetchAiServices(): Promise<AiServicesResponse | null> {
@@ -48,7 +48,7 @@ export interface SavePrefsResult {
   reason?: string;
 }
 
-export async function saveAiPrefs(prefs: Partial<{ allowPaidApis: boolean; orchestrator: string; autoJudge: boolean; selfHeal: boolean }>): Promise<SavePrefsResult> {
+export async function saveAiPrefs(prefs: Partial<{ allowPaidApis: boolean; orchestrator: string; autoJudge: boolean; selfHeal: boolean; minimumReviewScore: number }>): Promise<SavePrefsResult> {
   try {
     const r = await fetch(`${BASE}/api/ai/prefs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(prefs) });
     const text = await r.text();

@@ -28,3 +28,14 @@ test('job context refuses symlinks outside the checkout', { skip: process.platfo
   assert.match(context.documents[0].reason, /link peger udenfor|link peger uden for/);
   assert.ok(!context.messages[0].text.includes('PRIVATE_SYMLINK_DATA'));
 });
+
+
+test('review validation requires evidence and blocks serious findings independently of score', async () => {
+  const { validateReview, minimumReviewScore } = await import('../server/ai-review.mjs');
+  assert.equal(minimumReviewScore({}), 8);
+  assert.throws(() => validateReview({ score: '9', note: 'Claim' }), /gyldig score/);
+  assert.throws(() => validateReview({ score: 9, note: 'Claim' }, { requireFiles: true }), /undersøgte filer/);
+  assert.equal(validateReview({ score: 9, note: 'Critical issue', findings: [{ severity: 'critical', message: 'Data loss', file: 'save.gd' }] }).status, 'blocked');
+  assert.equal(validateReview({ score: 7, note: 'Incomplete' }).status, 'blocked');
+  assert.equal(validateReview({ score: 8, note: 'Reviewed', examinedFiles: ['game.gd'], findings: [] }, { requireFiles: true }).status, 'passed');
+});

@@ -6,6 +6,7 @@ import { jobStages, runLabels, waitingReason } from '../lib/runPresentation';
 import ChatMarkdown from './ChatMarkdown';
 import RunContextPanel from './RunContextPanel';
 import VerificationHistory from './VerificationHistory';
+import JobReview from './JobReview';
 
 const tones: Record<string, string> = {
   running: 'border-indigo-400 bg-indigo-500/10', done: 'border-emerald-500/40 bg-emerald-500/5',
@@ -76,6 +77,7 @@ export default function OrbitWorkMap({ run, services, connected, historical = fa
           {selected.description && <details className="text-xs"><summary className="cursor-pointer opacity-70">Arbejdsbeskrivelse</summary><p className="whitespace-pre-wrap mt-2 opacity-70">{selected.description}</p></details>}
           {!!selected.contextDocuments?.length && <details className="text-xs"><summary className="cursor-pointer opacity-70">Filer indsat som kontekst</summary><ul className="mt-2 space-y-2">{selected.contextDocuments.map((doc, i) => <li key={i}><p className="font-mono break-all">{doc.path}</p><p className="opacity-60">{doc.status === 'included' ? `Hele filen · ${doc.bytes} bytes` : doc.reason}</p></li>)}</ul></details>}
           {!!selected.subagents?.length && <div><h4 className="text-xs font-semibold flex items-center gap-1.5"><Bot size={14} />Underagenter</h4><ul className="mt-2 border-l border-indigo-400/30 pl-3 space-y-2">{selected.subagents.map(agent => <li key={agent.subId} className="text-xs"><p className="font-medium">{agent.name} · {runLabels[agent.status]}</p><p className="opacity-55">{clock(agent.startedAt)}{agent.finishedAt ? ` → ${clock(agent.finishedAt)}` : ''}</p>{agent.text && <p className="mt-1 opacity-70 whitespace-pre-wrap">{agent.text}</p>}</li>)}</ul></div>}
+          <JobReview job={selected} services={services} />
           {selected.text && <details className="text-sm"><summary className="cursor-pointer flex items-center gap-2 text-xs font-semibold"><FileText size={14} />Leverance fra opgaven</summary><div className="mt-3 max-h-96 overflow-auto"><ChatMarkdown text={selected.text} /></div></details>}
           {!!selected.artifacts.length && <ul className="text-xs space-y-1">{selected.artifacts.map((artifact, i) => <li key={i}>{artifact.url && /^(https?:|\/)/.test(artifact.url) ? <a className="underline text-indigo-600 dark:text-indigo-300" href={artifact.url} target="_blank" rel="noreferrer">{artifact.name}</a> : artifact.name}</li>)}</ul>}
         </div>

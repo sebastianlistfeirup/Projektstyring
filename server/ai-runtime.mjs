@@ -6,6 +6,7 @@ import { validatePlan, executeGraph, runOutcome, saveRun } from './ai-state.mjs'
 import { validateProjectPlan, PROJECT_PLAN_FORMAT } from './project-plan.mjs';
 import { serviceCapabilities } from './ai-capabilities.mjs';
 import { loadJobContext } from './ai-job-context.mjs';
+import { minimumReviewScore, validateReview } from './ai-review.mjs';
 const execFileAsync = promisify(execFile);
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync } from 'fs';
 import { join } from 'path';
@@ -329,15 +330,15 @@ function buildRolesPlan({ goal, availability, bible }) {
 
 
 // ---- Kvalitets-dommer (auto-judge): scorer hver leverance mod opgaven ----
-const JUDGE_SCHEMA = `Svar KUN med JSON (intet andet): {"score":number(0-10),"note":string}`;
+const JUDGE_SCHEMA = `Svar KUN med JSON: {"score":number(0-10),"note":string,"examinedFiles":[string],"findings":[{"severity":"critical"|"major"|"minor"|"info","file":string,"message":string}]}`;
 
-async function judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs, signal }) {
-  const prompt = `Du er kvalitets-dommer for et AI-projekt.\nProjektmål: ${String(goal)}\n${bible ? `Bibel (stil/krav): ${String(bible)}\n` : ''}Job: ${job.title}\nOpgavebeskrivelse: ${String(job.description ?? '')}\n\nLeverancen:\n${String(text)}\n\nBedøm leverancen mod opgavebeskrivelsen: 0-10, hvor 6 er "accepterbar" og 8+ er "rigtig god". Giv én kort, konkret begrundelse på dansk. ${JUDGE_SCHEMA}`;
-  const raw = await runChat({ serviceId: judgeId, messages: [{ role: 'user', text: prompt }], cfg, dirs, signal, readOnly: true, cwd: dirs.cwd });
-  const m = raw.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error('Dommeren returnerede ikke JSON');
-  const j = JSON.parse(m[0]);
-  return { score: Math.max(0, Math.min(10, Number(j.score) || 0)), note: String(j.note ?? '').slice(0, 300) };
+async function judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs, signal, baseCommit, commit, requireFiles, onAction, onProcess }) {
+  const scope = (await execFileAsync('git', ['diff', '--stat', baseCommit, commit], { cwd: dirs.cwd, timeout: 10000 })).stdout;
+  const minimumScore = minimumReviewScore(aiCfg(cfg).prefs);
+  const prompt = `Du er uafhængig reviewer for et AI-projekt. Undersøg den faktiske leverance i kørselsmappen. Læs relevante ændrede filer og deres integrationer og tests; en overbevisende tekst er ikke bevis for korrekt kode. Du må ikke ændre filer eller udføre eksterne handlinger. Angiv kun filer, du faktisk har undersøgt. Testresultater udføres separat af Orbit; påstå ikke, at tests er kørt, hvis du ikke har evidens.\nProjektmål: ${String(goal)}\n${bible ? `Projektgrundlag:\n${String(bible)}\n` : ''}Job: ${job.title}\nOpgave: ${job.description ?? ''}\nCommit til review: ${commit}\nÆndringsoversigt:\n${scope || '(Ingen ændringer i versionsstyrede filer)'}\n\nLeverancens forklaring:\n${text}\n\nVurder korrekthed, integrationer, acceptkriterier og overholdelse af biblen. Minimumscore er ${minimumScore}/10. Kritiske og væsentlige fund (critical/major) blokerer også ved høj score. Hvis grundlaget er utilstrækkeligt, sig det tydeligt og giv ikke en bestået vurdering. ${JUDGE_SCHEMA}`;
+  const raw = await runChat({ serviceId: judgeId, messages: [{ role: 'user', text: prompt }], cfg, dirs, signal, readOnly: true, cwd: dirs.cwd, onAction, onProcess });
+  const parsed = parseJsonObject(raw, value => typeof value.score === 'number');
+  return { ...validateReview(parsed, { minimumScore, requireFiles }), serviceId: judgeId, commit };
 }
 
 // ---- live swarm-tilstand (deles til alle WS-klienter) ----------------------
@@ -431,7 +432,7 @@ function updateSwarm(run, obj) {
       if (j) { j.status = 'running'; j.notes = [...(j.notes ?? []).slice(-3), `Selvhealing: forsøger igen (${obj.attempt}. forsøg)`]; }
     } else if (obj.type === 'job_judged') {
       const j = run.jobs.find((x) => x.id === obj.jobId);
-      if (j) { j.score = typeof obj.score === 'number' ? obj.score : null; j.judgeNote = String(obj.note ?? ''); }
+      if (j) { j.score = typeof obj.score === 'number' ? obj.score : null; j.judgeNote = String(obj.note ?? ''); j.review = obj.review ?? null; }
     }
   } catch { /* swarm-tilstand er ikke kritisk */ }
 }
@@ -643,10 +644,13 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     };
 
     const baseCommit = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: handle.runDir })).stdout.trim();
+    let candidateCommit = null;
     try {
       const capabilities = serviceCapabilities(serviceById(job.serviceId) ?? { id: '' });
       if (run.repository && ['prototype', 'produktion', 'polering'].includes(job.phase) && !capabilities.repository && !capabilities.produces) throw new Error('Dette repository-job kræver en coding-agent med fil- og kommandoadgang.');
       const isMedia = ['meshy', 'elevenlabs', 'heygen'].includes(job.serviceId);
+      const judgeId = !isMedia && prefs.autoJudge !== false ? ['claude', 'kimi', 'gemini', 'codex', 'qwen-code'].find(id => id !== job.serviceId && availability[id]?.available) : null;
+      if (!isMedia && prefs.autoJudge !== false && !judgeId) throw new Error('Uafhængigt modelreview er krævet, men ingen anden coding-tjeneste er tilgængelig. Tilslut en reviewer eller fravælg kravet i AI-indstillingerne.');
       let text;
       let artifacts = [];
       if (isMedia) {
@@ -670,16 +674,28 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       // leverancen. Lav score blokerer; der ændres ikke kode bag det valgte tekstsvar.
       let score = null;
       let judgeNote = null;
-      if (!isMedia && prefs.autoJudge !== false && !job.team) {
-        const judgeId = ['claude', 'kimi', 'gemini', 'codex', 'qwen-code'].find((id) => id !== job.serviceId && availability[id]?.available);
+      if (!isMedia && prefs.autoJudge !== false) {
         if (judgeId) {
           try {
-            const judged = await judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs: { ...dirs, cwd: handle.runDir }, signal: handle.abort.signal });
+            if (job.readOnly) {
+              const dirty = (await execFileAsync('git', ['status', '--porcelain'], { cwd: handle.runDir })).stdout.trim();
+              const head = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: handle.runDir })).stdout.trim();
+              if (dirty || head !== baseCommit) throw new Error('Analysejobbet ændrede repository, selv om det kun måtte læse.');
+            }
+            candidateCommit = await gitCommit(handle.runDir, `Til review: ${job.title}`);
+            track({ type: 'job_status', jobId: job.id, status: `${serviceById(judgeId)?.name ?? judgeId} gennemgår det faktiske commit.` });
+            const judged = await judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs: { ...dirs, cwd: handle.runDir }, signal: handle.abort.signal, baseCommit, commit: candidateCommit, requireFiles: Boolean(run.repository && !job.readOnly),
+              onAction: action => track({ type: 'job_action', jobId: job.id, action: { ...action, label: `Review · ${action.label}` } }),
+              onProcess: process => track({ type: 'job_process', jobId: job.id, ...process }),
+            });
+            const changedByReview = (await execFileAsync('git', ['status', '--porcelain'], { cwd: handle.runDir })).stdout.trim();
+            const reviewHead = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: handle.runDir })).stdout.trim();
+            if (changedByReview || reviewHead !== candidateCommit) throw new Error('Reviewer ændrede arbejdsområdet. Review må kun læse; ændringerne kræver særskilt gennemgang.');
             score = judged.score;
             judgeNote = judged.note;
-            track({ type: 'job_judged', jobId: job.id, score, note: judgeNote, judge: judgeId });
-            if (judged.score < 6) {
-              throw new Error(`Leverancen kræver review: ${judged.score}/10 — ${judged.note}`);
+            track({ type: 'job_judged', jobId: job.id, score, note: judgeNote, judge: judgeId, review: judged });
+            if (judged.status !== 'passed') {
+              throw new Error(`Leverancen kræver rettelse: ${judged.score}/10 (krav ${judged.minimumScore}) — ${judged.findings.filter(f => ['critical', 'major'].includes(f.severity)).map(f => `${f.file}: ${f.message}`).join('; ') || judged.note}`);
             }
           } catch (e) {
             throw new Error(`Kvalitetskontrol ikke bestået: ${e.message}`);
@@ -693,9 +709,9 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       if (job.readOnly) {
         const dirty = (await execFileAsync('git', ['status', '--porcelain'], { cwd: handle.runDir })).stdout.trim();
         const head = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: handle.runDir })).stdout.trim();
-        if (dirty || head !== baseCommit) throw new Error('Analysejobbet ændrede repository, selv om det kun måtte læse. Ændringerne kræver separat gennemgang.');
+        if (dirty || head !== (candidateCommit ?? baseCommit)) throw new Error('Analysejobbet ændrede repository, selv om det kun måtte læse. Ændringerne kræver separat gennemgang.');
       }
-      const commit = await gitCommit(handle.runDir, job.title);
+      const commit = candidateCommit ?? await gitCommit(handle.runDir, job.title);
       doneText.set(job.id, text);
       const res = { jobId: job.id, title: job.title, serviceId: job.serviceId, phase: job.phase, text, artifacts, deliverable: fname, commit, verification: 'requires_review', score, judgeNote };
       results.push(res);

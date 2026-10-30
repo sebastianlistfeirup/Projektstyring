@@ -6,6 +6,7 @@ import { approvePlan, cancelRun, resumeRun, sendRunMessage } from '../lib/aiApi'
 import ProjectPlanReview from './ProjectPlanReview';
 import RunContextPanel from './RunContextPanel';
 import VerificationHistory from './VerificationHistory';
+import JobReview from './JobReview';
 
 const labels: Record<string, string> = { running: 'Arbejder', awaiting_approval: 'Afventer din planbeslutning', done: 'Leveret til gennemgang', error: 'Fejlet', blocked: 'Blokeret', partial: 'Delvist leveret', cancelled: 'Stoppet', interrupted: 'Afbrudt ved genstart', queued: 'I kø', skipped: 'Sprunget over' };
 
@@ -37,6 +38,7 @@ export default function OrbitRunPanel({ projectId }: { projectId?: string | null
         <div className="flex items-center gap-2">{j.status === 'done' ? <CheckCircle2 size={14} className="text-emerald-500" /> : j.status === 'running' ? <Activity size={14} className="text-indigo-400" /> : <Circle size={14} />}<strong>{j.title}</strong></div>
         <p className="opacity-70">{j.serviceId ?? 'Ingen tjeneste'} · {labels[j.status] ?? j.status}</p>
         {j.dependsOn.length > 0 && <p className="opacity-60">Afhænger af: {j.dependsOn.map(d => run.jobs[d]?.title ?? '?').join(', ')}</p>}
+        <JobReview job={j} />
         {j.error && <p className="text-rose-500">{j.error}</p>}
         {j.liveText && j.status === 'running' && <p className="line-clamp-2 opacity-60">{j.liveText}</p>}
         {!!j.actions?.length && <details open={j.status === 'running'}><summary className="cursor-pointer opacity-70">Værktøjer og filer · {j.actions.length}</summary><ol className="mt-2 space-y-2 border-l border-indigo-400/30 pl-2">{j.actions.slice(-8).map(a => <li key={a.id}><span className={a.status === 'error' ? 'text-rose-400' : a.status === 'running' ? 'text-indigo-400' : 'opacity-70'}>{a.status === 'running' ? 'I gang' : a.status === 'error' ? 'Fejl' : 'Afsluttet'} · {a.kind}</span><p className="font-mono break-all whitespace-pre-wrap">{a.label}</p>{a.detail && <details><summary className="cursor-pointer opacity-60">Resultat</summary><pre className="max-h-32 overflow-auto whitespace-pre-wrap">{a.detail}</pre></details>}</li>)}</ol></details>}

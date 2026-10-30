@@ -15,6 +15,7 @@ export interface SwarmSubagent {
 }
 
 export interface SwarmJob {
+  review?: { serviceId: string; commit: string; score: number; minimumScore: number; note: string; status: string; examinedFiles: string[]; findings: { severity: string; file: string; message: string }[] };
   repairFor?: number;
   contextDocuments?: { path: string; status: string; bytes?: number; sha256?: string; reason?: string }[];
   actions?: { id: string; kind: string; label: string; status: 'running' | 'done' | 'error'; detail: string; at: number }[];
@@ -347,7 +348,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
             ...cur,
             jobs: cur.jobs.map((j) =>
               j.id === id
-                ? { ...j, score: typeof evt.score === 'number' ? (evt.score as number) : null, judgeNote: String(evt.note ?? '') }
+                ? { ...j, score: typeof evt.score === 'number' ? (evt.score as number) : null, judgeNote: String(evt.note ?? ''), review: evt.review as SwarmJob['review'] }
                 : j,
             ),
           },
@@ -640,7 +641,7 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
         ...run,
         jobs: run.jobs.map((j) =>
           j.id === String(evt.jobId ?? '')
-            ? { ...j, score: typeof evt.score === 'number' ? (evt.score as number) : null, judgeNote: String(evt.note ?? '') }
+            ? { ...j, score: typeof evt.score === 'number' ? (evt.score as number) : null, judgeNote: String(evt.note ?? ''), review: evt.review as SwarmJob['review'] }
             : j,
         ),
       };
