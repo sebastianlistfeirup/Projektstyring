@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "scenario": "approval waits for an explicit decision",
+  "sourceHashes": {
+    "ai-runtime.mjs": "5c495f2d6595f5f25dd4aea3212d584d2ea3ec5de5d05c22d454f79896300cbf",
+    "ai-state.mjs": "5eecbd07fc1284e41250941736071bed145dc5fa2dc2f8e338b02a3f5685de18",
+    "ai-services.mjs": "14a6fdc53347bffe4ab630b8750ffb34c8735a9327b290506e668a570b02c12a"
+  },
+  "startedAt": "2026-10-30T11:58:20.521Z",
+  "durationMs": 5400062,
+  "samples": 1080,
+  "finalStatus": "done"
+}

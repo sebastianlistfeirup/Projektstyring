@@ -1385,7 +1385,7 @@ export function AiSwarmView() {
       )}
 
       {/* Sjældent brugte driftsfunktioner ligger bag en tydelig indgang. */}
-      <details className="rounded-xl border border-current/10 p-3"><summary className="cursor-pointer text-xs opacity-65">Automatisering, skabeloner og analyse</summary>
+      <details className="rounded-xl border border-zinc-200 dark:border-white/10 p-3"><summary className="cursor-pointer text-xs opacity-65">Automatisering, skabeloner og analyse</summary>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
         <TriggersPanel />
         <TemplatesPanel services={services} />

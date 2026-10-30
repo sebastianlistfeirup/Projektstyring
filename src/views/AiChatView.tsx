@@ -669,7 +669,7 @@ export function AiChatView() {
           ))}
         </div>
         <div className="flex-1" />
-        <details className="rounded-xl border border-current/10 p-3">
+        <details className="rounded-xl border border-zinc-200 dark:border-white/10 p-3">
           <summary className="cursor-pointer text-xs font-medium">Forbindelser · {availableCount} klar</summary>
           <div className="mt-3"><ConnectionPanel services={services} prefs={prefs} onChanged={refresh} /></div>
         </details>
@@ -677,7 +677,7 @@ export function AiChatView() {
 
       {/* hoved: beskeder + komponist */}
       <main className="flex-1 min-w-0 min-h-0 flex flex-col gap-3 overflow-y-auto pr-1 [&>*]:shrink-0">
-        <details className="lg:hidden rounded-xl border border-current/10 p-3 text-xs">
+        <details className="lg:hidden rounded-xl border border-zinc-200 dark:border-white/10 p-3 text-xs">
           <summary className="cursor-pointer font-medium">Samtaler og forbindelser</summary>
           <div className="mt-3 space-y-3">
             <CreateProjectChat onCreate={(projectId, id) => { setNewProjectId(projectId); setChatId(id); }} />

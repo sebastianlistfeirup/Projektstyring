@@ -4,7 +4,7 @@ import { verificationLabels } from '../lib/runPresentation';
 export default function VerificationHistory({ run }: { run: SwarmRun }) {
   const attempts = run.verificationHistory ?? [];
   if (attempts.length < 2) return null;
-  return <details className="rounded-xl border border-current/10 p-3 text-xs">
+  return <details className="rounded-xl border border-zinc-200 dark:border-white/10 p-3 text-xs">
     <summary className="cursor-pointer font-medium">Kontrolhistorik · {attempts.length} gennemløb</summary>
     <ol className="mt-3 space-y-3">{attempts.map(attempt => <li key={attempt.number} className="border-l-2 border-indigo-400/25 pl-3">
       <p className="font-medium">Kontrol {attempt.number}: {verificationLabels[attempt.status] ?? attempt.status}</p>

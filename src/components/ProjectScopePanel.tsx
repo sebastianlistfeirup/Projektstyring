@@ -9,7 +9,7 @@ export default function ProjectScopePanel({ project }: { project: Project }) {
   const included = tasks.filter(t => project.scopeTaskIds?.includes(t.id));
   const later = project.scopeTaskIds ? tasks.filter(t => !project.scopeTaskIds?.includes(t.id)) : [];
   const finished = included.filter(t => t.status === 'done').length;
-  return <details className="rounded-xl border border-current/10 p-3 text-xs">
+  return <details className="rounded-xl border border-zinc-200 dark:border-white/10 p-3 text-xs">
     <summary className="cursor-pointer font-medium">Versionens mål {project.scopeTaskIds ? `· ${finished}/${included.length} afsluttet · ${later.length} idéer uden for scope` : '· endnu ikke afgrænset'}</summary>
     <div className="mt-3 space-y-3">
       <label className="block space-y-1"><span>Hvad skal denne version kunne?</span><textarea className="input w-full" rows={2} value={goal} onChange={e => setGoal(e.target.value)} placeholder="En spiller kan starte en kampagne, gennemføre det aftalte spillerforløb og gemme/indlæse uden tab." /></label>

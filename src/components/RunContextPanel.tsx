@@ -6,7 +6,7 @@ export default function RunContextPanel({ run }: { run: SwarmRun }) {
   if (!manifest) return null;
   const bible = manifest.documents.find(doc => doc.kind === 'bible');
   const decisions = manifest.documents.filter(doc => doc.kind === 'decision');
-  return <details className="rounded-xl border border-current/10 p-3 text-xs">
+  return <details className="rounded-xl border border-zinc-200 dark:border-white/10 p-3 text-xs">
     <summary className="cursor-pointer font-medium"><BookOpen size={13} className="inline mr-2" />Anvendt projektgrundlag · {bible?.state === 'published' ? `bibelversion ${bible.version ?? 'ukendt'}` : bible?.state === 'draft' ? 'bibelkladde' : 'ingen bibel'} · {decisions.length} beslutninger</summary>
     <div className="mt-3 space-y-3">
       <p className="opacity-65">Grundlaget blev gemt {new Date(manifest.capturedAt).toLocaleString('da-DK')} og bevares ved genoptagelse. Senere dokumentændringer følger med i en ny kørsel.</p>

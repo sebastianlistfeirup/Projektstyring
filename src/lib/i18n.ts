@@ -28,7 +28,7 @@ const da = {
   'shell.search': 'Søg …',
   'shell.newTask': 'Ny opgave',
   'shell.footer':
-    'Data gemmes lokalt i browseren. Windows-notifikationer, Teams og eksport styres fra Integrationer-fanen.',
+    'Orbit gemmer lokalt. Med synkronisering gemmes arbejdsområdet også hos Companion. Backup og forbindelser findes under Integrationer.',
   'shell.workspace': 'Workspace',
   'shell.projects': 'Projekter',
   'shell.allProjects': 'Alle projekter',
@@ -720,7 +720,7 @@ const en: Record<DictKey, string> = {
   'shell.search': 'Search …',
   'shell.newTask': 'New task',
   'shell.footer':
-    'Data is stored locally in your browser. Windows notifications, Teams and export are managed from the Integrations tab.',
+    'Orbit stores data locally. With sync enabled, Companion also saves the workspace. Manage backups and connections in Integrations.',
   'shell.workspace': 'Workspace',
   'shell.projects': 'Projects',
   'shell.allProjects': 'All projects',

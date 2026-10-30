@@ -36,8 +36,8 @@ export default function OrbitWorkMap({ run, services, connected, historical = fa
   const live = !historical && ['running', 'awaiting_approval'].includes(run.status);
   const stale = live && (!run.heartbeatAt || now - run.heartbeatAt > 35_000);
   const subagents = run.jobs.flatMap(j => j.subagents ?? []);
-  return <section aria-label="Arbejdskort" className="rounded-2xl border border-current/10 bg-white/40 dark:bg-slate-950/30 overflow-hidden">
-    <div className="p-4 border-b border-current/10 flex flex-wrap items-start gap-3">
+  return <section aria-label="Arbejdskort" className="rounded-2xl border border-zinc-200 dark:border-white/10 bg-white/40 dark:bg-slate-950/30 overflow-hidden">
+    <div className="p-4 border-b border-zinc-200 dark:border-white/10 flex flex-wrap items-start gap-3">
       <div className="flex-1 min-w-48">
         <h2 className="font-semibold flex items-center gap-2"><GitBranch size={17} /> Fra opgave til dokumenteret resultat</h2>
         <p className="text-xs opacity-65 mt-1">Vælg en opgave for at følge dens værktøjer, afhængigheder og leverance.</p>
@@ -49,14 +49,14 @@ export default function OrbitWorkMap({ run, services, connected, historical = fa
       </div>
     </div>
     {serviceIds.length > 1 && <div role="group" aria-label="Fremhæv tjeneste" className="px-4 pt-3 flex flex-wrap gap-2">
-      {['all', ...serviceIds].map(id => <button key={id} aria-pressed={service === id} onClick={() => setService(id)} className={`rounded-full border px-3 py-1 text-xs ${service === id ? 'border-indigo-400 bg-indigo-500/15' : 'border-current/10 opacity-65'}`}>{id === 'all' ? 'Alle tjenester' : serviceName(services, id)}</button>)}
+      {['all', ...serviceIds].map(id => <button key={id} aria-pressed={service === id} onClick={() => setService(id)} className={`rounded-full border px-3 py-1 text-xs ${service === id ? 'border-indigo-400 bg-indigo-500/15' : 'border-zinc-200 dark:border-white/10 opacity-65'}`}>{id === 'all' ? 'Alle tjenester' : serviceName(services, id)}</button>)}
     </div>}
     {run.jobs.length === 0 ? <p className="p-6 text-sm opacity-65">Planlæggeren undersøger målet. Opgaverne vises, når planen er klar.</p> : <>
       <div className="overflow-x-auto p-4" role="region" aria-label="Opgavernes afhængigheder" tabIndex={0}>
         <div className="flex gap-6 min-w-fit items-start">
           {columns.map(stage => <div key={stage} className="w-60 shrink-0 space-y-3">
             <h3 className="text-[10px] uppercase tracking-widest opacity-50 flex items-center gap-2">Trin {stage + 1}<ArrowRight size={12} /></h3>
-            {run.jobs.map((job, index) => stages[index] !== stage ? null : <button key={job.id} aria-pressed={selected?.id === job.id} aria-label={`Opgave ${index + 1}: ${job.title}`} onClick={() => setSelectedId(job.id)} className={`text-left w-full p-3 rounded-xl border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-400 ${tones[job.status] ?? 'border-current/15 bg-black/[0.02]'} ${selected?.id === job.id ? 'ring-2 ring-indigo-400 ring-offset-2 ring-offset-transparent' : ''} ${service !== 'all' && service !== job.serviceId ? 'opacity-40' : ''}`}>
+            {run.jobs.map((job, index) => stages[index] !== stage ? null : <button key={job.id} aria-pressed={selected?.id === job.id} aria-label={`Opgave ${index + 1}: ${job.title}`} onClick={() => setSelectedId(job.id)} className={`text-left w-full p-3 rounded-xl border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-400 ${tones[job.status] ?? 'border-zinc-300 dark:border-white/[0.15] bg-black/[0.02]'} ${selected?.id === job.id ? 'ring-2 ring-indigo-400 ring-offset-2 ring-offset-transparent' : ''} ${service !== 'all' && service !== job.serviceId ? 'opacity-40' : ''}`}>
               <div className="flex items-center justify-between gap-2 text-[10px] mb-2"><span className="opacity-65">{String(index + 1).padStart(2, '0')} · {serviceName(services, job.serviceId)}</span><span className="font-medium">{runLabels[job.status]}</span></div>
               <div className="font-semibold text-sm leading-snug">{job.title}</div>
               <p className="text-xs opacity-65 mt-2 line-clamp-2 min-h-8">{waitingReason(job, run)}</p>
@@ -69,7 +69,7 @@ export default function OrbitWorkMap({ run, services, connected, historical = fa
           </div>)}
         </div>
       </div>
-      {selected && <div className="border-t border-current/10 p-4 grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6" role="region" aria-label="Valgt opgave">
+      {selected && <div className="border-t border-zinc-200 dark:border-white/10 p-4 grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6" role="region" aria-label="Valgt opgave">
         <div className="min-w-0 space-y-3">
           <div><p className="text-[10px] uppercase tracking-widest opacity-50">Opgave {selectedIndex + 1} · {serviceName(services, selected.serviceId)}</p><h3 className="font-semibold text-base mt-1">{selected.title}</h3></div>
           <p className={`text-sm ${selected.error ? 'text-rose-600 dark:text-rose-400' : 'opacity-70'}`}>{waitingReason(selected, run)}</p>
@@ -84,7 +84,7 @@ export default function OrbitWorkMap({ run, services, connected, historical = fa
         </div>
         <div className="min-w-0">
           <h4 className="text-xs font-semibold flex items-center gap-2"><Activity size={14} />Seneste værktøjshændelser</h4>
-          {selected.actions?.length ? <ol className="mt-3 space-y-3 max-h-96 overflow-auto pr-1">{[...selected.actions].reverse().map(action => <li key={action.id} className="border-l-2 border-current/15 pl-3 text-xs"><div className="flex justify-between gap-3 opacity-55"><span>{action.kind} · {runLabels[action.status]}</span><time>{clock(action.at)}</time></div><p className="font-mono break-all whitespace-pre-wrap mt-1">{action.label}</p>{action.detail && <details className="mt-1"><summary className="cursor-pointer opacity-60">Resultat</summary><pre className="whitespace-pre-wrap break-all max-h-48 overflow-auto bg-black/5 p-2 mt-1 rounded">{action.detail}</pre></details>}</li>)}</ol> : <p className="text-xs opacity-55 mt-3">Denne opgave har ingen registrerede værktøjshændelser. Tekstaktivitet alene dokumenterer ikke filændringer eller tests.</p>}
+          {selected.actions?.length ? <ol className="mt-3 space-y-3 max-h-96 overflow-auto pr-1">{[...selected.actions].reverse().map(action => <li key={action.id} className="border-l-2 border-zinc-300 dark:border-white/[0.15] pl-3 text-xs"><div className="flex justify-between gap-3 opacity-55"><span>{action.kind} · {runLabels[action.status]}</span><time>{clock(action.at)}</time></div><p className="font-mono break-all whitespace-pre-wrap mt-1">{action.label}</p>{action.detail && <details className="mt-1"><summary className="cursor-pointer opacity-60">Resultat</summary><pre className="whitespace-pre-wrap break-all max-h-48 overflow-auto bg-black/5 p-2 mt-1 rounded">{action.detail}</pre></details>}</li>)}</ol> : <p className="text-xs opacity-55 mt-3">Denne opgave har ingen registrerede værktøjshændelser. Tekstaktivitet alene dokumenterer ikke filændringer eller tests.</p>}
           {selected.status === 'running' && selected.lastDeltaAt && <p className="text-[10px] opacity-50 mt-3">Seneste tekst fra tjenesten: {age(selected.lastDeltaAt, now)} siden</p>}
         </div>
       </div>}
@@ -92,7 +92,7 @@ export default function OrbitWorkMap({ run, services, connected, historical = fa
     {run.repository && Boolean(run.evidence?.commit || run.results?.length) && <div className="px-4 pb-3"><CodeChanges key={`${run.runId}:${run.evidence?.commit ?? ""}`} runId={run.runId} commit={run.evidence?.commit} /></div>}
     {!!run.verificationHistory?.length && <div className="px-4 pb-4"><VerificationHistory run={run} /></div>}
     {run.contextManifest && <div className="px-4 pb-4"><RunContextPanel run={run} /></div>}
-    <div className="border-t border-current/10 p-4 grid sm:grid-cols-2 gap-4 text-xs">
+    <div className="border-t border-zinc-200 dark:border-white/10 p-4 grid sm:grid-cols-2 gap-4 text-xs">
       <div><h3 className="font-semibold flex gap-2 items-center"><GitBranch size={14} />Kodeleverance</h3>{run.evidence ? <><p className="font-mono break-all mt-2">{run.evidence.commit}</p><p className="opacity-65 mt-1">{run.evidence.changedFiles.length} ændrede filer på kørselsgrenen</p><details className="mt-2"><summary className="cursor-pointer opacity-65">Filer og ændringsoversigt</summary><pre className="whitespace-pre-wrap break-all mt-2">{run.evidence.changedFiles.join('\n')}\n{run.evidence.diffStat}</pre></details></> : <p className="opacity-55 mt-2">Ingen Git-leverance registreret endnu.</p>}</div>
       <div><h3 className="font-semibold flex gap-2 items-center"><ShieldCheck size={14} />Faktiske kontroller</h3>{run.verification?.checks.length ? <ul className="mt-2 space-y-2">{run.verification.checks.map((check, index) => <li key={index}><details><summary className="cursor-pointer flex gap-2 items-center">{check.status === 'passed' && <CheckCircle2 size={12} className="text-emerald-500" />}{check.name}: {verificationLabels[check.status] ?? check.status} · exit {check.exitCode ?? 'ukendt'}</summary><pre className="whitespace-pre-wrap break-all max-h-48 overflow-auto mt-2 p-2 bg-black/5 rounded">{check.output}</pre></details></li>)}</ul> : <p className="opacity-55 mt-2">Ingen udførte kontroller registreret. Leverancen er ikke dokumenteret testet.</p>}</div>
     </div>

@@ -36,7 +36,7 @@ export default function OrbitRunPanel({ projectId }: { projectId?: string | null
     <p className="text-sm line-clamp-2">{run.goal}</p>
     <div className="flex items-center gap-3 text-xs"><progress aria-label="Leverede jobs" value={done} max={Math.max(1, run.jobs.length)} className="flex-1 h-2 accent-indigo-500" /><span>{done}/{run.jobs.length} leveret</span></div>
     <ol className="grid gap-2 sm:grid-cols-2">
-      {run.jobs.map(j => <li key={j.id} className="rounded-xl border border-current/10 p-3 text-xs space-y-1">
+      {run.jobs.map(j => <li key={j.id} className="rounded-xl border border-zinc-200 dark:border-white/10 p-3 text-xs space-y-1">
         <div className="flex items-center gap-2">{j.status === 'done' ? <CheckCircle2 size={14} className="text-emerald-500" /> : j.status === 'running' ? <Activity size={14} className="text-indigo-400" /> : <Circle size={14} />}<strong>{j.title}</strong></div>
         <p className="opacity-70">{j.serviceId ?? 'Ingen tjeneste'} · {labels[j.status] ?? j.status}</p>
         {j.dependsOn.length > 0 && <p className="opacity-60">Afhænger af: {j.dependsOn.map(d => run.jobs[d]?.title ?? '?').join(', ')}</p>}

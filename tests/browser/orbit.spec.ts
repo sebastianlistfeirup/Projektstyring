@@ -269,7 +269,9 @@ test('work map explains dependencies and preserves historical tool evidence and 
   await expect(map).not.toContainText('abc123-real-evidence');
   await expect(map).toContainText('Ingen Git-leverance registreret endnu.');
   await page.getByRole('button', { name: 'Tilbage til live' }).click();
-  await page.screenshot({ path: testInfo.outputPath('work-map-desktop.png'), fullPage: true });
+  await map.getByRole('button', { name: 'Alle tjenester', exact: true }).click();
+  await page.setViewportSize({ width: 1440, height: 1800 });
+  await map.screenshot({ path: testInfo.outputPath('work-map-desktop.png') });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(map).toBeVisible();
   await map.getByRole('heading', { name: 'Faktiske kontroller' }).scrollIntoViewIfNeeded();

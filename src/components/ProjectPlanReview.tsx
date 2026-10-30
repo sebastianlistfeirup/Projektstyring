@@ -34,7 +34,7 @@ export default function ProjectPlanReview({ runId, plan }: { runId: string; plan
       {!!plan.unknowns.length && <div><strong>Skal afklares:</strong><ul className="list-disc pl-5">{plan.unknowns.map((x, i) => <li key={i}>{x}</li>)}</ul></div>}
       <p className="opacity-70">Kontrollerne nedenfor er forslag til arbejdet. De er ikke dokumentation for, at spillet allerede er testet.</p>
       <ul className="space-y-2 max-h-96 overflow-auto">
-        {plan.tasks.map(task => <li key={task.id} className="rounded-lg border border-current/10 p-2 space-y-2">
+        {plan.tasks.map(task => <li key={task.id} className="rounded-lg border border-zinc-200 dark:border-white/10 p-2 space-y-2">
           <label className="flex gap-2 items-start"><input type="checkbox" checked={selected.includes(task.id)} onChange={e => setSelected(ids => e.target.checked ? [...ids, task.id] : ids.filter(id => id !== task.id))} /><span><strong>{task.title}</strong> · {task.scope === 'version1' ? 'Version 1' : 'Senere idé'}</span></label>
           <details><summary className="cursor-pointer opacity-70">Afgrænsning, kriterier og grundlag</summary><div className="mt-2 space-y-2">
             <p className="whitespace-pre-wrap">{task.description}</p>

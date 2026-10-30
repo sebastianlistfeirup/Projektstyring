@@ -89,6 +89,10 @@ Historikken kan søges efter det viste mål eller kørsels-id og filtreres pr. p
 
 Arbejdskortet grupperer opgaver efter deres afhængigheder. En valgt opgave viser registrerede værktøjshændelser, underagenter, ventebegrundelse og leverance; tjenester kan fremhæves på tværs af forløbet. Kodecommit og faktisk udførte kontroller står særskilt. Heartbeat dokumenterer en svarende kørselsmotor, ikke model-fremdrift. Historik bevarer registrerede tidspunkter, og genafspilning viser først evidens ved den relevante hændelse. Den tidligere konstellation kan stadig vælges.
 
+![Orbit Live med demonstrationsdata](screenshots/orbit-live-demo.png)
+
+Billedet er taget i den rigtige brugerflade med en kontrolleret testfixture. Opgaver, modelnavne, underagent, commit og testresultat i billedet er demonstrationsdata; de beskriver ikke en gennemført Realmread-opgave.
+
 Der er endnu ikke en fælles MCP-servermanager eller en universal tool-calling-loop for alle modeller. Livekortet viser de strukturerede hændelser, adapteren modtager. Det opfinder ikke underagenter, og det viser ikke modellernes interne ræsonnementer.
 
 ## Vedvarende arbejdskø
@@ -162,9 +166,39 @@ På Windows sættes miljøvariablen med PowerShell: `$env:ORBIT_SOAK_MINUTES='12
 
 ## Verifikation udført under udviklingen
 
-30. oktober 2026: Linux-build, lint uden fejl (eksisterende React-advarsler), 21 importkontroller, 4 workspace-tests og 85 server-/AI-tests bestod. Seksten Playwright-forløb er afprøvet med rigtig Chromium: upload af bibel på over 6.000 tegn, offentliggørelse af bibelversion, repositorytilknytning, reel filkontrol, genindlæsning under udførelse, bevaret kilde-checkout, status til gennemgang, et fejlet forløb, der forblev fejlet i chatten, præcisering og filupload efter genindlæsning, serverafslutning med lukket browser, projektoprettelse på mobil, projektgennemgang med import uden dubletter samt sletning og gendannelse på tværs af åbne faner samt arbejdskortets afhængigheder, historik, tastatur og mobilvisning samt en reel testfejl med afgrænset automatisk rettelse og bevaret kontrolhistorik samt to arbejdsordrer fra den gemte kø, udført i rækkefølge med lukket browser samt billedvisning og samtaleadskilte kladder efter genindlæsning samt overførsel fra det tidligere AI-værksted med afhængigheder og uden dubletter. Kodegennemgangen og patch-download er kontrolleret med et reelt Git-diff, også i mobilbredde. Et forløb med to afhængige arbejdsordrer kontrollerer, at den anden faktisk læser den førstes kode med lukket browser, mens begge forbliver til gennemgang og kilde-checkout er urørt. Et særskilt forløb sender i samme hændelse som valg af arbejdsordre for at kontrollere, at opgavekoblingen overlever en afventende routeropdatering. Det tidligere checkpoint bestod også GitHub-kontrollerne på Windows efter en rettelse af absolutte programstier.
+30. oktober 2026: følgende kontroller bestod på Linux. GitHub Actions kører desuden build, lint og server-/datakontroller på Windows; tre operativsystemspecifikke prøver springes over dér. Windows-kontrollen er ikke en afprøvning af brugerens installerede desktopapp.
 
-Godkendelsespausen blev desuden afprøvet i 12 faktiske minutter med 144 stikprøver. Ingen jobstart skete før eksplicit godkendelse. Dette er en afgrænset varighedstest med en lokal prøveagent, ikke dokumentation for flere døgns autonomi med rigtige udbydere.
+| Kontrol | Resultat |
+|---|---|
+| Produktionsbuild | Bestået |
+| Lint | Ingen fejl; React-advarsler består |
+| Importkontroller | 21 bestået |
+| Workspace-tests | 4 bestået |
+| Server-/AI-tests | 87 bestået |
+| Chromium-forløb | 17 bestået |
+| Fem native CLI-distributioner | Version og alle anvendte flag fundet i hjælpen; ingen modelkald |
+
+Browserforløbene dækker:
+
+- Bibel på over 6.000 tegn, publiceret version, repositorytilknytning, faktisk filkontrol, commit og status til gennemgang efter genindlæsning.
+- Fejlede kørsler, der forbliver fejlede, samt én afgrænset rettelse efter en faktisk testfejl med begge testresultater bevaret.
+- Præcisering og upload efter genindlæsning; fortsat udførelse og afslutning med browseren lukket.
+- Vedvarende kø og afhængige arbejdsordrer, hvor næste opgave faktisk læser forgængerens verificerede kode. Kildens checkout bevares.
+- Projektoprettelse på mobil, gennemgang af et eksisterende projekt og import af plan uden dubletter.
+- Overførsel fra det tidligere AI-værksted, bevarede afhængigheder og korrekt opgavekobling ved øjeblikkelig afsendelse.
+- Billedvisning, tastaturbetjening, samtaleadskilte kladder og vedhæftninger efter genindlæsning.
+- Arbejdskort, værktøjshistorik, underagenter, mobilbredde, søgning/sideskift i historikken og synlige processer fra afbrudte kørsler.
+- Planredigering med bevaret læsetilstand, kontekst og afhængigheder; cirkulære planer afvises, og en udskudt godkendelse bevarer kladden.
+- Sletning og backupgendannelse på tværs af to åbne faner, afvisning af forældede data og adgang til fanens kopi fra før gendannelsen.
+
+Kodegennemgang og patch-download er kontrolleret med reelle Git-ændringer, også i mobilbredde. Serverprøverne fremprovokerer desuden skrivefejl under gendannelse og et rigtigt Companion-nedbrud under arbejde med to efterfølgende genstarter.
+
+Varighedsprøver bruger lokale prøveagenter, faktiske ventetider og rigtige filer. De er **ikke** dokumentation for modelkvalitet, abonnementer eller flere døgns autonomi. De nyere rapporter identificerer de indlæste moduler med SHA-256. Den første tretimersprøve registrerede endnu ikke modulhashes. Prøverne startede under udviklingen og omfatter derfor forskellige kodeversioner. Senere rettelser dækkes af de almindelige kontroller, ikke automatisk af en allerede kørende varighedsprøve.
+
+- [180 minutters godkendelsespause](verification/approval-180-minutes-2026-10-30.json): 2.159 stikprøver uden automatisk start; gennemført efter eksplicit godkendelse. Ældre checkpoint uden modulhashes.
+- [90 minutters godkendelsespause](verification/approval-90-minutes-2026-10-30.json): 1.080 stikprøver, ingen jobstart før eksplicit godkendelse, derefter gennemført.
+- [60 minutters aktiv udførelse med seks jobs](verification/execution-60-minutes-six-jobs-2026-10-30.json): stop efter tre, genoptagelse af samme worktree, ingen gentagelse af afsluttede jobs og bestået kontrol af alle seks filer.
+- [Native CLI-kontrol](verification/native-cli-2026-10-30.json): Codex 0.166.0, Claude Code 2.1.314, Gemini CLI 0.66.0, Kimi Code 2.4.1 og Qwen Code 0.26.4.
 
 Browserkontroller: `npx playwright install chromium` efterfulgt af `npm run test:browser`. De starter isolerede testservere på 5173/4310 og kræver ledige porte. Lokale testdata ligger i en separat midlertidig mappe.
 

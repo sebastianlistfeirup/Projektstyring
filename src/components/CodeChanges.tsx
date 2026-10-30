@@ -42,12 +42,12 @@ export default function CodeChanges({ runId, commit, wholeBranch = false }: { ru
   return <>
     <button type="button" className="btn-ghost text-xs" onClick={() => void show()}><GitCompareArrows size={14} />{wholeBranch ? 'Gennemse hele AI-arbejdsgrenen' : 'Gennemse kodeændringer'}</button>
     <dialog ref={dialog} aria-label="Kodegennemgang" onCancel={() => setOpen(false)} onClose={() => setOpen(false)} className="fixed m-auto w-[min(96vw,1400px)] max-h-[94dvh] rounded-2xl border border-slate-500/40 bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100 p-0 shadow-2xl backdrop:bg-black/75">
-      <header className="flex items-start gap-3 border-b border-current/10 p-4"><div className="min-w-0 flex-1"><h2 className="font-semibold">Kodegennemgang</h2><p className="text-xs opacity-60 mt-1">{overview ? `${overview.totalFiles} ændrede filer · ${overview.baseCommit.slice(0, 10)} → ${overview.commit.slice(0, 10)}` : 'Henter den gemte kodeleverance…'}</p><p className="text-xs opacity-60 mt-1">Sammenligningen viser gemte commits. Kontroller og eventuelle senere lokale ændringer vurderes særskilt.</p></div><button type="button" aria-label="Luk kodegennemgang" className="btn-ghost p-2" onClick={() => setOpen(false)}><X size={18} /></button></header>
+      <header className="flex items-start gap-3 border-b border-zinc-200 dark:border-white/10 p-4"><div className="min-w-0 flex-1"><h2 className="font-semibold">Kodegennemgang</h2><p className="text-xs opacity-60 mt-1">{overview ? `${overview.totalFiles} ændrede filer · ${overview.baseCommit.slice(0, 10)} → ${overview.commit.slice(0, 10)}` : 'Henter den gemte kodeleverance…'}</p><p className="text-xs opacity-60 mt-1">Sammenligningen viser gemte commits. Kontroller og eventuelle senere lokale ændringer vurderes særskilt.</p></div><button type="button" aria-label="Luk kodegennemgang" className="btn-ghost p-2" onClick={() => setOpen(false)}><X size={18} /></button></header>
       {loading && <p role="status" className="p-4 text-sm flex gap-2"><Loader2 size={16} className="animate-spin" />Henter ændringer…</p>}
       {error && <div className="p-4 text-sm"><p role="alert">{error}</p><button type="button" className="btn-ghost mt-2" onClick={() => void show()}>Prøv igen</button></div>}
       {overview && <>
         <div className="grid md:grid-cols-[260px_minmax(0,1fr)] max-h-[68dvh] overflow-auto">
-          <nav aria-label="Ændrede filer" className="border-b md:border-b-0 md:border-r border-current/10 p-2 max-h-40 md:max-h-[68dvh] overflow-auto">
+          <nav aria-label="Ændrede filer" className="border-b md:border-b-0 md:border-r border-zinc-200 dark:border-white/10 p-2 max-h-40 md:max-h-[68dvh] overflow-auto">
             {overview.files.map(file => <button key={file.path} type="button" aria-pressed={selected === file.path} onClick={() => { if (file.path !== selected) { setSelected(file.path); setDiff(null); setFileError(''); } }} className={`w-full text-left text-xs p-2 rounded-lg mb-1 ${selected === file.path ? 'bg-indigo-500/15 ring-1 ring-inset ring-indigo-400/40' : 'hover:bg-black/5 dark:hover:bg-white/5'}`}><span className="block break-all font-mono">{file.path}</span><span className="opacity-60">{labels[file.status] ?? file.status} · {file.binary ? 'Binær fil' : `+${file.added} −${file.removed}`}</span></button>)}
             {overview.filesTruncated && <p className="text-xs p-2">De første 1.000 filer vises. Hent patchen for hele leverancen.</p>}
             {!overview.files.length && <p className="text-sm p-2">Ingen filændringer mellem de gemte commits.</p>}
@@ -59,7 +59,7 @@ export default function CodeChanges({ runId, commit, wholeBranch = false }: { ru
             </>}
           </section>
         </div>
-        <footer className="p-3 border-t border-current/10"><a className="btn-ghost text-xs inline-flex" href={`${url}.patch?commit=${encodeURIComponent(overview.commit)}&scope=${scope}`}><Download size={14} />Hent samlet Git-patch</a></footer>
+        <footer className="p-3 border-t border-zinc-200 dark:border-white/10"><a className="btn-ghost text-xs inline-flex" href={`${url}.patch?commit=${encodeURIComponent(overview.commit)}&scope=${scope}`}><Download size={14} />Hent samlet Git-patch</a></footer>
       </>}
     </dialog>
   </>;

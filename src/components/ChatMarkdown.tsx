@@ -15,8 +15,8 @@ export default function ChatMarkdown({ text }: { text: string }) {
       pre: ({ children }) => <pre className="my-3 overflow-x-auto rounded-xl bg-black/40 p-3 text-xs font-mono">{children}</pre>,
       code: ({ children }) => <code className="rounded bg-black/10 px-1 font-mono text-[0.95em]">{children}</code>,
       table: ({ children }) => <div className="overflow-x-auto my-3"><table className="text-xs border-collapse w-full">{children}</table></div>,
-      th: ({ children }) => <th className="border border-current/15 px-3 py-2 text-left font-semibold">{children}</th>,
-      td: ({ children }) => <td className="border border-current/15 px-3 py-2 align-top">{children}</td>,
+      th: ({ children }) => <th className="border border-zinc-300 dark:border-white/[0.15] px-3 py-2 text-left font-semibold">{children}</th>,
+      td: ({ children }) => <td className="border border-zinc-300 dark:border-white/[0.15] px-3 py-2 align-top">{children}</td>,
       a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-indigo-400 underline">{children}</a>,
       img: ({ alt, src }) => <a href={src} target="_blank" rel="noopener noreferrer" className="text-indigo-400 underline">{alt || 'Åbn billede'}</a>,
     }}>{text}</Markdown>
