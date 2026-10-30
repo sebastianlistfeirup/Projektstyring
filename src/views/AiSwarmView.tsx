@@ -65,6 +65,8 @@ import {
   type Trigger,
 } from '../lib/aiApi';
 import type { AiServiceInfo } from '../lib/aiApi';
+import OrbitWorkMap from '../components/OrbitWorkMap';
+import { presentRun, timestamp } from '../lib/runPresentation';
 import { AnalysisPanel, CompareRunsPanel, CopyDeliverableButton, JudgePanel, MiniMap, RunActionsBar } from './AiSwarmExtras';
 
 const BASE_URL = 'http://127.0.0.1:4310';
@@ -438,7 +440,7 @@ function RunTimeline({ run, services, active }: { run: SwarmRun; services: Recor
   const rows = useMemo(() => {
     const js = run.jobs.filter((j) => j.startedAt);
     if (!js.length) return null;
-    const t0 = Math.min(run.startedAt, ...js.map((j) => j.startedAt!));
+    const t0 = Math.min(...[run.startedAt, ...js.map((j) => j.startedAt!)].filter(t => t > 0));
     const t1 = Math.max(run.finishedAt ?? Date.now(), ...js.map((j) => j.finishedAt ?? Date.now()));
     return { t0, t1: Math.max(t1, t0 + 1000), jobs: js };
   }, [run]);
@@ -1072,6 +1074,9 @@ export function AiSwarmView() {
   const [history, setHistory] = useState<RunSummary[]>([]);
   const [archived, setArchived] = useState<SwarmRun | null>(null);
   const [replay, setReplay] = useState<ReplayState | null>(null);
+  const [archivedEvents, setArchivedEvents] = useState<SwarmEvent[]>([]);
+  const [mapMode, setMapMode] = useState<'work' | 'constellation'>('work');
+  const historyRequest = useRef(0);
   const [toast, setToast] = useState<string | null>(null);
   const showToast = (msg: string) => {
     setToast(msg);
@@ -1108,10 +1113,10 @@ export function AiSwarmView() {
   const doneCount = jobs.filter((j) => j.status === 'done').length;
   const runCount = jobs.filter((j) => j.status === 'running').length;
   const errCount = jobs.filter((j) => j.status === 'error').length;
-  const elapsed = shown ? (shown.finishedAt ?? Date.now()) - shown.startedAt : 0;
+  const elapsed = shown?.startedAt ? (shown.finishedAt ?? (replay?.cursor ?? Date.now())) - shown.startedAt : null;
   const avg = jobs.length ? avgJobMs(jobs) : null;
-  const remaining = jobs.length - doneCount - errCount;
-  const eta = avg && remaining > 0 ? remaining * avg : null;
+  const remaining = jobs.filter(j => ['queued', 'running'].includes(j.status)).length;
+  const eta = active && avg && remaining > 0 ? remaining * avg : null;
 
   const phaseStats = useMemo(() => PHASES.map((p) => {
     const inPhase = jobs.filter((j) => j.phase === p);
@@ -1125,29 +1130,25 @@ export function AiSwarmView() {
     return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
   }, [jobs]);
 
-  const openArchived = (r: RunSummary) => {
-    setReplay(null);
-    const results = new Map((r.results ?? []).map((x) => [x.jobId, x]));
-    const finishedAt = typeof r.finishedAt === 'number' ? r.finishedAt : Date.parse(r.finishedAt ?? '') || null;
-    const base: SwarmRun = {
-      runId: r.runId,
-      goal: r.goal,
-      mode: r.mode ?? 'standard',
-      startedAt: finishedAt ? finishedAt - 60_000 : Date.now(),
-      orchestratorId: r.orchestratorId ?? null,
-      status: r.status ?? 'interrupted',
-      notes: [],
-      finishedAt,
-      jobs: ((r.jobs ?? []) as SwarmJob[]).map((j) => {
-        const res = results.get(j.id);
-        return { ...j, status: j.status ?? (res ? 'done' as const : 'interrupted' as const), liveText: '', notes: [], deltaCount: 0, lastDeltaAt: null, startedAt: null, finishedAt: null, text: res?.text ?? '', artifacts: res?.artifacts ?? [], error: j.error ?? null };
-      }),
-    };
-    setArchived(base);
-    if ((r.events?.length ?? 0) > 1) {
-      const events = [...(r.events ?? [])].sort((a, b) => a.at - b.at);
-      setReplay({ base: { ...base, startedAt: events[0].at, jobs: [], finishedAt: null }, events, t0: events[0].at, t1: events[events.length - 1].at, cursor: events[0].at, playing: false, speed: 8 });
-    }
+  const openArchived = async (r: RunSummary) => {
+    const request = ++historyRequest.current;
+    try {
+      const response = await fetch(`${BASE_URL}/api/ai/runs/${encodeURIComponent(r.runId)}`);
+      const data = await response.json();
+      if (!response.ok || !data.ok || !data.run) throw new Error('Historikken kunne ikke hentes.');
+      if (request !== historyRequest.current) return;
+      setReplay(null);
+      setArchived(presentRun(data.run));
+      setArchivedEvents((data.run.events ?? []).filter((event: SwarmEvent) => timestamp(event.at)).sort((a: SwarmEvent, b: SwarmEvent) => a.at - b.at));
+    } catch { if (request === historyRequest.current) showToast('Historikken kunne ikke hentes. Kontrollér forbindelsen.'); }
+  };
+
+  const startReplay = () => {
+    if (!archived || archivedEvents.length < 2) return;
+    const events = archivedEvents;
+    // Evidence from the end must not appear before its event in the replay.
+    const base = { ...archived, jobs: [], evidence: undefined, verification: undefined, results: [], projectPlan: undefined, projectPlanError: undefined, heartbeatAt: undefined, finishedAt: null };
+    setReplay({ base, events, t0: events[0].at, t1: events.at(-1)!.at, cursor: events[0].at, playing: false, speed: 8 });
   };
 
   const modeKey = shown?.mode ? MODE_KEYS[shown.mode] : null;
@@ -1175,10 +1176,11 @@ export function AiSwarmView() {
         </div>
         <div className="flex-1" />
         {(archived || replay) && (
-          <button onClick={() => { setArchived(null); setReplay(null); }} className="btn-primary rounded-xl px-3 py-1.5 text-[11px] flex items-center gap-1.5">
+          <button onClick={() => { historyRequest.current++; setArchived(null); setReplay(null); setArchivedEvents([]); }} className="btn-primary rounded-xl px-3 py-1.5 text-[11px] flex items-center gap-1.5">
             <Zap size={12} /> {t('swarm.backToLive')}
           </button>
         )}
+        {archived && !replay && archivedEvents.length > 1 && <button className="btn-ghost text-xs" onClick={startReplay}><Play size={13} />Genafspil hændelser</button>}
         {!connected && (
           <span className="text-[10px] px-2 py-1 rounded-lg bg-amber-400/10 border border-amber-400/30 text-amber-300 flex items-center gap-1.5">
             <AlertTriangle size={11} /> {t('swarm.noCompanionShort')}
@@ -1316,22 +1318,21 @@ export function AiSwarmView() {
             </div>
           )}
 
-          {/* canvas-sværmen + minimap */}
-          <div className="rounded-2xl border border-white/10 bg-black/10 dark:bg-black/25 overflow-hidden relative h-[300px] sm:h-[380px]">
+          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Visning af arbejdet">
+            <button className="btn-ghost text-xs" aria-pressed={mapMode === 'work'} onClick={() => setMapMode('work')}>Arbejdskort</button>
+            <button className="btn-ghost text-xs" aria-pressed={mapMode === 'constellation'} onClick={() => setMapMode('constellation')}>Konstellation</button>
+          </div>
+          {mapMode === 'work' ? <OrbitWorkMap key={shown.runId} run={shown} services={services} connected={connected} historical={Boolean(archived || replay)} now={replay?.cursor ?? Date.now()} /> : <div className="rounded-2xl border border-white/10 bg-black/10 dark:bg-black/25 overflow-hidden relative h-[300px] sm:h-[380px]">
             <SwarmCanvas run={shown} services={services} active={active || Boolean(replay?.playing)} />
             <MiniMap jobs={jobs} />
-            {(shown.notes?.length ?? 0) > 0 && (
-              <div className="absolute left-3 bottom-2 right-3 text-[10px] opacity-45 truncate">
-                {shown.notes[shown.notes.length - 1]}
-              </div>
-            )}
-          </div>
+            {(shown.notes?.length ?? 0) > 0 && <div className="absolute left-3 bottom-2 right-3 text-[10px] opacity-45 truncate">{shown.notes[shown.notes.length - 1]}</div>}
+          </div>}
 
           {/* tidslinje: præcis hvem arbejdede hvornår, inkl. underagenter */}
           <RunTimeline run={shown} services={services} active={active || Boolean(replay?.playing)} />
 
           {/* agent-kort */}
-          {jobs.length > 0 && (
+          {mapMode === 'constellation' && jobs.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
               {[...jobs]
                 .sort((a, b) => (a.status === 'running' ? -1 : b.status === 'running' ? 1 : a.status === 'error' ? -1 : b.status === 'error' ? 1 : 0))
@@ -1349,7 +1350,8 @@ export function AiSwarmView() {
         </>
       )}
 
-      {/* styringspaneler */}
+      {/* Sjældent brugte driftsfunktioner ligger bag en tydelig indgang. */}
+      <details className="rounded-xl border border-current/10 p-3"><summary className="cursor-pointer text-xs opacity-65">Automatisering, skabeloner og analyse</summary>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
         <TriggersPanel />
         <TemplatesPanel services={services} />
@@ -1357,6 +1359,8 @@ export function AiSwarmView() {
         <AnalysisPanel />
         <CompareRunsPanel />
       </div>
+
+      </details>
 
       {/* historik */}
       {history.length > 0 && (
@@ -1366,7 +1370,7 @@ export function AiSwarmView() {
             {history.map((h) => (
               <button
                 key={h.file}
-                onClick={() => openArchived(h)}
+                onClick={() => void openArchived(h)}
                 className="rounded-xl border border-white/10 bg-black/10 dark:bg-white/5 px-2.5 py-1.5 text-left hover:border-indigo-400/40 transition max-w-[240px]"
               >
                 <div className="text-[11px] truncate font-medium">{h.goal || h.runId}</div>

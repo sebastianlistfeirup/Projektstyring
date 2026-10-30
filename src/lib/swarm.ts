@@ -1,5 +1,6 @@
 import { useStore } from '../store/useStore';
 import { create } from 'zustand';
+import { presentRun } from './runPresentation';
 import { fetchAiServices, type AiServiceInfo } from './aiApi';
 
 /* ---------- typer ---------- */
@@ -40,7 +41,8 @@ export interface SwarmJob {
 export interface SwarmRun {
   projectPlan?: import('./types').ProjectPlan;
   projectPlanError?: string;
-  results?: { title: string; text: string; artifacts?: import('./types').AiAttachment[] }[];
+  heartbeatAt?: number;
+  results?: { jobId?: string; title: string; text: string; artifacts?: import('./types').AiAttachment[] }[];
   projectId?: string | null;
   taskId?: string | null;
   evidence?: { commit: string; changedFiles: string[]; diffStat: string };
@@ -439,7 +441,7 @@ async function syncState() {
   try {
     const r = await fetch(`${API}/api/ai/swarm`);
     const j = await r.json();
-    if (j?.ok) { useSwarm.getState().setRun(j.run ?? null); if (j.run) reconcileTask(j.run); }
+    if (j?.ok) { useSwarm.getState().setRun(j.run ? presentRun(j.run) : null); if (j.run) reconcileTask(j.run); }
   } catch { /* companion offline */ }
 }
 
@@ -525,6 +527,7 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
     case 'plan':
       return {
         ...run,
+        status: evt.paused ? 'awaiting_approval' : 'running',
         jobs: ((evt.jobs as SwarmJob[] | undefined) ?? []).map((j) => ({
           ...j,
           status: 'queued' as const,
@@ -581,7 +584,7 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
             ? {
                 ...j,
                 subagents: (j.subagents ?? []).map((x) =>
-                  x.subId === sid ? { ...x, status: 'done' as const, text: String(evt.text ?? '').slice(0, 400), finishedAt: Number(evt.at) } : x,
+                  x.subId === sid ? { ...x, status: (evt.error ? 'error' : 'done') as SwarmSubagent['status'], text: String(evt.text ?? '').slice(0, 400), finishedAt: Number(evt.at) } : x,
                 ),
               }
             : j,

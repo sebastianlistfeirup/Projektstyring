@@ -194,3 +194,52 @@ test('task deletion and restoration reach another open tab without stale resurre
   await expect.poll(() => hasTask(second)).toBe(true);
   await second.close();
 });
+
+test('work map explains dependencies and preserves historical tool evidence and timestamps', async ({ page }, testInfo) => {
+  const start = Date.parse('2026-10-01T09:00:00Z');
+  const empty = { liveText: '', notes: [], deltaCount: 0, lastDeltaAt: null, text: '', artifacts: [], error: null, actions: [], subagents: [] };
+  const run = {
+    runId: 'map-fixture', goal: 'Realmread · dokumenteret forløb', startedAt: start, finishedAt: start + 7_200_000, status: 'partial', orchestratorId: 'codex', notes: [],
+    jobs: [
+      { ...empty, id: 'analysis', title: 'Læs den gældende bibel', serviceId: 'claude', phase: 'concept', description: 'Kortlæg beslutninger.', dependsOn: [], status: 'done', startedAt: start, finishedAt: start + 60_000,
+        actions: [{ id: 'read', kind: 'file', label: 'docs/bible.md', status: 'done', detail: 'Beslutninger indlæst', at: start + 10_000 }],
+        subagents: [{ subId: 'reviewer', name: 'Regelkontrol', status: 'done', startedAt: start + 20_000, finishedAt: start + 40_000, text: 'Regler er sammenholdt med koden.' }] },
+      { ...empty, id: 'code', title: 'Ret genopfyldning', serviceId: 'codex', phase: 'production', description: 'Bevar kompagniets XP.', dependsOn: [0], status: 'done', startedAt: start + 60_000, finishedAt: start + 3_600_000 },
+      { ...empty, id: 'test', title: 'Afprøv save/load', serviceId: 'gemini', phase: 'testing', description: 'Kør integrationstesten.', dependsOn: [1], status: 'error', startedAt: start + 3_600_000, finishedAt: start + 7_200_000, error: 'XP blev ikke bevaret.' },
+      { ...empty, id: 'release', title: 'Klargør build', serviceId: 'codex', phase: 'release', description: 'Kræver beståede tests.', dependsOn: [2], status: 'blocked', startedAt: null, finishedAt: start + 7_200_000 },
+    ],
+    evidence: { commit: 'abc123-real-evidence', changedFiles: ['save.gd'], diffStat: 'save.gd | 2 +-' },
+    verification: { status: 'failed', checks: [{ name: 'Save/load', status: 'failed', exitCode: 1, output: 'XP mismatch: expected 20, actual 0' }] },
+    results: [{ jobId: 'code', title: 'Ret genopfyldning', text: 'XP bevares ved genopfyldning. Save/load kræver en rettelse.' }],
+    events: [{ at: start, type: 'run_start', goal: 'Realmread · dokumenteret forløb' }, { at: start + 7_200_000, type: 'run_finished', status: 'partial' }],
+  };
+  await page.addInitScript(() => { localStorage.setItem('orbit-toured', '1'); localStorage.setItem('swarm-sound', 'off'); });
+  await page.route(`${base}/api/ai/swarm`, route => route.fulfill({ json: { ok: true, run } }));
+  await page.route(`${base}/api/ai/runs`, route => route.fulfill({ json: { ok: true, runs: [{ ...run, file: 'map-fixture.json' }] } }));
+  await page.route(`${base}/api/ai/runs/map-fixture`, route => route.fulfill({ json: { ok: true, run } }));
+  await page.goto('/#/swarm');
+  const map = page.getByRole('region', { name: 'Arbejdskort', exact: true });
+  await expect(map).toBeVisible();
+  await map.getByRole('button', { name: 'Opgave 4: Klargør build' }).click();
+  await expect(map.getByRole('region', { name: 'Valgt opgave' })).toContainText('Kan ikke starte: Afprøv save/load er ikke leveret.');
+  await map.getByRole('button', { name: 'Opgave 1: Læs den gældende bibel' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(map.getByRole('region', { name: 'Valgt opgave' })).toContainText('docs/bible.md');
+  await expect(map.getByRole('region', { name: 'Valgt opgave' })).toContainText('Regelkontrol');
+  await map.getByRole('group', { name: 'Fremhæv tjeneste' }).getByRole('button', { name: 'Codex', exact: true }).click();
+  await expect(map.getByRole('button', { name: 'Opgave 1: Læs den gældende bibel' })).toHaveClass(/opacity-40/);
+  await page.getByRole('button').filter({ hasText: 'Realmread · dokumenteret forløb' }).click();
+  await expect(map.getByText('Gemt forløb', { exact: true })).toBeVisible();
+  await map.getByRole('button', { name: 'Opgave 1: Læs den gældende bibel' }).click();
+  await expect(map.getByRole('region', { name: 'Valgt opgave' })).toContainText('09.00.00');
+  await expect(map).toContainText('abc123-real-evidence');
+  await page.getByRole('button', { name: 'Genafspil hændelser' }).click();
+  await expect(map).not.toContainText('abc123-real-evidence');
+  await expect(map).toContainText('Ingen Git-leverance registreret endnu.');
+  await page.getByRole('button', { name: 'Tilbage til live' }).click();
+  await page.screenshot({ path: testInfo.outputPath('work-map-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(map).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await testInfo.attach('Arbejdskort mobile', { body: await page.screenshot({ path: testInfo.outputPath('work-map-mobile.png'), fullPage: true }), contentType: 'image/png' });
+});

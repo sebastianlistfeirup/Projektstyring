@@ -40,3 +40,19 @@ test('workspace extras recover in new browser and preserve newer local drafts', 
   const next = mergeWorkspaceExtras({ bibles: { p: 'local' }, aiChats: [] }, { bibles: { p: 'old' }, aiChats: [{ id: 'new' }] }, { bibles: '3' }, { bibles: '2', aiChats: '4' });
   assert.ok(!Object.hasOwn(next.patch, 'bibles')); assert.deepEqual(next.patch.aiChats, [{ id: 'new' }]);
 });
+
+test('historical run presentation preserves actual timestamps and evidence without inventing success', async () => {
+  const { presentRun, jobStages, waitingReason } = await import('../src/lib/runPresentation');
+  const run = presentRun({ runId: 'r', goal: 'test', startedAt: 1000, finishedAt: 7201000, status: 'partial', jobs: [
+    { id: 'a', title: 'Code', dependsOn: [], status: 'error', startedAt: 1000, finishedAt: 2000, actions: [{ id: 'tool', kind: 'file', label: 'file.gd', status: 'done', at: 1500, detail: '' }] },
+    { id: 'b', title: 'Build', dependsOn: [0], status: 'blocked' },
+    { id: 'c', title: 'Legacy result', dependsOn: [1] },
+  ], results: [{ jobId: 'c', title: 'Legacy result', text: 'A text alone is not successful execution' }] } as unknown as import('../src/lib/swarm').SwarmRun);
+  assert.equal(run.startedAt, 1000); assert.equal(run.jobs[0].startedAt, 1000);
+  assert.equal(run.jobs[0].actions?.[0].label, 'file.gd');
+  assert.equal(run.jobs[1].startedAt, null); assert.equal(run.jobs[2].status, 'interrupted');
+  assert.match(waitingReason(run.jobs[1], run), /Code er ikke leveret/);
+  assert.deepEqual(jobStages(run.jobs), [0, 1, 2]);
+  assert.equal(presentRun({ ...run, startedAt: undefined } as unknown as import('../src/lib/swarm').SwarmRun).startedAt, 0);
+  assert.equal(jobStages([{ ...run.jobs[0], dependsOn: [0] }]).length, 1);
+});

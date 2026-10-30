@@ -60,6 +60,8 @@ Meshy/HeyGen gemmer hensigt og jobkvittering. Efter genoptagelse bruges det eksi
 
 De fem native coding-adaptere bevarer deres egen MCP-konfiguration ved udførelse. Kimis analyseprofil begrænser værktøjer til læsning og søgning. Codex JSONL samt Claude, Gemini, Kimi og Qwen Code stream-json oversættes til offentlige værktøjs- og agenthændelser i Orbit Live. [Adapterkontrakter og installation](ai-adapters.md) beskriver flag og begrænsninger. Ukendte eventtyper ignoreres; eventformater fra andre CLI-versioner skal afprøves.
 
+Arbejdskortet grupperer opgaver efter deres afhængigheder. En valgt opgave viser registrerede værktøjshændelser, underagenter, ventebegrundelse og leverance; tjenester kan fremhæves på tværs af forløbet. Kodecommit og faktisk udførte kontroller står særskilt. Heartbeat dokumenterer en svarende kørselsmotor, ikke model-fremdrift. Historik bevarer registrerede tidspunkter, og genafspilning viser først evidens ved den relevante hændelse. Den tidligere konstellation kan stadig vælges.
+
 Der er endnu ikke en fælles MCP-servermanager eller en universal tool-calling-loop for alle modeller. Livekortet viser de strukturerede hændelser, adapteren modtager. Det opfinder ikke underagenter, og det viser ikke modellernes interne ræsonnementer.
 
 ## Bibel, billeder og beslutninger
@@ -117,7 +119,7 @@ På Windows sættes miljøvariablen med PowerShell: `$env:ORBIT_SOAK_MINUTES='12
 
 ## Verifikation udført under udviklingen
 
-30. oktober 2026: Linux-build, lint uden fejl (eksisterende React-advarsler), 21 importkontroller, 3 workspace-tests og 43 server-/AI-tests bestod. Seks Playwright-forløb er afprøvet med rigtig Chromium: upload af bibel på over 6.000 tegn, offentliggørelse af bibelversion, repositorytilknytning, reel filkontrol, genindlæsning under udførelse, bevaret kilde-checkout, status til gennemgang, et fejlet forløb, der forblev fejlet i chatten, præcisering og filupload efter genindlæsning, serverafslutning med lukket browser, projektoprettelse på mobil, projektgennemgang med import uden dubletter samt sletning og gendannelse på tværs af åbne faner. Det tidligere checkpoint bestod også GitHub-kontrollerne på Windows efter en rettelse af absolutte programstier.
+30. oktober 2026: Linux-build, lint uden fejl (eksisterende React-advarsler), 21 importkontroller, 4 workspace-tests og 43 server-/AI-tests bestod. Syv Playwright-forløb er afprøvet med rigtig Chromium: upload af bibel på over 6.000 tegn, offentliggørelse af bibelversion, repositorytilknytning, reel filkontrol, genindlæsning under udførelse, bevaret kilde-checkout, status til gennemgang, et fejlet forløb, der forblev fejlet i chatten, præcisering og filupload efter genindlæsning, serverafslutning med lukket browser, projektoprettelse på mobil, projektgennemgang med import uden dubletter samt sletning og gendannelse på tværs af åbne faner samt arbejdskortets afhængigheder, historik, tastatur og mobilvisning. Det tidligere checkpoint bestod også GitHub-kontrollerne på Windows efter en rettelse af absolutte programstier.
 
 Godkendelsespausen blev desuden afprøvet i 12 faktiske minutter med 144 stikprøver. Ingen jobstart skete før eksplicit godkendelse. Dette er en afgrænset varighedstest med en lokal prøveagent, ikke dokumentation for flere døgns autonomi med rigtige udbydere.
 
