@@ -8,6 +8,7 @@ import { registerAiRoutes } from '../server/ai-engine.mjs';
 import { localAiAccess } from '../server/local-access.mjs';
 import { activeRuns } from '../server/ai-runtime.mjs';
 import { stopAiProcesses } from '../server/ai-processes.mjs';
+import { saveRun } from '../server/ai-state.mjs';
 
 test('HTTP approval, validation, browser disconnect and persisted results', async t => {
   const root = mkdtempSync(join(tmpdir(), 'orbit-http-'));
@@ -112,4 +113,22 @@ test('shutdown sees direct chat processes, can refuse active work, then drains a
   assert.equal((await post('/api/ai/chat', { service: 'codex', messages: [] })).status, 503);
   assert.equal((await post('/api/ai/queue/control', { action: 'resume' })).status, 503);
   assert.equal((await (await fetch(`${base}/api/ai/queue`)).json()).queue.paused, true);
+});
+
+
+test('an already-interrupted run with a live persisted process blocks new work after startup on every platform', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-old-orphan-'));
+  saveRun({ runs: join(root, 'ai-runs') }, { runId: 'old-orphan', status: 'interrupted', workDir: root, jobs: [{ id: 'job', title: 'Old job', serviceId: 'codex', phase: 'production', status: 'interrupted', dependsOn: [] }], processes: [{ pid: process.pid }], events: [] });
+  const app = express(); app.use(express.json());
+  registerAiRoutes(app, { loadConfig: () => ({}), saveConfig() {}, APP_DIR: root });
+  const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (path, body) => fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const state = await (await fetch(`${base}/api/ai/swarm`)).json();
+  assert.ok(state.processes.some(processInfo => processInfo.pid === process.pid && processInfo.kind === 'recovered'));
+  assert.equal((await post('/api/ai/queue/control', { action: 'resume' })).status, 409);
+  assert.equal((await post('/api/ai/orchestrate', { goal: 'Blocked overlap' })).status, 409);
+  assert.equal((await post('/api/ai/runs/old-orphan/resume', {})).status, 409);
+  assert.equal((await post('/api/ai/prepare-shutdown', { refuseActive: true })).status, 409);
 });

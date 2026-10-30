@@ -1,0 +1,69 @@
+{
+  "ok": true,
+  "checkedAt": "2026-10-30T13:27:58.536Z",
+  "scope": "Version and documented CLI flags only. No login, model, MCP or subscription verification; no prompt was sent.",
+  "results": [
+    {
+      "provider": "codex",
+      "version": "codex-cli 0.166.0",
+      "checkedFlags": [
+        "--sandbox",
+        "--json",
+        "--add-dir",
+        "--image",
+        "--model"
+      ],
+      "ok": true,
+      "missing": []
+    },
+    {
+      "provider": "claude",
+      "version": "2.1.314 (Claude Code)",
+      "checkedFlags": [
+        "--permission-mode",
+        "--output-format",
+        "--verbose",
+        "--add-dir",
+        "--model"
+      ],
+      "ok": true,
+      "missing": []
+    },
+    {
+      "provider": "gemini",
+      "version": "0.66.0",
+      "checkedFlags": [
+        "--approval-mode",
+        "--output-format",
+        "--include-directories",
+        "--model"
+      ],
+      "ok": true,
+      "missing": []
+    },
+    {
+      "provider": "kimi",
+      "version": "2.4.1",
+      "checkedFlags": [
+        "--output-format",
+        "--add-dir",
+        "--agent-file",
+        "--model"
+      ],
+      "ok": true,
+      "missing": []
+    },
+    {
+      "provider": "qwen-code",
+      "version": "0.26.4",
+      "checkedFlags": [
+        "--approval-mode",
+        "--output-format",
+        "--include-directories",
+        "--model"
+      ],
+      "ok": true,
+      "missing": []
+    }
+  ]
+}

@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
+import { processMayBeWorking } from '../server/ai-processes.mjs';
 
 async function start(root) {
   const child = spawn(process.execPath, ['server/companion.mjs'], { env: { ...process.env, ORBIT_APP_DIR: join(root, 'app'), ORBIT_EXPORT_DIR: join(root, 'export'), ORBIT_PORT: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -93,13 +94,18 @@ else{fs.writeFileSync(${JSON.stringify(counter)},String(Number(fs.existsSync(${J
     // A second restart must not forget an already-interrupted manual run.
     await server.stop(); server = await start(root);
     const state = await (await fetch(`${server.base}/api/ai/swarm`)).json();
-    assert.ok(state.processes.some(process => process.pid === orphan && process.kind === 'recovered'));
-    assert.equal((await post('/api/ai/queue/control', { action: 'resume' })).status, 409);
-    assert.equal((await post('/api/ai/orchestrate', { goal: 'Must not overlap orphan', jobs: [{ id: 'other', title: 'Other', serviceId: 'codex', dependsOn: [] }] })).status, 409);
-    assert.equal((await post('/api/ai/prepare-shutdown', { refuseActive: true })).status, 409);
-
-    const refused = await post(`/api/ai/runs/${run.runId}/resume`, {});
-    assert.equal(refused.status, 409); assert.ok((await refused.json()).pids.includes(orphan));
+    if (processMayBeWorking(orphan)) {
+      assert.ok(state.processes.some(process => process.pid === orphan && process.kind === 'recovered'));
+      assert.equal((await post('/api/ai/queue/control', { action: 'resume' })).status, 409);
+      assert.equal((await post('/api/ai/orchestrate', { goal: 'Must not overlap orphan', jobs: [{ id: 'other', title: 'Other', serviceId: 'codex', dependsOn: [] }] })).status, 409);
+      assert.equal((await post('/api/ai/prepare-shutdown', { refuseActive: true })).status, 409);
+      const refused = await post(`/api/ai/runs/${run.runId}/resume`, {});
+      assert.equal(refused.status, 409); assert.ok((await refused.json()).pids.includes(orphan));
+    } else {
+      // Windows process/job supervision can terminate the child with its parent.
+      // In that case recovery must not invent a surviving process.
+      assert.ok(!state.processes.some(process => process.pid === orphan));
+    }
     stopOrphan(); writeFileSync(allowed, 'yes');
     let resumed;
     await waitFor(async () => {

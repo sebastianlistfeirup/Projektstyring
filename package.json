@@ -15,7 +15,8 @@
     "test:imports": "tsx scripts/test-imports.ts",
     "test:ai": "node --test scripts/test-ai-*.mjs scripts/test-workspace-*.mjs",
     "test:workspace": "tsx --test scripts/test-workspace.ts",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "test:cli": "node scripts/verify-ai-cli.mjs"
   },
   "dependencies": {
     "@azure/msal-node": "^7.0.1",

@@ -24,3 +24,9 @@ Egne argumentskabeloner indeholder `{prompt}` og køres uden shell-fortolkning. 
 - [Qwen Code headless](https://github.com/QwenLM/qwen-code/blob/main/docs/users/features/headless.md) beskriver promptflag, JSONL og `auto-edit`/`plan`. Installer den aktuelle Qwen Code separat, hvis den skal kode; Ollama-adapteren ændrer ikke karakter ved at vælge en større model.
 
 Ukendte hændelser ignoreres frem for at blive fremstillet som opfundne handlinger. En afsluttet `spawn_agent`-kommando betyder, at underagenten er oprettet; Orbit markerer først Codex-underagenten som færdig, når en terminal agentstatus modtages. En CLI-version med et andet outputformat skal afprøves og kan kræve en adapteropdatering.
+
+## Afprøvet kommandogrænseflade
+
+Den 30. oktober 2026 blev følgende rigtige npm-distributioner installeret isoleret på Linux og kørt med `--version` og `--help`: Codex 0.166.0, Claude Code 2.1.314, Gemini CLI 0.66.0, Kimi Code 2.4.1 og Qwen Code 0.26.4. Alle de flag, Orbit bygger til adapterne, findes i disse versioners hjælp. [Maskinlæsbar rapport](verification/native-cli-2026-10-30.json).
+
+Kør `npm run test:cli` for samme kontrol af programmer på PATH. En særskilt installationsmappe kan vælges med `ORBIT_CLI_BIN`. Kontrollen sender ingen prompt og foretager hverken login, modelkald, MCP-kald eller kreditkontrol. Den er valgfri og installerer ikke programmer. Kimi 2.4.1 kræver Node.js 22.19 eller nyere; Node.js 24 anbefales til den samlede opsætning. Installerede Windows-versioner og egne CLI-skabeloner skal kontrolleres på den pågældende maskine.
