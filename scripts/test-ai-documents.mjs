@@ -43,3 +43,34 @@ test('stored images and extracted text are rehydrated and client file paths igno
   assert.equal(image.dataUrl, 'data:image/png;base64,AQID');
   assert.equal(hydrateAttachment({ path: '/private', url: '/api/ai/file/../../private' }, { uploads }).path, undefined);
 });
+
+test('attachment limits reject the entire oversized request rather than discarding files', async () => {
+  const { validateAttachmentList } = await import('../server/ai-documents.mjs');
+  assert.equal(validateAttachmentList(Array.from({ length: 10 }, (_, id) => ({ id }))).length, 10);
+  assert.throws(() => validateAttachmentList(Array.from({ length: 11 }, (_, id) => ({ id }))), /Ingen filer er udeladt/);
+  assert.throws(() => validateAttachmentList([null]), /10 filer/);
+});
+
+test('Ollama receives actual images only for a verified vision profile and renamed cloud models remain gated', async t => {
+  const { runChat, setSecretsDir } = await import('../server/ai-services.mjs');
+  const root = mkdtempSync(join(tmpdir(), 'orbit-vision-')); setSecretsDir(root);
+  const nativeFetch = globalThis.fetch; t.after(() => { globalThis.fetch = nativeFetch; });
+  const image = { kind: 'image', name: 'shot.png', mime: 'image/png', dataUrl: 'data:image/png;base64,AQID' };
+  let profile = { capabilities: ['completion', 'vision'] }, chatCalls = 0;
+  globalThis.fetch = async (url, options) => {
+    if (String(url).endsWith('/api/tags')) return new Response(JSON.stringify({ models: [{ name: 'qwen-local' }] }));
+    if (String(url).endsWith('/api/show')) return new Response(JSON.stringify(profile));
+    if (String(url).endsWith('/api/chat')) {
+      chatCalls++; const payload = JSON.parse(options.body);
+      assert.deepEqual(payload.messages[1].images, ['AQID']); assert.equal(payload.messages[0].role, 'system');
+      return new Response('{"message":{"content":"Actual image received"}}\n');
+    }
+    throw new Error('Unexpected network request');
+  };
+  const input = { serviceId: 'qwen', cfg: { aiProviders: { qwen: { baseUrl: 'http://127.0.0.1:11434', model: 'qwen-local' } } }, dirs: { cwd: root }, messages: [{ role: 'system', text: 'Inspect actual input' }, { role: 'user', text: 'What failed?', attachments: [image] }] };
+  assert.equal(await runChat(input), 'Actual image received'); assert.equal(chatCalls, 1);
+  profile = { capabilities: ['completion'] };
+  await assert.rejects(runChat(input), /bekræfter ikke billedstøtte/); assert.equal(chatCalls, 1);
+  profile = { capabilities: ['completion', 'vision'], remote_host: 'https://cloud.example' };
+  await assert.rejects(runChat(input), /abonnement|bekræft|ekstra|forbrug/i); assert.equal(chatCalls, 1);
+});

@@ -89,7 +89,9 @@ export async function saveService(id: string, patch: Record<string, unknown>): P
 }
 
 export async function uploadAiFile(file: File): Promise<AiAttachment | null> {
-  const buf = await file.arrayBuffer();
+  if (file.size > 25 * 1024 * 1024) return null;
+  let buf: ArrayBuffer;
+  try { buf = await file.arrayBuffer(); } catch { return null; }
   if (buf.byteLength > 25 * 1024 * 1024) return null;
   let binary = '';
   const bytes = new Uint8Array(buf);
@@ -540,4 +542,12 @@ export async function enqueueAiTask(input: { goal: string; projectId: string; ta
 export async function controlAiQueue(action: 'pause' | 'resume' | 'cancel', id?: string): Promise<{ ok: boolean; reason?: string }> {
   try { return await (await fetch(`${BASE}/api/ai/queue/${action === 'cancel' ? encodeURIComponent(id ?? '') : 'control'}`, { method: action === 'cancel' ? 'DELETE' : 'POST', headers: { 'Content-Type': 'application/json' }, ...(action === 'cancel' ? {} : { body: JSON.stringify({ action }) }) })).json(); }
   catch { return { ok: false, reason: 'Handlingen kunne ikke bekræftes. Kontrollér forbindelsen.' }; }
+}
+
+
+export async function fetchAttachmentText(attachment: AiAttachment): Promise<{ ok: boolean; text?: string; reason?: string }> {
+  const name = attachment.url?.match(/^\/api\/ai\/file\/([^/]+)$/)?.[1];
+  if (!name) return { ok: false, reason: 'Filen er ikke gemt i Orbit.' };
+  try { return await (await fetch(`${BASE}/api/ai/attachment-text/${encodeURIComponent(name)}`)).json(); }
+  catch { return { ok: false, reason: 'Dokumentteksten kunne ikke hentes. Kontrollér forbindelsen.' }; }
 }

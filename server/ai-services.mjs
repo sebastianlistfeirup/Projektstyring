@@ -253,6 +253,7 @@ function contentToText(msg) {
   for (const a of msg.attachments ?? []) {
     if (a.extractedText) t += `\n\nDokumentindhold fra ${a.name}:\n${a.extractedText}\n`;
     t += `\n\n[Vedhæftet ${a.kind === 'image' ? 'billede' : 'fil'}: ${a.name}${a.path ? ` — tilgængelig på disk: ${a.path}` : ''}]`;
+    if (a.kind === 'image') t += '\nUndersøg selve billedet via billedinput eller et billedlæseværktøj. Hvis billedet ikke kan læses, skal du sige det; gæt ikke ud fra filnavnet.';
   }
   return t;
 }
@@ -343,7 +344,7 @@ async function chatOllama({ baseUrl, model, messages, onDelta, signal }) {
   const r = await fetch(`${baseUrl}/api/chat`, {
     method: 'POST', signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, messages: messages.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: contentToText(m) })), stream: true }),
+    body: JSON.stringify({ model, messages: messages.map(m => ({ role: ['assistant', 'system'].includes(m.role) ? m.role : 'user', content: contentToText(m), ...((m.attachments ?? []).some(a => a.kind === 'image') ? { images: m.attachments.filter(a => a.kind === 'image').map(a => a.dataUrl.split(',')[1]) } : {}) })), stream: true }),
   });
   if (!r.ok) throw new Error(`Ollama fejl ${r.status}`);
   await readLines(r, line => {
@@ -585,6 +586,7 @@ export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent,
 // onSubagent: kun for CLI'er der streamer strukturerede events (Claude stream-json).
 export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubagent, onProcess, onAction, signal, cwd, readOnly = false }) {
   messages = (messages ?? []).map(m => ({ ...m, attachments: m.attachments?.map(a => hydrateAttachment(a, dirs)) }));
+  if (messages.some(message => message.attachments?.some(attachment => attachment.kind === 'image' && !attachment.path && !attachment.dataUrl))) throw new Error('Billedets indhold kunne ikke indlæses. Upload billedet igen.');
   if (readOnly) messages = [{ role: 'system', text: 'Denne tur er kun til læsning og rådgivning. Du må læse relevant materiale, men ikke ændre filer, installere noget, sende beskeder eller udføre andre eksterne ændringer. Returnér dit resultat til samtalen.' }, ...messages];
   const svc = serviceById(serviceId);
   if (!svc) throw new Error(`Ukendt tjeneste: ${serviceId}`);
@@ -610,7 +612,8 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
     const accessDirs = useDefaultTemplate
       ? cliAccessDirectories(cwd ? messages.map(m => ({ attachments: m.attachments })) : messages) : [];
     if (useDefaultTemplate && contextPath) accessDirs.push(contextDir);
-    const native = useDefaultTemplate ? nativeCliOptions(serviceId, { readOnly, accessDirs, contextDir, model: p.model }) : { args: [], jsonl: false };
+    const imagePaths = [...new Set(messages.flatMap(message => (message.attachments ?? []).filter(attachment => attachment.kind === 'image' && attachment.path).map(attachment => attachment.path)))];
+    const native = useDefaultTemplate ? nativeCliOptions(serviceId, { readOnly, accessDirs, contextDir, model: p.model, imagePaths }) : { args: [], jsonl: false };
     const callId = randomUUID().slice(0, 12);
     await chatCli({
       cmd: p.cmd ?? svc.cmd,
@@ -629,8 +632,12 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
     const baseUrl = p.baseUrl ?? svc.baseUrl;
     const inventory = await ollamaInventory(baseUrl);
     const model = pickOllamaModel(inventory.map(m => m.name), p.model ?? svc.model);
-    const policy = billingPolicy(svc, { ...p, model, remoteModel: Boolean(inventory.find(m => m.name === model)?.remote_host) });
+    const profileResponse = await fetch(`${baseUrl}/api/show`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000) });
+    if (!profileResponse.ok) throw new Error('Ollamas modelprofil kunne ikke kontrolleres før brug. Kontrollér modelnavn og Ollama-installation.');
+    const profile = await profileResponse.json();
+    const policy = billingPolicy(svc, { ...p, model, remoteModel: Boolean(profile.remote_host || profile.remote_model || inventory.find(m => m.name === model)?.remote_host) });
     if (!policy.allowed) throw new Error(policy.reason);
+    if (messages.some(message => message.attachments?.some(attachment => attachment.kind === 'image')) && !profile.capabilities?.includes('vision')) throw new Error('Den valgte lokale model bekræfter ikke billedstøtte. Vælg en vision-model i Qwen/Ollama eller en anden billedkyndig tjeneste.');
     await chatOllama({ baseUrl, model, messages, onDelta: delta, signal });
   } else {
     const args = { baseUrl: p.baseUrl ?? svc.baseUrl, apiKey: p.apiKey, model: p.model ?? svc.model, messages, onDelta: delta, signal };

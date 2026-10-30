@@ -67,6 +67,9 @@ test('native CLI options preserve prompt values and Kimi analysis uses a read-on
   assert.ok(!profile.includes('Bash'));
   assert.equal(serviceCapabilities({ id: 'qwen' }).repository, false);
   assert.throws(() => cliArguments('-p', 'lost prompt'), /prompt/);
+  const imageOptions = nativeCliOptions('codex', { imagePaths: ['shot one.png', 'shot-two.png'] });
+  const imageArgs = cliArguments('exec --skip-git-repo-check {prompt}', 'Inspect images', imageOptions.args);
+  assert.deepEqual(imageArgs.slice(imageArgs.indexOf('--image'), imageArgs.indexOf('--skip-git-repo-check')), ['--image', 'shot one.png', '--image', 'shot-two.png']);
 });
 
 test('installation probe runs version only and never reports verified login or quota', async () => {

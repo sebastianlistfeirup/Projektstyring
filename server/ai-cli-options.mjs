@@ -3,11 +3,14 @@ import { join } from 'node:path';
 
 // Flags follow the upstream headless references linked in docs/ai-adapters.md.
 // Keep prompt-bearing flags adjacent to their values when composing arguments.
-export function nativeCliOptions(provider, { readOnly, accessDirs = [], contextDir, model }) {
+export function nativeCliOptions(provider, { readOnly, accessDirs = [], contextDir, model, imagePaths = [] }) {
   const args = [];
   if (provider === 'codex') {
     args.push('--sandbox', readOnly ? 'read-only' : 'workspace-write', '--json');
     for (const path of accessDirs) args.push('--add-dir', path);
+    // Codex splits comma-delimited image arguments. Such rare paths remain
+    // accessible through its native image-reading tool via the prompt.
+    for (const path of imagePaths) if (!path.includes(',')) args.push('--image', path);
   } else if (provider === 'claude') {
     args.push('--permission-mode', readOnly ? 'plan' : 'acceptEdits', '--output-format', 'stream-json', '--verbose');
     if (accessDirs.length) args.push('--add-dir', ...accessDirs);

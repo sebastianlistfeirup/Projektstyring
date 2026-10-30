@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, realpa
 import { join, basename, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { serviceById, serviceAvailability, runChat, setSecretsDir, loadKeySecrets, saveKeySecrets, aiCfg, inspectCliInstallation, parseCliTemplate } from './ai-services.mjs';
-import { extractDocument, hydrateAttachment } from './ai-documents.mjs';
+import { extractDocument, hydrateAttachment, validateAttachmentList } from './ai-documents.mjs';
 import { inspectRepository, validateChecks } from './ai-repository.mjs';
 import { projectExecution } from './task-execution.mjs';
 import { importProjectPlan } from './project-plan.mjs';
@@ -221,6 +221,18 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     res.status(404).end();
   });
 
+  app.get('/api/ai/attachment-text/:name', async (req, res) => {
+    try {
+      const name = String(req.params.name);
+      const file = hydrateAttachment({ name, kind: 'file', url: `/api/ai/file/${name}` }, dirs);
+      if (!file.path) throw new Error('Filen findes ikke i Orbit.');
+      const text = file.extractedText ?? await extractDocument(file.path, '', name);
+      if (!text?.trim()) throw new Error('Der kunne ikke udtrækkes tekst fra filen. Brug en tekstudgave af dokumentet.');
+      if (!file.extractedText) writeFileSync(`${file.path}.text.txt`, text);
+      res.json({ ok: true, text });
+    } catch (error) { res.status(400).json({ ok: false, reason: error.message }); }
+  });
+
   // Live swarm-tilstand: aktiv kørsel eller seneste afsluttede.
   app.get('/api/ai/swarm', (_req, res) => {
     res.json({ ok: true, run: swarmState.active ?? swarmState.last });
@@ -371,7 +383,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       const availability = await serviceAvailability(cfg);
       const orchestratorId = await pickOrchestrator(cfg, availability);
       if (!orchestratorId) return res.status(409).json({ ok: false, reason: 'Ingen orkestrator tilgængelig (installér et CLI).' });
-      const jobs = await planWithLLM({ orchestratorId, goal: String(goal), bible: String(bible ?? ''), attachments, cfg, dirs: projectMemoryDirs(dirs, projectId), availability });
+      const jobs = await planWithLLM({ orchestratorId, goal: String(goal), bible: String(bible ?? ''), attachments: validateAttachmentList(attachments), cfg, dirs: projectMemoryDirs(dirs, projectId), availability });
       res.json({ ok: true, jobs, orchestratorId });
     } catch (e) {
       res.status(500).json({ ok: false, reason: e.message });
@@ -635,7 +647,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     // overskrive den nye kørsel i Swarm, og to agenter kan ændre samme projekt.
     if (swarmState.active) return res.status(409).json({ ok: false, reason: 'En Auto-kørsel er allerede aktiv. Stop den, og vent til den er afsluttet, før du starter en ny.' });
     let input;
-    try { input = getSnapshot ? projectExecution(getSnapshot(), req.body ?? {}) : req.body ?? {}; }
+    try { input = getSnapshot ? projectExecution(getSnapshot(), req.body ?? {}) : req.body ?? {}; validateAttachmentList(input.attachments); }
     catch (error) { return res.status(409).json({ ok: false, reason: error.message }); }
     const emit = sse(res);
     const { goal, bible, attachments, jobs, mode, pauseAfterPlan, projectId, taskId, repositoryPath, checks, contextManifest } = input;

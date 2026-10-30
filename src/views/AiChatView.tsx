@@ -1,4 +1,6 @@
 import ChatMarkdown from '../components/ChatMarkdown';
+import AttachmentPreview from '../components/AttachmentPreview';
+import { useChatDraft } from '../lib/useChatDraft';
 import ProjectScopePanel from '../components/ProjectScopePanel';
 import { workLimitReason } from '../lib/workLimits';
 import { useSwarm } from '../lib/swarm';
@@ -14,7 +16,6 @@ import {
   ClipboardList,
   Copy,
   Download,
-  FileText,
   Gavel,
   Loader2,
   Paperclip,
@@ -36,6 +37,7 @@ import { companionStatus } from '../lib/companion';
 import {
   deletePrompt,
   fetchAiServices,
+  fetchAttachmentText,
   fetchTemplates,
   fetchPrompts,
   saveAiPrefs,
@@ -49,7 +51,6 @@ import {
   uploadAiFile,
   type AiPrompt,
   type AiServiceInfo,
-  type PipelineTemplate,
 } from '../lib/aiApi';
 import type { AiAttachment, AiChat, AiMessage } from '../lib/types';
 import { pushNow } from '../lib/sync';
@@ -59,21 +60,7 @@ const BASE_URL = 'http://127.0.0.1:4310';
 /* ---------- vedhæftninger / artefakter ---------- */
 
 function AttachmentChip({ a, onRemove }: { a: AiAttachment; onRemove?: () => void }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/20 dark:bg-white/5 px-2 py-1 text-[11px]">
-      {a.kind === 'image' && (a.dataUrl || a.url) ? (
-        <img src={a.dataUrl ?? (a.url?.startsWith('/') ? `${BASE_URL}${a.url}` : a.url)} alt={a.name} className="h-8 w-8 rounded object-cover" />
-      ) : (
-        <FileText size={12} />
-      )}
-      <span className="max-w-[140px] truncate">{a.name}</span>
-      {onRemove && (
-        <button onClick={onRemove} className="opacity-50 hover:opacity-100" aria-label="Fjern">
-          <X size={11} />
-        </button>
-      )}
-    </span>
-  );
+  return <AttachmentPreview attachment={a} onRemove={onRemove} />;
 }
 
 function ArtifactCard({ a }: { a: AiAttachment }) {
@@ -416,14 +403,15 @@ export function AiChatView() {
   const [companionOk, setCompanionOk] = useState<boolean | null>(null);
   const [service, setService] = useState<string>('auto');
   const [runMode, setRunMode] = useState<'standard' | 'roles' | 'debate' | 'vote' | 'race'>('standard');
-  const [planDraft, setPlanDraft] = useState<PipelineTemplate['jobs'] | null>(null);
   const [suggestingPlan, setSuggestingPlan] = useState(false);
   const [prompts, setPrompts] = useState<AiPrompt[]>([]);
   const [promptsOpen, setPromptsOpen] = useState(false);
   const [pausePlan, setPausePlan] = useState(false);
   const [suggestingBible, setSuggestingBible] = useState(false);
-  const [text, setText] = useState('');
-  const [pending, setPending] = useState<AiAttachment[]>([]);
+  const [loadingBibleFile, setLoadingBibleFile] = useState(false);
+  const { text, pending, planDraft, setText, setPending, setPlanDraft, getPending, persistenceIssue } = useChatDraft(chatId);
+  const uploadQueue = useRef(Promise.resolve());
+  const uploadsWaiting = useRef(0);
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [bibleOpen, setBibleOpen] = useState(false);
@@ -486,14 +474,21 @@ export function AiChatView() {
   };
 
   const addFiles = useCallback(async (files: FileList | File[]) => {
-    setUploading(true);
-    for (const f of Array.from(files)) {
-      const up = await uploadAiFile(f);
-      if (up) setPending((p) => [...p, up]);
-      else setSendIssue(`Filen ${f.name} kunne ikke uploades. Kontrollér størrelse (maks. 25 MB) og forbindelsen.`);
+    const list = Array.from(files);
+    uploadsWaiting.current += list.length;
+    if (list.length) setUploading(true);
+    for (const file of list) {
+      uploadQueue.current = uploadQueue.current.then(async () => {
+        try {
+          if (getPending().length >= 10) { setSendIssue(`Højst 10 vedhæftninger pr. kørsel. ${file.name} blev ikke tilføjet; fjern en fil eller start en ny kørsel.`); return; }
+          const uploaded = await uploadAiFile(file);
+          if (uploaded) setPending(previous => [...previous, uploaded]);
+          else setSendIssue(`Filen ${file.name} kunne ikke uploades. Kontrollér størrelse (maks. 25 MB) og forbindelsen.`);
+        } catch { setSendIssue(`Filen ${file.name} kunne ikke læses eller uploades. Prøv igen.`); } finally { uploadsWaiting.current--; if (!uploadsWaiting.current) setUploading(false); }
+      });
     }
-    setUploading(false);
-  }, []);
+    await uploadQueue.current;
+  }, [setPending, getPending]);
 
   const onPaste = useCallback(async (e: React.ClipboardEvent) => {
     const items = Array.from(e.clipboardData.items);
@@ -503,7 +498,7 @@ export function AiChatView() {
 
   const send = useCallback(async () => {
     const body = text.trim();
-    if ((!body && pending.length === 0) || !chat || sendingRef.current || uploading) return;
+    if ((!body && pending.length === 0) || !chat || sendingRef.current || uploading || uploadsWaiting.current > 0) return;
     setSendIssue('');
     const atts = pending.map(({ dataUrl: _d, extractedText: _text, ...rest }) => rest);
     if (activeRun) {
@@ -531,6 +526,7 @@ export function AiChatView() {
     } finally { sendingRef.current = false; setSending(false); }
     setText('');
     setPending([]);
+    setPlanDraft(null);
     addAiMessage(chat.id, { role: 'user', text: body, attachments: atts, status: 'done' });
     if (aiChats.find((c) => c.id === chat.id)?.title === t('chat.untitled') && body) {
       useStore.setState((s) => ({ aiChats: s.aiChats.map((c) => (c.id === chat.id ? { ...c, title: body.slice(0, 48) } : c)) }));
@@ -616,7 +612,7 @@ export function AiChatView() {
     abortRef.current = null;
     runningIdRef.current = null;
     textareaRef.current?.focus();
-  }, [text, pending, running, activeRun, uploading, chat, chatProject, taskId, service, services, bible, aiChats, runMode, pausePlan, planDraft, addAiMessage, updateAiMessage]);
+  }, [text, pending, running, activeRun, uploading, chat, chatProject, taskId, service, services, bible, aiChats, runMode, pausePlan, planDraft, addAiMessage, updateAiMessage, setText, setPending, setPlanDraft]);
 
   const availableCount = useMemo(() => (services ? Object.values(services).filter((s) => s.available).length : 0), [services]);
 
@@ -779,7 +775,7 @@ export function AiChatView() {
             >
               {pending.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 px-3 pt-2.5">
-                  {pending.map((a, i) => <div key={a.id ?? i} className="space-y-1"><AttachmentChip a={a} onRemove={() => setPending(p => p.filter((_, j) => j !== i))} />{a.extractedText && chat.projectId && <button className="text-[10px] underline text-indigo-400" onClick={() => { setBible(chat.projectId!, a.extractedText!); setBibleOpen(true); }}>Brug teksten som bibelkladde</button>}{a.extractionError && <p className="text-[10px] text-amber-400">Tekst kunne ikke udtrækkes: {a.extractionError}</p>}</div>)}
+                  {pending.map((a, i) => <div key={a.id ?? i} className="space-y-1"><AttachmentChip a={a} onRemove={() => setPending(p => p.filter((_, j) => j !== i))} />{chat.projectId && (a.extractedText || /\.(pdf|docx|txt|md|csv|json|yaml|yml)$/i.test(a.name)) && <button disabled={loadingBibleFile} className="text-[10px] underline text-indigo-400 disabled:opacity-40" onClick={async () => { setLoadingBibleFile(true); try { const result = a.extractedText ? { ok: true, text: a.extractedText } : await fetchAttachmentText(a); if (!result.ok || !result.text) { setSendIssue(result.reason ?? 'Dokumentteksten kunne ikke læses.'); return; } setBible(chat.projectId!, result.text); setBibleOpen(true); } finally { setLoadingBibleFile(false); } }}>{a.extractedText ? 'Brug teksten som bibelkladde' : 'Hent tekst til bibelkladde'}</button>}{a.extractionError && <p className="text-[10px] text-amber-400">Tekst kunne ikke udtrækkes: {a.extractionError}</p>}</div>)}
                 </div>
               )}
               <div className="flex items-end gap-2 p-2.5">
@@ -935,7 +931,8 @@ export function AiChatView() {
                 </div>
               )}
               <div className="px-3 pb-2 text-[10px] opacity-35 flex items-center gap-1.5">
-                {uploading ? <Loader2 size={10} className="animate-spin" /> : null}
+                {persistenceIssue && <span className="text-amber-500">{persistenceIssue}</span>}
+              {uploading ? <Loader2 size={10} className="animate-spin" /> : null}
                 {t('chat.composerHint')}
               </div>
             </div>

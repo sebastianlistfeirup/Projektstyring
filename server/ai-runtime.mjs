@@ -6,6 +6,7 @@ import { validatePlan, executeGraph, runOutcome, saveRun } from './ai-state.mjs'
 import { validateProjectPlan, PROJECT_PLAN_FORMAT } from './project-plan.mjs';
 import { serviceCapabilities } from './ai-capabilities.mjs';
 import { loadJobContext } from './ai-job-context.mjs';
+import { validateAttachmentList } from './ai-documents.mjs';
 import { minimumReviewScore, validateReview } from './ai-review.mjs';
 const execFileAsync = promisify(execFile);
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync } from 'fs';
@@ -170,7 +171,7 @@ function attachmentContext(attachments) {
   return {
     role: 'user',
     text: 'Brugerens vedhæftede filer er en del af opgaven. Læs filerne fra de angivne diskstier og brug deres faktiske indhold. Udtræk tekst fra DOCX/PDF med lokale værktøjer i stedet for at gætte på indholdet.',
-    attachments: attachments.slice(0, 10),
+    attachments: validateAttachmentList(attachments),
   };
 }
 
@@ -496,6 +497,7 @@ async function runTeamJob({ job, handle, goal, bible, attachments, cfg, dirs, av
 
 // ---- Hovedkørsel --------------------------------------------------------------
 export async function executeRun({ runId, goal, bible, attachments = [], predefinedJobs, cfg, dirs, emit, mode = 'standard', pauseAfterPlan = false, resumeDir = null, previousRun = null, projectId = null, taskId = null, repository = null, checks = [], contextManifest = null }) {
+  attachments = validateAttachmentList(attachments);
   dirs = projectMemoryDirs(dirs, projectId);
   const run = {
     runId, goal, projectId, taskId, repository, checks,
@@ -508,7 +510,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     workDir: resumeDir ?? join(dirs.runs, 'work', runId),
     results: [...(previousRun?.results ?? [])],
     auditDir: previousRun?.auditDir ?? join(dirs.runs, 'deliverables', runId),
-    attachments: Array.isArray(attachments) ? attachments.slice(0, 10) : [],
+    attachments: [...attachments],
     mode,
     startedAt: Date.now(),
     orchestratorId: null,

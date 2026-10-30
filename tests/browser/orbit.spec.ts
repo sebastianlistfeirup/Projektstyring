@@ -314,3 +314,38 @@ test('work orders can be queued from their drawer and execute serially with the 
   }
   expect(readFileSync(join(source, 'game.txt'), 'utf8')).toBe('original');
 });
+
+test('image previews and unsent drafts survive reload without leaking uploads into another chat', async ({ page }) => {
+  await setup(page);
+  const firstUrl = page.url();
+  await page.locator('textarea').last().fill('Første kladde: undersøg billedet.');
+  let uploads = 0;
+  await page.route(`${base}/api/ai/upload`, async route => { await new Promise(resolve => setTimeout(resolve, 250)); await route.continue(); uploads++; });
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  await page.locator('input[type=file]').setInputFiles({ name: 'first-shot.png', mimeType: 'image/png', buffer: png });
+  await page.locator('input[type=file]').setInputFiles({ name: 'second-shot.png', mimeType: 'image/png', buffer: png });
+  await page.getByRole('button', { name: 'Ny chat', exact: true }).first().click();
+  const secondUrl = page.url();
+  await expect(page.locator('textarea').last()).toHaveValue('');
+  await page.locator('textarea').last().fill('Anden kladde uden billeder.');
+  await expect.poll(() => uploads).toBe(2);
+  await expect.poll(() => page.evaluate(() => Object.values(JSON.parse(sessionStorage.getItem('orbit-chat-drafts-v1') ?? '{}')).some(draft => (draft as { attachments: unknown[] }).attachments.length === 2))).toBe(true);
+  await expect(page.getByRole('button', { name: 'Åbn billede: first-shot.png' })).toHaveCount(0);
+  await page.goto(firstUrl);
+  await expect(page.locator('textarea').last()).toHaveValue('Første kladde: undersøg billedet.');
+  await page.getByRole('button', { name: 'Åbn billede: first-shot.png' }).click();
+  const preview = page.getByRole('dialog', { name: 'Billedvisning: first-shot.png' });
+  await expect(preview).toBeVisible();
+  await expect(preview.getByText('1 × 1 px', { exact: false })).toBeVisible();
+  await preview.getByRole('button', { name: 'Originalstørrelse' }).click();
+  await expect(preview.getByRole('button', { name: 'Tilpas billedet' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(preview).not.toBeVisible();
+  await expect(page.getByRole('button', { name: 'Åbn billede: first-shot.png' })).toBeFocused();
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Åbn billede: second-shot.png' })).toBeVisible();
+  await expect(page.locator('textarea').last()).toHaveValue('Første kladde: undersøg billedet.');
+  await page.goto(secondUrl);
+  await expect(page.locator('textarea').last()).toHaveValue('Anden kladde uden billeder.');
+  await expect(page.getByRole('button', { name: 'Åbn billede: first-shot.png' })).toHaveCount(0);
+});

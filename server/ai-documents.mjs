@@ -38,8 +38,19 @@ export function hydrateAttachment(attachment, dirs) {
     if (rel.startsWith('..') || isAbsolute(rel)) throw new Error('Vedhæftningen peger uden for Orbit.');
     const out = { ...attachment, path };
     if (attachment.kind === 'image') out.dataUrl = `data:${attachment.mime};base64,${readFileSync(path).toString('base64')}`;
-    if (existsSync(`${path}.text.txt`)) out.extractedText = readFileSync(`${path}.text.txt`, 'utf8');
+    if (existsSync(`${path}.text.txt`)) {
+      const textRelative = relative(realpathSync(base), realpathSync(`${path}.text.txt`));
+      if (textRelative.startsWith('..') || isAbsolute(textRelative)) throw new Error('Dokumentteksten peger uden for Orbit.');
+      out.extractedText = readFileSync(`${path}.text.txt`, 'utf8');
+    }
     return out;
   }
   throw new Error(`Vedhæftningen findes ikke længere: ${attachment.name}`);
+}
+
+
+export function validateAttachmentList(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > 10 || value.some(item => !item || typeof item !== 'object' || Array.isArray(item))) throw new Error('Vedhæft højst 10 filer pr. kørsel. Ingen filer er udeladt automatisk.');
+  return value;
 }
