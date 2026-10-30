@@ -32,6 +32,13 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Browser flows
         run: npm run test:browser
+      - name: Save performance samples
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-${{ matrix.os }}
+          path: test-results/**/*performance.json
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

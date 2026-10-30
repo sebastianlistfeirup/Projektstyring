@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSwarm } from '../lib/swarm';
 
 type Measurement = {
-  measuredAt: string; userAgent: string; viewport: { width: number; height: number; pixelRatio: number };
+  runId: string | null; measuredAt: string; userAgent: string; viewport: { width: number; height: number; pixelRatio: number };
   durationMs: number; frames: number; medianFrameMs: number | null; p95FrameMs: number | null; maxFrameMs: number | null;
   framesOver50ms: number; activeServices: string[]; maxVisibleAgents: number; maxAnimations: number;
   textEventsObserved: number; reducedMotion: boolean; interrupted: boolean; runChanged: boolean;
@@ -32,7 +32,7 @@ export default function OrbitPerformanceProbe() {
     const cleanup = () => { cancelAnimationFrame(frame); clearTimeout(timer); unsubscribe(); document.removeEventListener('visibilitychange', visibility); cancel.current = null; };
     const finish = (interrupted: boolean) => {
       cleanup(); gaps.sort((a, b) => a - b);
-      setResult({ measuredAt: new Date().toISOString(), userAgent: navigator.userAgent,
+      setResult({ runId: initialRun ?? null, measuredAt: new Date().toISOString(), userAgent: navigator.userAgent,
         viewport: { width: innerWidth, height: innerHeight, pixelRatio: devicePixelRatio }, durationMs: Math.round(performance.now() - started),
         frames: gaps.length, medianFrameMs: gaps.length ? gaps[Math.floor(gaps.length * .5)] : null,
         p95FrameMs: gaps.length ? gaps[Math.floor(gaps.length * .95)] : null, maxFrameMs: gaps.at(-1) ?? null,

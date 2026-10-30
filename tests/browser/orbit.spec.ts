@@ -656,6 +656,7 @@ test('service spheres group jobs, retain nested satellites and keep animation wo
     const download = await downloadPromise;
     await download.saveAs(testInfo.outputPath('streaming-performance.json'));
     const measurement = JSON.parse(readFileSync(testInfo.outputPath('streaming-performance.json'), 'utf8'));
+    expect(measurement.runId).toBe(run.runId);
     expect(measurement.textEventsObserved).toBeGreaterThan(50);
     expect(measurement.activeServices).toHaveLength(9);
     expect(measurement.maxAnimations).toBeLessThanOrEqual(10);

@@ -1044,7 +1044,7 @@ export function AiSwarmView() {
             </div>
             <div role="group" aria-label="Vælg agentopgave" className="px-4 pb-3 flex flex-wrap gap-2 max-h-36 overflow-auto">{jobs.map(job => <button key={job.id} className="rounded-full border border-zinc-200 dark:border-white/10 px-3 py-1.5 text-xs text-left" aria-pressed={focusedJob?.id === job.id} onClick={() => selectOrb(job.id)}><span className="inline-block w-2 h-2 rounded-full mr-2" style={{ background: hex(serviceColor(services, job.serviceId)) }} />{serviceName(services, job.serviceId)} · {job.title}</button>)}</div>
             {focusedJob && <div className="px-4 pb-3 text-xs"><p className="font-medium">{serviceName(services, focusedJob.serviceId)} · {focusedJob.title}</p><p className="opacity-65 mt-1">{focusedJob.actions?.at(-1)?.label ?? focusedJob.error ?? 'Ingen registreret værktøjshændelse endnu.'}</p>{!!focusedJob.subagents?.length && <details className="opacity-65 mt-1"><summary className="cursor-pointer">{focusedJob.subagents.length} registrerede underagenter</summary><p className="mt-1">{focusedJob.subagents.map(agent => agent.name).join(', ')}</p></details>}</div>}
-            <OrbitPerformanceProbe />
+            {!archived && !replay && <OrbitPerformanceProbe key={shown.runId} />}
             <p className="px-4 pb-3 text-[10px] opacity-50">Animation viser aktivitet, ikke en beregnet færdiggørelsesprocent. Reduceret bevægelse følger enhedens indstilling.</p>
           </section>}
           {mapMode !== 'constellation' && <OrbitWorkMap key={shown.runId} run={shown} services={services} connected={connected} historical={Boolean(archived || replay)} now={replay?.cursor ?? now} selectedJobId={focusedJob?.id} onSelectJob={selectOrb} />}
