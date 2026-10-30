@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -30,5 +30,7 @@ test('review compares recorded commits, preserves literal filenames and explains
   const historical = await repositoryChanges(later, '[a].txt', commit);
   assert.equal(historical.commit, commit); assert.match(historical.patch, /saved delivery/); assert.ok(!historical.patch.includes('unsaved subsequent edit'));
   await assert.rejects(repositoryChanges({ ...run, workDir: join(root, 'missing') }), /arbejdsmappe mangler/);
+  mkdirSync(join(root, 'nested'));
+  await assert.rejects(repositoryChanges({ ...run, workDir: join(root, 'nested') }), /ikke det forventede Git-repository/);
   await assert.rejects(repositoryChanges({ ...run, evidence: { commit: '--help' } }), /ingen gemt/);
 });

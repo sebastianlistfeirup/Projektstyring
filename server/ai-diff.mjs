@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { relative } from 'node:path';
 
 const exec = promisify(execFile);
@@ -12,10 +12,13 @@ async function target(run, requestedCommit, wholeBranch = false) {
   const recorded = [run.evidence?.commit, ...(run.results ?? []).map(result => result.commit), ...(run.verificationHistory ?? []).map(attempt => attempt.commit)];
   if (!recorded.includes(commit)) throw new Error('Commit er ikke registreret som en leverance i denne kørsel.');
   let cwd;
-  try { cwd = realpathSync(run.workDir); } catch { throw new Error('Kørslens arbejdsmappe mangler. Gendan den på denne maskine for at se kodeændringerne.'); }
-  // Git for Windows can return a different drive-letter case/path separator.
-  // Compare canonical paths using the platform's path semantics.
-  if (relative(cwd, realpathSync((await git(cwd, ['rev-parse', '--show-toplevel'])).trim())) !== '') throw new Error('Kørslens arbejdsmappe er ikke det forventede Git-repository.');
+  try { cwd = realpathSync.native(run.workDir); } catch { throw new Error('Kørslens arbejdsmappe mangler. Gendan den på denne maskine for at se kodeændringerne.'); }
+  // Windows may expose one directory through long/8.3 paths or junctions.
+  // Check its filesystem identity as well as the canonical path spelling.
+  const top = realpathSync.native((await git(cwd, ['rev-parse', '--show-toplevel'])).trim());
+  const localInfo = statSync(cwd, { bigint: true }), rootInfo = statSync(top, { bigint: true });
+  const sameIdentity = localInfo.ino !== 0n && localInfo.ino === rootInfo.ino && localInfo.dev === rootInfo.dev;
+  if (!sameIdentity && relative(cwd, top) !== '') throw new Error(`Kørslens arbejdsmappe er ikke det forventede Git-repository (${cwd}; Git: ${top}).`);
   await git(cwd, ['merge-base', '--is-ancestor', baseCommit, commit]);
   return { cwd, baseCommit, commit };
 }
