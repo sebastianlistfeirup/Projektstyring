@@ -824,7 +824,7 @@ test('native permission waits through reload, approves once, rejects stale appro
   const projectId = await setup(page);
   await page.getByRole('button', { name: 'Vis projektets Git-grundlag' }).click();
   const repository = page.getByRole('region', { name: 'Projektets Git-grundlag' });
-  await expect(repository).toContainText(source);
+  await expect(repository).toContainText(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: source, encoding: 'utf8' }).trim());
   await expect(repository).toContainText(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' }).trim());
   await expect(repository).toContainText('Ingen lokale ændringer registreret.');
   const root = mkdtempSync(join(tmpdir(), 'orbit-browser-permission-'));
