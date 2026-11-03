@@ -87,7 +87,13 @@ export interface SwarmApproval {
   jobs: SwarmJob[];
 }
 
+export interface NativePermission {
+  id: string; runId: string; projectId?: string; jobId?: string; serviceId: string;
+  cwd: string; toolName: string; input: Record<string, unknown>; reason: string; requestedAt: number; readOnly: boolean;
+}
+
 interface SwarmStore {
+  permissions: NativePermission[];
   connected: boolean;
   processes: { pid: number; kind: string; runId?: string; startedAt?: number }[];
   run: SwarmRun | null;
@@ -158,6 +164,7 @@ export function requestNotifyPermission(): void {
 /* ---------- tilstand ---------- */
 
 export const useSwarm = create<SwarmStore>()((set, get) => ({
+  permissions: [],
   connected: false,
   processes: [],
   run: null,
@@ -476,7 +483,7 @@ async function syncState() {
   try {
     const r = await fetch(`${API}/api/ai/swarm?view=live`);
     const j = await r.json();
-    if (j?.ok) { useSwarm.setState({ processes: Array.isArray(j.processes) ? j.processes : [] }); useSwarm.getState().setRun(j.run ? presentRun(j.run) : null); if (j.run) reconcileTask(j.run); }
+    if (j?.ok) { useSwarm.setState({ permissions: Array.isArray(j.permissions) ? j.permissions : [], processes: Array.isArray(j.processes) ? j.processes : [] }); useSwarm.getState().setRun(j.run ? presentRun(j.run) : null); if (j.run) reconcileTask(j.run); }
   } catch { /* companion offline */ }
 }
 
@@ -500,6 +507,7 @@ export function connectSwarm(): void {
     ws.onmessage = (m) => {
       try {
         const obj = JSON.parse(String(m.data));
+        if (obj?.kind === 'ai' && ['permission_request', 'permission_resolved'].includes(obj.type)) void syncState();
         // Serveren sender AI-hændelser med kind:'ai' (obj.type er hændelsestypen).
         if (obj?.kind === 'ai' || obj?.type === 'ai') liveEvents.push(obj);
       } catch { /* ignorer ikke-JSON */ }

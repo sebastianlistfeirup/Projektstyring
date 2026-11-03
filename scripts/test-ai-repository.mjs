@@ -4,8 +4,24 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createRunWorktree, inspectRepository, verifyRepository, repositoryEvidence } from '../server/ai-repository.mjs';
+import { createRunWorktree, inspectRepository, repositoryReadiness, verifyRepository, repositoryEvidence } from '../server/ai-repository.mjs';
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+
+test('repository readiness reveals fixes on another branch without changing the checkout', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-readiness-'));
+  git(root, 'init', '-q'); writeFileSync(join(root, 'project.godot'), 'config_version=5');
+  git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'Base project');
+  const original = git(root, 'rev-parse', 'HEAD'), branch = git(root, 'branch', '--show-current');
+  git(root, 'checkout', '-qb', 'orbit/texture-repair'); writeFileSync(join(root, 'texture.txt'), 'fixed');
+  git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'Restore textures');
+  git(root, 'checkout', '-q', branch); writeFileSync(join(root, 'notes.txt'), 'Uncommitted user notes');
+  const report = await repositoryReadiness(root);
+  assert.equal(report.baseCommit, original); assert.equal(report.godotProject, true);
+  assert.equal(report.changedFileCount, 1); assert.match(report.changedFiles[0], /notes.txt/);
+  assert.equal(report.otherBranches[0].branch, 'orbit/texture-repair');
+  assert.equal(report.recentCommits[0].subject, 'Base project'); assert.equal(report.stable, true);
+  assert.equal(git(root, 'rev-parse', 'HEAD'), original); assert.equal(readFileSync(join(root, 'notes.txt'), 'utf8'), 'Uncommitted user notes');
+});
 
 test('isolated worktree preserves source checkout and records actual checks and commit', async () => {
   const root = mkdtempSync(join(tmpdir(), 'orbit-repo-'));

@@ -1,4 +1,5 @@
 import { permissionBlock } from './ai-delivery-status.mjs';
+import { claudeControl } from './claude-control.mjs';
 // Orbit AI-motor — abonnement-first orkestrering.
 // Primære motorer: lokale CLI-værktøjer (Codex, Claude Code, Kimi Code, Gemini CLI, Ollama/Qwen).
 // The historical kind names do not establish billing. Every external connection
@@ -526,16 +527,18 @@ export function cliArguments(template, prompt, extraArgs = []) {
   return parts;
 }
 
-export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, onProcess, jsonl, claude = false, grok = false, extraArgs = [], signal }) {
+export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, onProcess, onPermission, jsonl, claude = false, grok = false, extraArgs = [], signal }) {
   signal?.throwIfAborted();
   const resolvedCmd = await resolveCliCommand(cmd);
   if (!resolvedCmd) throw new Error(`Kunne ikke starte '${cmd}': CLI'en blev ikke fundet`);
-  const parts = cliArguments(cliTemplate, prompt, extraArgs);
+  const interactive = claude && jsonl && typeof onPermission === 'function';
+  const parts = interactive ? ['-p', ...extraArgs, '--input-format', 'stream-json', '--permission-prompt-tool', 'stdio'] : cliArguments(cliTemplate, prompt, extraArgs);
   const launch = cliSpawnSpec(resolvedCmd, parts);
   return new Promise((resolve, reject) => {
     const env = cliChildEnv({ ...process.env, NO_COLOR: '1' }, { claude });
     for (const key of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'MOONSHOT_API_KEY', 'DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'KIMI_API_KEY', 'XAI_API_KEY', 'GROK_API_KEY', 'GROK_DEPLOYMENT_KEY']) delete env[key];
     if (grok) { env.GROK_DISABLE_AUTOUPDATER = '1'; env.GROK_MEMORY = '0'; }
+    if (interactive) env.CLAUDE_CODE_SDK_READS_SESSION_STATE = '1';
     const child = spawn(launch.cmd, launch.args, { cwd: cwd ?? process.cwd(), env, detached: process.platform !== 'win32' });
     let permissionFailure;
     let terminationTimer, windowsStop, callbackError, stopped = false, out = '', lineBuf = '', bytes = 0;
@@ -547,11 +550,24 @@ export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent,
       terminationTimer.unref();
     };
     const call = fn => { try { fn(); } catch (e) { callbackError ??= e; kill(); } };
+    const control = interactive ? claudeControl({
+      prompt, signal, write: text => child.stdin.write(text), end: () => child.stdin.end(),
+      onFailure: error => { callbackError ??= error; kill(); },
+      onPermission: async (request, options) => {
+        let result;
+        try { result = await onPermission(request, options); }
+        catch { result = { behavior: 'deny', message: 'Orbit kunne ikke behandle tilladelsen. Handlingen er afvist.' }; }
+        if (result?.behavior !== 'allow') { permissionFailure = new Error(result?.message ?? 'Handlingen blev ikke godkendt i Orbit.'); permissionFailure.code = 'ORBIT_PERMISSION_BLOCKED'; }
+        return result;
+      },
+    }) : null;
+    if (control) child.stdin.on('error', error => { callbackError ??= error; kill(); });
     const untrack = trackAiProcess(child.pid, { kind: 'agent', command: String(cmd).split(/[\\/]/).at(-1), stop: () => { callbackError ??= new Error('AI-processen stoppes, fordi Companion lukkes.'); kill(); } });
     const line = text => {
       if (!text.trim()) return;
       let event;
       try { event = JSON.parse(text); } catch { out += text + '\n'; return; }
+      if (control) { let consumed = false; call(() => { consumed = control.event(event); }); if (consumed) return; }
       const denied = permissionBlock(event);
       if (denied) { permissionFailure = new Error(denied); permissionFailure.code = 'ORBIT_PERMISSION_BLOCKED'; }
       // Event-handler failures must not be misclassified as invalid JSON.
@@ -572,6 +588,7 @@ export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent,
     child.on('error', e => { untrack(); clean(); reject(new Error(`Kunne ikke starte '${cmd}': ${e.message}`)); });
     child.on('close', async code => {
       if (jsonl && lineBuf.trim()) line(lineBuf);
+      control?.close();
       // Do not cancel escalation just because the parent exited: grandchildren
       // with separate stdio may still be running in the same process group.
       if (stopped && child.pid && process.platform !== 'win32') try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already stopped */ }
@@ -589,13 +606,14 @@ export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent,
     signal?.addEventListener('abort', kill);
     if (signal?.aborted) kill();
     if (child.pid) call(() => onProcess?.({ pid: child.pid, startedAt: Date.now(), finished: false }));
-    try { child.stdin.end(); } catch { /* process may have exited */ }
+    if (control) call(() => control.start());
+    else try { child.stdin.end(); } catch { /* process may have exited */ }
   });
 }
 
 // Samlet chat-dispatcher. Returnerer samlet tekst.
 // onSubagent: kun for CLI'er der streamer strukturerede events (Claude stream-json).
-export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubagent, onProcess, onAction, signal, cwd, readOnly = false }) {
+export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubagent, onProcess, onAction, onPermission, signal, cwd, readOnly = false }) {
   messages = (messages ?? []).map(m => ({ ...m, attachments: m.attachments?.map(a => hydrateAttachment(a, dirs)) }));
   if (messages.some(message => message.attachments?.some(attachment => attachment.kind === 'image' && !attachment.path && !attachment.dataUrl))) throw new Error('Billedets indhold kunne ikke indlæses. Upload billedet igen.');
   if (readOnly) messages = [{ role: 'system', text: 'Denne tur er kun til læsning og rådgivning. Du må læse relevant materiale, men ikke ændre filer, installere noget, sende beskeder eller udføre andre eksterne ændringer. Returnér dit resultat til samtalen.' }, ...messages];
@@ -637,6 +655,7 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
       grok: serviceId === 'grok',
       onDelta: delta,
       onProcess,
+      onPermission: useDefaultTemplate ? onPermission : undefined,
       onEvent: native.jsonl ? agentEvents(serviceId, { onText: delta, onSubagent: event => onSubagent?.({ ...event, subId: `${callId}:${event.subId}`, parentSubId: event.parentSubId ? `${callId}:${event.parentSubId}` : undefined }), onAction: action => onAction?.({ ...action, id: `${callId}:${action.id}` }) }) : undefined,
       signal,
     });

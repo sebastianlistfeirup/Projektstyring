@@ -1,4 +1,5 @@
 import { deliveryBlock, DELIVERY_STATUS_INSTRUCTION } from './ai-delivery-status.mjs';
+import { nativePermissions } from './ai-permissions.mjs';
 // Orbit AI-kørsler: planlægning, sværm, hukommelse og triggere.
 import { execFile } from 'child_process';
 import { promisify } from 'node:util';
@@ -27,6 +28,7 @@ async function serviceCall(track, info, execute) {
 async function trackedChat({ track, jobId = null, role = 'execution', ...options }) {
   return serviceCall(track, { serviceId: options.serviceId, jobId, role }, callId => runChat({
     ...options,
+    onPermission: track?.requestPermission ? (request, { signal }) => track.requestPermission(request, { signal, jobId, serviceId: options.serviceId, callId, cwd: options.cwd ?? options.dirs?.cwd, readOnly: options.readOnly === true }) : undefined,
     onSubagent: sub => options.onSubagent?.({ ...sub, serviceId: options.serviceId, callId }),
   }));
 }
@@ -560,7 +562,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
   activeRuns.set(runId, handle);
   swarmState.active = run;
   // Public activity is append-only; frequent live snapshots are bounded.
-  const checkpoints = new Set(['service_call_start', 'service_call_end', 'run_start', 'plan', 'job_added', 'job_start', 'job_done', 'job_error', 'job_cancelled', 'job_blocked', 'job_skipped', 'job_process', 'job_judged', 'verification', 'run_finished', 'done', 'error']);
+  const checkpoints = new Set(['permission_request', 'permission_resolved', 'service_call_start', 'service_call_end', 'run_start', 'plan', 'job_added', 'job_start', 'job_done', 'job_error', 'job_cancelled', 'job_blocked', 'job_skipped', 'job_process', 'job_judged', 'verification', 'run_finished', 'done', 'error']);
   let lastSnapshotAt = 0;
   const track = (obj) => {
     const transient = ['job_delta', 'delta', 'subagent_delta'].includes(obj.type);
@@ -572,6 +574,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     try { emit({ ...obj, runId, goal }); } catch { /* client disconnect does not cancel work */ }
   };
   handle.track = track;
+  track.requestPermission = (request, context) => nativePermissions.request(request, { ...context, runId, projectId, onEvent: track });
   handle.persist = () => saveRun(dirs, run);
   const heartbeat = setInterval(() => {
     run.heartbeatAt = Date.now();

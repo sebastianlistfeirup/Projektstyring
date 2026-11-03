@@ -24,6 +24,7 @@ Egne argumentskabeloner indeholder `{prompt}` og køres uden shell-fortolkning. 
 
 ## Upstream-grundlag
 
+- [Claude CLI](https://code.claude.com/docs/en/cli-reference), [SDK-brugerinput](https://code.claude.com/docs/en/agent-sdk/user-input) og den officielle [Python-SDK's kontrolprotokol](https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/_internal/query.py). Auto-kørsler med standardadapteren bruger bidirektionel `stream-json` med `--permission-prompt-tool stdio`. Orbit besvarer `can_use_tool` efter brugerbeslutning, håndterer annullering og holder input åbent for aktive lokale underagenter. Ukendte kontrolforespørgsler afvises eksplicit.
 - [Gemini headless](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/headless.md), [CLI-indstillinger](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/cli-reference.md) og [hændelsestyper](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/output/types.ts).
 - [Kimi Code kommandoreference](https://github.com/MoonshotAI/kimi-code/blob/main/docs/en/reference/kimi-command.md), [agentprofiler](https://github.com/MoonshotAI/kimi-code/blob/main/docs/en/customization/agents.md) og [JSON-skriver](https://github.com/MoonshotAI/kimi-code/blob/main/apps/kimi-code/src/cli/prompt-render.ts). Den gamle Python-baserede `kimi-cli` er arkiveret. Den aktuelle reference kan ikke kombinere `-p` med `--plan`; derfor bruger Orbit en eksplicit læseprofil i analysefasen.
 - [Qwen Code headless](https://github.com/QwenLM/qwen-code/blob/main/docs/users/features/headless.md) beskriver promptflag, JSONL og `auto-edit`/`plan`. Installer den aktuelle Qwen Code separat, hvis den skal kode; Ollama-adapteren ændrer ikke karakter ved at vælge en større model.
@@ -38,6 +39,8 @@ Den 30. oktober 2026 blev følgende rigtige npm-distributioner installeret isole
 Kør `npm run test:cli` for samme kontrol af programmer på PATH. En særskilt installationsmappe kan vælges med `ORBIT_CLI_BIN`. Kontrollen sender ingen prompt og foretager hverken login, modelkald, MCP-kald eller kreditkontrol. Den er valgfri og installerer ikke programmer. Kimi 2.4.1 kræver Node.js 22.19 eller nyere; Node.js 24 anbefales til den samlede opsætning. Installerede Windows-versioner og egne CLI-skabeloner skal kontrolleres på den pågældende maskine.
 
 Grok Build 1.0.70 er desuden kørt gennem Orbits `runChat` mod en lokal model-fixture med rigtig filadgang. Den særskilte kontrol kan gentages med `ORBIT_GROK_BIN=/sti/til/grok node --test scripts/test-ai-grok.mjs`. Den afprøver transport og tilladelser, ikke en rigtig Grok-konto, abonnementskvote eller Windows-installation. [Rapport](verification/grok-build-2026-10-30.json).
+
+Claude Code 2.1.314 er afprøvet på Linux mod en lokal model-fixture: den rigtige CLI ventede på Orbits beslutning, skrev en faktisk fil efter tilladelse og undlod ændringen efter afvisning. Gentag med `ORBIT_CLAUDE_BIN=/sti/til/claude node --test scripts/test-ai-claude-native.mjs`. Browserprøven bruger en separat, kontrolleret CLI-fixture til genindlæsning, afvisning, engangstilladelse, spørgsmål og Stop. Det er transport-/brugerfladekontrol, ikke en kontoprøve eller dokumentation for brugerens lokale Windows-installation.
 
 ## Medier: fejlsøgning
 

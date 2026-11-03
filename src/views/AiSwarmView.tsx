@@ -1,4 +1,5 @@
 import ProjectPlanReview from '../components/ProjectPlanReview';
+import NativePermissionPanel from '../components/NativePermissionPanel';
 import { runLabels, verificationLabels } from '../lib/runPresentation';
 import OrbitPerformanceProbe from '../components/OrbitPerformanceProbe';
 import ServiceConstellation from '../components/ServiceConstellation';
@@ -812,7 +813,9 @@ export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolea
   }, [replay?.playing]);
 
   const shown = replay ? replayEvents(replay.base, replay.events, replay.cursor) : (archived ?? run);
+  const permissions = useSwarm(s => s.permissions);
   const active = !archived && !replay && shown?.status === 'running';
+  const awaitingPermission = active && permissions.some(p => p.runId === shown?.runId);
   const liveServices = active && Boolean(shown?.heartbeatAt && now - shown.heartbeatAt <= 35_000);
   const focusedJob = shown?.jobs.find(job => orbSelection?.runId === shown.runId && job.id === orbSelection.jobId) ?? shown?.jobs.find(job => job.status === 'running') ?? shown?.jobs[0];
   const selectedRunId = shown?.runId;
@@ -899,6 +902,7 @@ export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolea
       {shown?.eventsJournal && <div className="text-xs opacity-65 flex flex-wrap gap-2"><a className="underline" href={`${BASE_URL}/api/ai/runs/${encodeURIComponent(shown.runId)}/events`} target="_blank" rel="noreferrer">Hent fuld aktivitetslog · {shown.eventCount ?? '—'} hændelser</a>{shown.eventsTruncated && <span>Loggen kan ikke indlæses komplet til genafspilning. Brug den fulde aktivitetslog.</span>}</div>}
       {shown?.projectId && <p className="text-xs opacity-70">Projekt: {projects.find(project => project.id === shown.projectId)?.name ?? shown.projectId}{embedded && shown.projectId !== projectId ? ' · Et andet projekt end samtalen' : ''}</p>}
       <RunQueuePanel />
+      <NativePermissionPanel />
       {recoveredProcesses.length > 0 && <section aria-label="Processer fra afbrudte kørsler" className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm space-y-2">
         <h2 className="font-semibold flex items-center gap-2"><AlertTriangle size={16} />En tidligere agent kan stadig arbejde</h2>
         <p className="text-xs opacity-75">Nye Auto-kørsler og opdatering er blokeret, indtil de registrerede processer er afsluttet. Kontrollér proces-id'et i maskinens procesoversigt, og luk den relevante agent. Orbit afslutter ikke en ukendt proces automatisk efter genstart.</p>
@@ -937,7 +941,7 @@ export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolea
           <div role="region" aria-label="Kørselsstatus" className="rounded-2xl border border-white/10 glass-panel p-3.5 space-y-2.5">
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[12px]">
               <span className="font-semibold text-sm w-full break-words" title={shown.goal}>{shown.goal}</span>
-              <span className="font-semibold">{shown.status === 'done' ? 'Leveret til gennemgang' : runLabels[shown.status] ?? shown.status}</span>
+              <span className="font-semibold">{awaitingPermission ? 'Afventer din beslutning' : shown.status === 'done' ? 'Leveret til gennemgang' : runLabels[shown.status] ?? shown.status}</span>
               <span className="opacity-70">Kontroller: {verificationLabels[shown.verification?.status ?? 'not_run'] ?? shown.verification?.status}</span>
               {modeKey && (
                 <span className="text-[9px] px-1.5 py-0.5 rounded-full border border-violet-400/40 text-violet-300">{t(modeKey)}</span>

@@ -1,5 +1,5 @@
 import { test, expect, type Page, type WebSocketRoute } from '@playwright/test';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -818,6 +818,58 @@ test('a recovered plan pause can be resumed without approving it implicitly', as
   await page.getByRole('button', { name: /Genoptag/ }).click();
   await expect.poll(() => resumed).toBe(true);
   expect(approvals).toBe(0);
+});
+
+test('native permission waits through reload, approves once, rejects stale approval and cancels with Stop', async ({ page, request }, testInfo) => {
+  const projectId = await setup(page);
+  await page.getByRole('button', { name: 'Vis projektets Git-grundlag' }).click();
+  const repository = page.getByRole('region', { name: 'Projektets Git-grundlag' });
+  await expect(repository).toContainText(source);
+  await expect(repository).toContainText(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' }).trim());
+  await expect(repository).toContainText('Ingen lokale ændringer registreret.');
+  const root = mkdtempSync(join(tmpdir(), 'orbit-browser-permission-'));
+  const script = join(root, 'permission-agent.mjs'); copyFileSync('scripts/fixtures/permission-agent.mjs', script); chmodSync(script, 0o755);
+  const cmd = process.platform === 'win32' ? join(root, 'claude.cmd') : script;
+  if (process.platform === 'win32') writeFileSync(cmd, '@node "%dp0%\\permission-agent.mjs" %*');
+  await request.post(`${base}/api/ai/services/claude`, { data: { cmd, cliTemplate: '', billingMode: 'included', noExtraCharges: true } });
+  const launch = (goal = 'Native tilladelse') => page.evaluate(async ({ projectId, goal }) => {
+    // @ts-expect-error Vite browser module; match the chat submission sync boundary.
+    const { pushNow } = await import('/src/lib/sync.ts');
+    if (!await pushNow()) throw new Error('Project snapshot could not be saved');
+    void fetch('http://127.0.0.1:4310/api/ai/orchestrate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, goal, jobs: [{ id: 'native', serviceId: 'claude', title: 'Afprøv Godot', phase: 'production', description: 'Afprøv den konkrete kontrol.', dependsOn: [] }] }) }).catch(() => {});
+  }, { projectId, goal });
+  const panel = page.getByRole('region', { name: 'Afventer din beslutning', exact: true });
+  await launch();
+  await expect(panel).toContainText('godot --headless --path . --script tests/run_tests.gd');
+  await expect(page.getByRole('region', { name: 'Kørselsstatus' })).toContainText('Afventer din beslutning');
+  await panel.screenshot({ path: testInfo.outputPath('native-permission.png') });
+  const state = (await (await request.get(`${base}/api/ai/swarm`)).json());
+  expect(state.run.results).toHaveLength(0);
+  const permissionId = state.permissions[0].id;
+  await page.reload();
+  await expect(panel.getByRole('button', { name: 'Tillad én gang' })).toBeVisible();
+  expect((await (await request.get(`${base}/api/ai/swarm`)).json()).permissions[0].id).toBe(permissionId);
+  await panel.getByRole('button', { name: 'Tillad én gang' }).click();
+  await expect(panel).not.toBeVisible();
+  await expect.poll(async () => (await (await request.get(`${base}/api/ai/swarm`)).json()).run.status).toBe('done');
+  expect((await request.post(`${base}/api/ai/permissions/${permissionId}`, { data: { decision: 'allow' } })).status()).toBe(409);
+  expect(readFileSync(join(source, 'game.txt'), 'utf8')).toBe('original');
+  await launch();
+  await expect(panel).toBeVisible();
+  await panel.getByRole('button', { name: 'Afvis', exact: true }).click();
+  await expect.poll(async () => (await (await request.get(`${base}/api/ai/swarm`)).json()).run.status).toBe('blocked');
+  await launch(); await expect(panel).toBeVisible();
+  const running = (await (await request.get(`${base}/api/ai/swarm`)).json());
+  await request.post(`${base}/api/ai/runs/${running.run.runId}/cancel`);
+  await expect(panel).not.toBeVisible();
+  expect((await request.post(`${base}/api/ai/permissions/${running.permissions[0].id}`, { data: { decision: 'allow' } })).status()).toBe(409);
+  await expect.poll(async () => (await (await request.get(`${base}/api/ai/swarm`)).json()).run.status).toBe('cancelled');
+  await launch('QUESTION_FIXTURE');
+  await expect(panel.getByRole('button', { name: 'Send svar' })).toBeDisabled();
+  await panel.getByRole('button', { name: 'Realmread', exact: true }).click();
+  await expect(panel.getByLabel('Dit svar')).toHaveValue('Realmread');
+  await panel.getByRole('button', { name: 'Send svar' }).click();
+  await expect.poll(async () => (await (await request.get(`${base}/api/ai/swarm`)).json()).run.status).toBe('done');
 });
 
 test('account test starts through connection settings and keeps billing and quota separate from delivery', async ({ page, request }) => {

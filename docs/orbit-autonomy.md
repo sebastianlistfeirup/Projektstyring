@@ -48,7 +48,11 @@ Billedet viser den faktiske brugerflade med testdata og en lokal prøveagent, ik
 
 Live viser den aktuelle kørsel med projektnavn, også når chatten er i et andet projekt. Historik åbnes eksplicit. En planpause vises som et banner, så chatten stadig kan bruges; **Redigér og godkend planen** åbner planvinduet. Ved en blokeret eller afbrudt kørsel kan **Beslutning før genoptagelse** give de resterende jobs ny kontekst. Beslutningen gemmes på det nye forsøg, og den oprindelige rapport bevares.
 
-Native værktøjstilladelser kan endnu ikke godkendes fra Orbit. Afvisninger vises og stopper arbejdet; beslutningsfeltet giver ikke nye OS-/CLI-rettigheder. Det kræver stadig korrekt opsætning af leverandørværktøjet. Denne ændring er ikke verificeret med brugerens Windows-konti eller Epoch Isles-assets. Beståede tekniske kontroller er ikke en visuel godkendelse af spillets grafik.
+Claude Codes standardadapter kan nu sende native værktøjstilladelser og spørgsmål til Orbit under Auto-kørsler. Live viser den konkrete handling, arbejdsmappe og **Tillad én gang / Afvis**; spørgsmål besvares i samme vindue. Genindlæsning bevarer en ventende forespørgsel, mens Stop eller procesafslutning gør den ugyldig. Der oprettes ingen permanente tilladelsesregler. Afvisninger stopper jobbet uden selvhealing. Analysejobs kan ikke få skrive-/shellrettigheder gennem dialogen. Andre adaptere, egne CLI-skabeloner og direkte rådgivningschat har endnu ikke denne tilladelsesforbindelse. Beslutningsfeltet ved genoptagelse giver ikke OS-/CLI-rettigheder.
+
+**Vis projektets Git-grundlag** under repositoryindstillinger læser den faktiske mappe, gren, commit, lokale ændringer og lokale grene med commits uden for den valgte gren. Det gør fx en separat rute- eller teksturrettelse synlig før næste arbejdsordre. Kontrollen hverken skifter gren, henter fra GitHub, merger eller kører spiltests. Et rent checkout er ikke bevis for, at alle ønskede rettelser er integreret.
+
+Denne ændring er ikke verificeret med brugerens Windows-konti eller Epoch Isles-assets. Beståede tekniske kontroller er ikke en visuel godkendelse af spillets grafik.
 
 ## Gennemgang af kodeleverancer
 

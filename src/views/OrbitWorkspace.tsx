@@ -4,6 +4,7 @@ import { Columns2, Rows2, MessageSquare, Activity, RotateCcw } from 'lucide-reac
 import { AiChatView } from './AiChatView';
 import { AiSwarmView } from './AiSwarmView';
 import { useStore } from '../store/useStore';
+import { useSwarm } from '../lib/swarm';
 import './orbit-workspace.css';
 
 type Layout = { direction: 'columns' | 'rows'; split: number };
@@ -21,6 +22,7 @@ export default function OrbitWorkspace() {
   const [layout, setLayout] = useState(readLayout);
   const [focus, setFocus] = useState<'both' | 'chat' | 'live'>('both');
   const [dragging, setDragging] = useState(false);
+  const permissions = useSwarm(s => s.permissions.length);
   const surface = useRef<HTMLDivElement>(null);
   const [search] = useSearchParams();
   const chats = useStore(s => s.aiChats);
@@ -34,6 +36,7 @@ export default function OrbitWorkspace() {
     <header className="orbit-workspace-toolbar">
       <div className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-indigo-400" /><strong className="text-sm">Orbit</strong><span className="text-xs opacity-55 hidden sm:inline">Samtale og arbejde · ét sted</span></div>
       <div className="flex items-center gap-1 flex-wrap" role="group" aria-label="Arbejdsfladens layout">
+        {permissions > 0 && <button className="btn-primary text-xs" aria-live="polite" onClick={() => setFocus('live')}>{permissions} afventer dig</button>}
         <button className="btn-ghost text-xs" aria-pressed={focus === 'both'} onClick={() => setFocus('both')}>Begge paneler</button>
         <button className="btn-ghost text-xs" aria-label="Fokusér chat" aria-pressed={focus === 'chat'} onClick={() => setFocus('chat')}><MessageSquare size={15} /></button>
         <button className="btn-ghost text-xs" aria-label="Fokusér Orbit Live" aria-pressed={focus === 'live'} onClick={() => setFocus('live')}><Activity size={15} /></button>

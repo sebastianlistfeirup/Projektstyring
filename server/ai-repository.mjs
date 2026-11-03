@@ -16,6 +16,23 @@ export async function inspectRepository(path) {
   return { source: root, baseCommit, branch, dirty };
 }
 
+export async function repositoryReadiness(path) {
+  const repo = await inspectRepository(path);
+  const [status, history, branches, tracked] = await Promise.all([
+    git(repo.source, ['status', '--porcelain']),
+    git(repo.source, ['log', '-8', '--format=%H%x09%s']),
+    git(repo.source, ['for-each-ref', '--no-merged=HEAD', '--format=%(refname:short)%09%(objectname:short)', 'refs/heads']),
+    git(repo.source, ['ls-files', '--', 'project.godot']),
+  ]);
+  const changes = status ? status.split('\n') : [];
+  const unmerged = branches ? branches.split('\n').map(line => { const [branch, commit] = line.split('\t'); return { branch, commit }; }) : [];
+  return { ...repo, checkedAt: new Date().toISOString(), changedFiles: changes.slice(0, 50), changedFileCount: changes.length,
+    recentCommits: history.split('\n').filter(Boolean).map(line => { const [commit, ...subject] = line.split('\t'); return { commit, subject: subject.join('\t') }; }),
+    otherBranches: unmerged.slice(0, 30), otherBranchCount: unmerged.length, godotProject: Boolean(tracked),
+    stable: repo.baseCommit === await git(repo.source, ['rev-parse', 'HEAD']),
+  };
+}
+
 export async function createRunWorktree(path, workDir, runId, startCommit) {
   const repo = await inspectRepository(path);
   // Snapshot the committed base. Uncommitted work is never silently omitted.

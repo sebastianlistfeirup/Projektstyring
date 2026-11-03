@@ -1,11 +1,12 @@
 // Orbit AI HTTP-ruter.
 import { registerAccountChecks } from './ai-account-checks.mjs';
+import { nativePermissions } from './ai-permissions.mjs';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, realpathSync, createReadStream } from 'fs';
 import { join, basename, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { serviceById, serviceAvailability, runChat, setSecretsDir, loadKeySecrets, saveKeySecrets, aiCfg, inspectCliInstallation, parseCliTemplate } from './ai-services.mjs';
 import { extractDocument, hydrateAttachment, validateAttachmentList } from './ai-documents.mjs';
-import { inspectRepository, validateChecks } from './ai-repository.mjs';
+import { inspectRepository, repositoryReadiness, validateChecks } from './ai-repository.mjs';
 import { projectExecution } from './task-execution.mjs';
 import { importProjectPlan } from './project-plan.mjs';
 import { DurableRunQueue } from './ai-queue.mjs';
@@ -126,7 +127,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   };
 
   app.post('/api/ai/repository/inspect', async (req, res) => {
-    try { res.json({ ok: true, repository: await inspectRepository(String(req.body?.path ?? '')) }); }
+    try { res.json({ ok: true, repository: await (req.body?.details === true ? repositoryReadiness : inspectRepository)(String(req.body?.path ?? '')) }); }
     catch (e) { res.status(400).json({ ok: false, reason: e.message }); }
   });
 
@@ -267,7 +268,12 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   // Live swarm-tilstand: aktiv kørsel eller seneste afsluttede.
   app.get('/api/ai/swarm', (req, res) => {
     const run = swarmState.active ?? swarmState.last;
-    res.json({ ok: true, run: req.query.view === 'live' ? liveRunView(run) : run, processes: [...aiProcessSnapshot(), ...orphanProcesses()] });
+    res.json({ ok: true, run: req.query.view === 'live' ? liveRunView(run) : run, permissions: nativePermissions.snapshot(), processes: [...aiProcessSnapshot(), ...orphanProcesses()] });
+  });
+
+  app.post('/api/ai/permissions/:id', (req, res) => {
+    try { nativePermissions.decide(req.params.id, req.body); res.json({ ok: true }); }
+    catch (error) { res.status(409).json({ ok: false, reason: error.message }); }
   });
 
   app.get('/api/ai/runs', (req, res) => {

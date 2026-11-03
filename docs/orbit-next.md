@@ -1,6 +1,6 @@
 # Næste leverancer for Orbit
 
-Målet er, at et eksisterende projekt kan gå fra gældende grundlag til afprøvet leverance med få, tydelige beslutninger fra ejeren. Arbejdet den 30. oktober 2026 etablerer denne kæde, men dokumenterer endnu ikke alle konti, Realmreads spil eller flere døgns modelarbejde. [Implementeret adfærd og kontroller](orbit-autonomy.md) er det aktuelle udgangspunkt.
+Målet er, at et eksisterende projekt kan gå fra gældende grundlag til afprøvet leverance med få, tydelige beslutninger fra ejeren. Arbejdet den 30. oktober 2026 etablerer denne kæde, men dokumenterer endnu ikke alle konti, Epoch Isles eller flere døgns modelarbejde. [Implementeret adfærd og kontroller](orbit-autonomy.md) er det aktuelle udgangspunkt.
 
 Opfølgningen tilføjer kontoprøver i Orbits tilslutningspanel og en lokal performancemåling. Én rigtig HeyGen-pluginlevering er verificeret, mens de øvrige konti og den separate Orbit-adapter stadig mangler kontoprøver. Se [kontorapporten](verification/accounts-2026-10-30.json).
 
@@ -8,7 +8,7 @@ Opfølgningen tilføjer kontoprøver i Orbits tilslutningspanel og en lokal perf
 
 | Prioritet | Konkret leverance | Hvornår er den færdig? |
 |---|---|---|
-| 1 | **Realmread: én rigtig opgave fra start til slut.** Tilknyt kode, gældende bibel og eksisterende build. Kortlæg restarbejde, fastlæg version 1 og vælg ét dokumenteret problem. | En ændring er gennemført på en isoleret gren, kontrolleret med projektets rigtige test/build, gennemgået af en anden egnet agent og spiltestet. Det oprindelige checkout er bevaret. Følg [pilotplanen](realmread-onboarding.md). |
+| 1 | **Epoch Isles: én rigtig opgave fra start til slut.** Tilknyt kode, gældende bibel og eksisterende build. Kortlæg restarbejde, fastlæg version 1 og vælg ét dokumenteret problem. | En ændring er gennemført på en isoleret gren, kontrolleret med projektets rigtige test/build, gennemgået af en anden egnet agent og spiltestet. Det oprindelige checkout er bevaret. Følg [pilotplanen](realmread-onboarding.md). |
 | 2 | **Kontrolleret tilslutning af hver rigtig AI-konto.** Gem versionsspecifikke resultater for læsning, kodning, billeder, hændelser, MCP og betalingsadgang. | En lille relevant opgave består pr. kapabilitet. Orbit viser særskilt: installeret, logget ind, kapabilitet afprøvet og abonnement bekræftet. Ukendt bliver ikke vist som klar. |
 | 3 | **Kvote og ventetid.** Understøt leverandørens dokumenterede kvote/reset, hvor den kan aflæses. Vis ventebegrundelse og mulighed for en anden allerede tilsluttet, egnet tjeneste. | En udtømt kvote starter ingen særskilt betalt fallback. Gentagne kald begrænses. Forløbet kan genoptages med samme grundlag, når adgang faktisk er tilbage. En ukendt kvote forbliver ukendt. |
 | 4 | **Vedvarende transaktioner for længere autonomi.** Flyt kø, forsøg og kontrolpunkter til et transaktionelt joblager før flere workers. Bevar de eksisterende journaler som evidens. | Nedbrud før/efter claim, ekstern indsendelse, commit og kontrol kan genoprettes uden dobbeltleverancer. Leases har udløb og fencing. En 24-timers prøve med fejlindsprøjtning består på den konkrete release. |
@@ -55,7 +55,7 @@ En særskilt oversigt over version 1 bør vise leverancer og blokeringer. Liveko
 - Antal nødvendige brugerafbrydelser pr. godkendt leverance og årsagen til dem.
 - Tid fra arbejdsordre til afprøvet resultat, inklusive kvoteventetid og review.
 - Andel af genoptagelser, der bevarer færdigt arbejde uden gentagelse eller konteksttab.
-- Antal aktive blokeringer og afprøvede spillerforløb frem mod Realmread version 1.
+- Antal aktive blokeringer og afprøvede spillerforløb frem mod Epoch Isles version 1.
 - Ændringer i scope sammenholdt med afsluttede, godkendte leverancer.
 
 Sammenlign samme afgrænsede opgaver med det eksisterende Codex/Cursor-forløb. Kravet om at blive bedre skal afgøres af resultat, færre afbrydelser og kortere vej til en fungerende build.

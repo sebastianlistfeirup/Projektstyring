@@ -5,6 +5,7 @@ import { useStore } from '../store/useStore';
 import CodeChanges from './CodeChanges';
 
 type Check = { name: string; command: string; args: string[] };
+type RepositoryState = { source: string; branch: string; baseCommit: string; dirty: boolean; checkedAt: string; changedFiles: string[]; changedFileCount: number; recentCommits: { commit: string; subject: string }[]; otherBranches: { branch: string; commit: string }[]; otherBranchCount: number; godotProject: boolean; stable: boolean };
 const presets: Record<string, Check> = {
   godot: { name: 'Godot import', command: 'godot', args: ['--headless', '--editor', '--import', '--path', '.', '--quit'] },
   test: { name: 'Automatiske tests', command: 'npm', args: ['test'] },
@@ -18,6 +19,17 @@ export default function ProjectExecutionSettings({ project }: { project: Project
   const [continueWork, setContinueWork] = useState(project.continueVerifiedWork ?? false);
   const [feedback, setFeedback] = useState('');
   const [busy, setBusy] = useState(false);
+  const [repository, setRepository] = useState<RepositoryState | null>(null);
+  async function inspect() {
+    setBusy(true); setFeedback(''); setRepository(null);
+    try {
+      const response = await fetch('http://127.0.0.1:4310/api/ai/repository/inspect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: path.trim(), details: true }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.reason ?? 'Mappen kunne ikke kontrolleres.');
+      setRepository(data.repository);
+    } catch (error) { setFeedback(error instanceof Error ? error.message : 'Companion svarer ikke.'); }
+    finally { setBusy(false); }
+  }
   function patch(index: number, fields: Partial<Check>) { setChecks(list => list.map((c, i) => i === index ? { ...c, ...fields } : c)); }
   async function save() {
     setBusy(true);
@@ -41,7 +53,18 @@ export default function ProjectExecutionSettings({ project }: { project: Project
   return <details className="rounded-xl border border-zinc-200 dark:border-white/10 p-3 text-xs">
     <summary className="cursor-pointer font-medium">Repository og kvalitetskontroller {project.repositoryPath ? '· tilknyttet' : '· ikke tilknyttet'}</summary>
     <div className="mt-3 space-y-3">
-      <label className="block space-y-1"><span>Lokal repository-mappe på maskinen med Companion</span><input className="input w-full" value={path} onChange={e => setPath(e.target.value)} placeholder="C:\Projekter\Realmread" /></label>
+      <label className="block space-y-1"><span>Lokal repository-mappe på maskinen med Companion</span><input className="input w-full" value={path} onChange={e => { setPath(e.target.value); setRepository(null); }} placeholder="C:\Projekter\Realmread" /></label>
+      <button type="button" className="btn-ghost text-xs" disabled={busy || !path.trim()} onClick={() => void inspect()}>Vis projektets Git-grundlag</button>
+      {repository && <section aria-label="Projektets Git-grundlag" className="rounded-lg border border-indigo-400/25 p-3 space-y-2">
+        <p className="font-medium">{repository.godotProject ? 'Godot-projekt' : 'Git-projekt'} · {repository.branch || 'Detached HEAD'}</p>
+        <p className="font-mono break-all">{repository.source}<br />{repository.baseCommit}</p>
+        <p>{repository.changedFileCount ? `${repository.changedFileCount} lokale ændringer. De indgår ikke automatisk i en AI-arbejdsgren.` : 'Ingen lokale ændringer registreret.'}</p>
+        {!!repository.changedFiles.length && <details><summary className="cursor-pointer">Vis lokale ændringer</summary><pre className="whitespace-pre-wrap break-all max-h-40 overflow-auto mt-2">{repository.changedFiles.join('\n')}</pre></details>}
+        <details><summary className="cursor-pointer">Seneste commits i den valgte gren</summary><ol className="mt-2 space-y-1">{repository.recentCommits.map(commit => <li key={commit.commit}><code>{commit.commit.slice(0, 12)}</code> · {commit.subject}</li>)}</ol></details>
+        {!!repository.otherBranchCount && <details open><summary className="cursor-pointer">{repository.otherBranchCount} andre lokale grene har commits, som ikke indgår her</summary><p className="opacity-65 mt-2">Kontrollér, om dine seneste rettelser ligger på en af disse grene, før du starter næste arbejdsordre.</p><ul className="mt-2 space-y-1">{repository.otherBranches.map(branch => <li key={branch.branch} className="font-mono break-all">{branch.branch} · {branch.commit}</li>)}</ul></details>}
+        {!repository.stable && <p role="alert" className="text-amber-500">Git-grundlaget ændrede sig under kontrollen. Kontrollér igen før fortsættelse.</p>}
+        <p className="opacity-55">Aflæst {new Date(repository.checkedAt).toLocaleString('da-DK')}. Kontrollen ændrer ingen filer og kører ingen spiltests. Referencer og grafik er ikke vurderet her.</p>
+      </section>}
       <p className="opacity-70">Orbit opretter en arbejdsgren fra dit seneste commit. Lokale ændringer skal først gemmes. Der merges eller publiceres ikke automatisk.</p>
       <div className="flex items-center justify-between gap-2"><strong>Kvalitetskontroller</strong><select aria-label="Tilføj en kontrol" className="input text-xs" value="" disabled={checks.length >= 10} onChange={e => setChecks(list => [...list, presets[e.target.value] ?? { name: '', command: '', args: [] }])}><option value="">Tilføj fra skabelon…</option><option value="godot">Godot · importér projekt</option><option value="test">Node · kør tests</option><option value="build">Node · byg projekt</option></select></div>
       {!checks.length && <p className="opacity-60">Ingen kontroller valgt. Tilføj projektets test- eller buildkommando, så Orbit kan dokumentere resultatet.</p>}
