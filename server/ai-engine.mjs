@@ -518,6 +518,8 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   // ---- genoptagelse (resume): kør kun de jobs der aldrig leverede ----
   app.post('/api/ai/runs/:runId/resume', (req, res) => {
     try {
+      if (req.body?.instruction !== undefined && (typeof req.body.instruction !== 'string' || req.body.instruction.length > 100000)) return res.status(400).json({ ok: false, reason: 'Beslutningen skal være tekst på højst 100.000 tegn.' });
+      const instruction = req.body?.instruction?.trim();
       const p = runPath(dirs, req.params.runId);
       if (!existsSync(p)) return res.status(404).json({ ok: false, reason: 'Kørsel ikke fundet' });
       const prev = readRun(dirs, req.params.runId);
@@ -535,10 +537,12 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       if (recoveryBlock) return res.status(409).json({ ok: false, reason: recoveryBlock });
       if (!existsSync(prev.workDir)) return res.status(409).json({ ok: false, reason: 'Den oprindelige arbejdsmappe mangler. Gendan den før genoptagelse.' });
       const jobs = validatePlan(prev.jobs);
+      // New context belongs to the new attempt; keep the old report unchanged.
+      const previousRun = instruction ? { ...prev, instructions: [...(prev.instructions ?? []), instruction] } : prev;
       const runId = randomUUID().slice(0, 12);
       executeRun({
         runId, goal: prev.goal, bible: prev.bible, attachments: prev.attachments,
-        predefinedJobs: jobs, previousRun: prev, resumeDir: prev.workDir,
+        predefinedJobs: jobs, previousRun, resumeDir: prev.workDir,
         projectId: prev.projectId, taskId: prev.taskId, repository: prev.repository, checks: prev.checks ?? [],
         pauseAfterPlan: prev.status === 'awaiting_approval',
         cfg: loadConfig(), dirs, mode: prev.mode ?? 'standard',
@@ -569,7 +573,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
         for (const check of attempt.checks) lines.push(`- ${check.name}: ${check.status} (exit ${check.exitCode ?? 'ukendt'})`, '', '~~~~text', String(check.output ?? ''), '~~~~', '');
       }
       for (const check of run.verification?.checks ?? []) lines.push(`### ${check.name}`, '', `Status: ${check.status} · Exitkode: ${check.exitCode ?? 'ukendt'}`, '', '~~~~text', String(check.output ?? ''), '~~~~', '');
-      for (const job of (run.jobs ?? []).filter(j => j.status !== 'done')) lines.push(`### ${job.title} — ${job.status}`, '', job.error ?? 'Ingen godkendt leverance.', '');
+      for (const job of (run.jobs ?? []).filter(j => j.status !== 'done')) lines.push(`### ${job.title} — ${job.status}`, '', job.error ?? 'Ingen godkendt leverance.', '', job.text ?? '', '');
       for (const r of run.results ?? []) {
         lines.push(`## ${r.title}`, '', `Tjeneste: ${serviceById(r.serviceId)?.name ?? r.serviceId ?? '—'} · Dommer: ${r.score !== null && r.score !== undefined ? `${r.score}/10` : '—'}`, '', String(r.text ?? ''), '');
       }

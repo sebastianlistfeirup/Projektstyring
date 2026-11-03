@@ -84,6 +84,28 @@ test('HTTP approval, validation, browser disconnect and persisted results', asyn
     await new Promise(r => setTimeout(r, 50));
   }
   assert.equal(run.goal, 'Detached'); assert.equal(run.status, 'done');
+
+  // An unresolved decision is not a delivery. Resume adds the user's decision
+  // to the next attempt without rewriting the original blocked report.
+  writeFileSync(fake, "console.log(process.argv.at(-1).includes('DECISION_ACCEPTED') ? 'Resolved and performed the inspection.' : 'Afventer din godkendelse af planen.');");
+  await (await post('/api/ai/orchestrate', { goal: 'Decision needed', jobs: plan })).text();
+  const blocked = (await (await fetch(`${base}/api/ai/swarm`)).json()).run;
+  assert.equal(blocked.status, 'blocked');
+  const exported = await (await fetch(`${base}/api/ai/runs/${blocked.runId}/export`)).text();
+  assert.match(exported, /Afventer din godkendelse af planen/);
+  assert.equal((await post(`/api/ai/runs/${blocked.runId}/resume`, { instruction: {} })).status, 400);
+  const resumed = await (await post(`/api/ai/runs/${blocked.runId}/resume`, { instruction: 'DECISION_ACCEPTED: Fortsæt inspektionen.' })).json();
+  assert.equal(resumed.ok, true);
+  for (const deadline = Date.now() + 20000; Date.now() < deadline;) {
+    run = (await (await fetch(`${base}/api/ai/swarm`)).json()).run;
+    if (run?.runId === resumed.runId && !['running', 'awaiting_approval'].includes(run.status)) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(run.status, 'done');
+  assert.deepEqual(run.instructions, ['DECISION_ACCEPTED: Fortsæt inspektionen.']);
+  assert.match(run.results[0].text, /Resolved and performed/);
+  const original = (await (await fetch(`${base}/api/ai/runs/${blocked.runId}`)).json()).run;
+  assert.equal(original.status, 'blocked'); assert.deepEqual(original.instructions, []);
 });
 
 test('shutdown sees direct chat processes, can refuse active work, then drains and blocks new calls', async t => {

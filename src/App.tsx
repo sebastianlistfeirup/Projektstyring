@@ -21,8 +21,7 @@ const DashboardView = lazy(() => import('./views/DashboardView'));
 const TasksView = lazy(() => import('./views/TasksView'));
 const YearWheelView = lazy(() => import('./views/YearWheelView'));
 const AiWorkshopView = lazy(() => import('./views/AiWorkshopView'));
-const AiChatView = lazy(() => import('./views/AiChatView').then(m => ({ default: m.AiChatView })));
-const AiSwarmView = lazy(() => import('./views/AiSwarmView').then(m => ({ default: m.AiSwarmView })));
+const OrbitWorkspace = lazy(() => import('./views/OrbitWorkspace'));
 const GraphView = lazy(() => import('./views/GraphView'));
 const GoalsView = lazy(() => import('./views/GoalsView'));
 const ImportView = lazy(() => import('./views/ImportView'));
@@ -202,8 +201,8 @@ export default function App() {
           <Route path="/opgaver" element={<TasksView />} />
           <Route path="/aarshjul" element={<YearWheelView />} />
           <Route path="/ai" element={<AiWorkshopView />} />
-          <Route path="/chat" element={<AiChatView />} />
-          <Route path="/swarm" element={<AiSwarmView />} />
+          <Route path="/chat" element={<OrbitWorkspace />} />
+          <Route path="/swarm" element={<OrbitWorkspace />} />
           <Route path="/tavle" element={<BoardView />} />
           <Route path="/tabel" element={<TableView />} />
           <Route path="/tidslinje" element={<TimelineView />} />

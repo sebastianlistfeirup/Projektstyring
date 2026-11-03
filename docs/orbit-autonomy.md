@@ -19,6 +19,7 @@ Direkte chat med én tjeneste er til læsning/rådgivning. Repositoryændringer 
 - Planer valideres for dublerede id'er, ugyldige afhængigheder, ukendte faser og cykler før udførelse. Danske og engelske fasenavne normaliseres ens, også ved kontrol af repository-adgang.
 - Planredigering bevarer læsetilstand og kontekstfiler. Sletning forskyder afhængigheder korrekt og afvises, hvis andre jobs stadig afhænger af det slettede job. Afhængigheder kan redigeres, og en afvist godkendelse viser serverens forklaring i dialogen. Tomme jobs bortfiltreres ikke lydløst. Planvinduet kan lukkes med Escape eller **Se arbejdskortet** uden godkendelse/aflysning; kladden bevares, mens du undersøger kortet. **Redigér og godkend planen** åbner den igen.
 - Afhængige jobs starter kun efter vellykkede forgængere. Fejl kan give `partial`, `blocked` eller `error`; de bliver ikke skjult som succes.
+- Agenternes afsluttende `ORBIT_JOB_STATUS` skelner mellem leveret, blokeret og afventende beslutning. Eksplicit venten på godkendelse og native Claude `permission_denials` bliver blokeringer, selv ved exitkode 0. En tilladelsesafvisning udløser ikke selvhealing. Det er agentens statusoplysning, ikke et selvstændigt bevis for korrekt kode; kontroller og review kræves fortsat.
 - En plan, der afventer godkendelse, starter aldrig på grund af timeout.
 - Lukning af fanen aflyser ikke Auto. **Stop** sender en særskilt afbrydelse til serveren og den lokale proces.
 - Companion opdaterer arbejdsordrens status og leverancebevis, selv når browseren er lukket. Projektets gemte scope, afhængigheder, WIP-grænse, repository, kontroller og gældende bibel bruges som grundlag.
@@ -29,12 +30,25 @@ Direkte chat med én tjeneste er til læsning/rådgivning. Repositoryændringer 
 - Der er én skrivende jobkæde ad gangen. Flere kodere skriver ikke parallelt i samme checkout.
 - Fejlede kodeforsøg bevares på `orbit-attempt/<run-id>/<job-id>`, før arbejdsgrenen føres tilbage. Uafhængigt arbejde arver derfor ikke fejlens kodeændringer.
 - Konfigurerede kontroller udføres som faktiske programmer med argumentlister, uden shell-fortolkning. Hver kontrol gemmes ved start og afslutning med proces-id, exitkode og output. Stop/timeout afslutter procestræet; genstart bevarer afsluttede resultater og markerer en igangværende kontrol som afbrudt. Genoptagelse kan gentage kontrollerne uden at gentage færdige kodejobs. Fejlede kontroller blokerer den samlede leverance.
+- Når kontrolprogrammet hedder Godot (også versionsnavne som `Godot_v4.7.1-stable_win64_console.exe`), giver `ERROR:` og `SCRIPT ERROR:` i stdout/stderr et fejlet resultat, også ved exitkode 0. Fejltællingen bevares, selv når logudsnittet forkortes. Hvis Godot startes indirekte gennem et eget script, skal scriptet selv returnere fejlstatus.
 - Hvis en kontrol ændrer versionsstyrede filer, kan den ikke godkende det allerede gemte commit. Det vises som en fejl.
 - Med afgrænsede rettelsesforsøg aktiveret kan en faktisk fejlet kontrol udløse ét ekstra coding-job inden for den oprindelige arbejdsordre. De samme kontrolkommandoer køres igen; begge gennemløb gemmes med commit og output. Manglende programmer, ændringer fra selve kontrollen og fortsatte fejl blokerer leverancen. Genoptagelse nulstiller ikke reparationsgrænsen.
 - Krævet modelreview udføres af en anden tilgængelig coding-tjeneste på et konkret Git-commit. Standarden er mindst 8/10; critical/major-fund blokerer uanset score. Kode-review skal angive undersøgte filer, og en reviewer, der ændrer arbejdsområdet, afvises. Manglende reviewer blokerer, hvis kravet er slået til. Aktiviteter og processer fra reviewer spores sammen med jobbet.
 - En models kvalitetsscore er et review-signal. Den erstatter ikke tests, build eller spiltest.
 
 Grænser: højst 100 jobs i en plan, én CLI-proces højst 60 minutter, hver konfigureret kontrol højst 10 minutter og højst 20 MB stdout pr. CLI-job. Store opgaver skal opdeles. Der er ikke implementeret en generel døgnkørende multiworker-platform, automatisk kvotefornyelse eller automatisk merge/deploy.
+
+## Fælles arbejdsflade
+
+![Chat og Live i samme arbejdsflade](screenshots/orbit-workspace-demo.png)
+
+Billedet viser den faktiske brugerflade med testdata og en lokal prøveagent, ikke arbejde fra brugerens konti.
+
+**Orbit** i navigationen åbner chat og Live sammen. De tidligere `/chat`- og `/swarm`-adresser virker fortsat. Træk skillelinjen for at ændre størrelser; piletaster virker, når linjen har fokus. Home/End vælger yderpunkterne, og dobbeltklik deler ligeligt. Layoutet gemmes lokalt. På en smal skærm ligger panelerne over hinanden; fokusknapperne giver ét panel hele pladsen. Chatten forbliver monteret ved fokusskift, så en kladde eller igangværende samtale ikke afbrydes.
+
+Live viser den aktuelle kørsel med projektnavn, også når chatten er i et andet projekt. Historik åbnes eksplicit. En planpause vises som et banner, så chatten stadig kan bruges; **Redigér og godkend planen** åbner planvinduet. Ved en blokeret eller afbrudt kørsel kan **Beslutning før genoptagelse** give de resterende jobs ny kontekst. Beslutningen gemmes på det nye forsøg, og den oprindelige rapport bevares.
+
+Native værktøjstilladelser kan endnu ikke godkendes fra Orbit. Afvisninger vises og stopper arbejdet; beslutningsfeltet giver ikke nye OS-/CLI-rettigheder. Det kræver stadig korrekt opsætning af leverandørværktøjet. Denne ændring er ikke verificeret med brugerens Windows-konti eller Epoch Isles-assets. Beståede tekniske kontroller er ikke en visuel godkendelse af spillets grafik.
 
 ## Gennemgang af kodeleverancer
 

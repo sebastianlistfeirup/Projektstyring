@@ -1,3 +1,5 @@
+import ProjectPlanReview from '../components/ProjectPlanReview';
+import { runLabels, verificationLabels } from '../lib/runPresentation';
 import OrbitPerformanceProbe from '../components/OrbitPerformanceProbe';
 import ServiceConstellation from '../components/ServiceConstellation';
 import { AI_PHASES, normalizePhase, removePlanJob } from '../../shared/ai-plan.mjs';
@@ -763,15 +765,18 @@ const MODE_KEYS: Record<string, string> = {
   race: 'swarm.mode.race',
 };
 
-export function AiSwarmView() {
+export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolean; projectId?: string | null }) {
   useLang();
   const connected = useSwarm((s) => s.connected);
   const recoveredProcesses = useSwarm(s => s.processes).filter(process => process.kind === 'recovered');
   const run = useSwarm((s) => s.run);
+  const projects = useStore(s => s.projects);
   const services = useSwarm((s) => s.services);
   const approval = useSwarm((s) => s.approval);
   const [archived, setArchived] = useState<SwarmRun | null>(null);
-  const [hiddenApproval, setHiddenApproval] = useState<string | null>(null);
+  useEffect(() => { setArchived(null); setReplay(null); historyRequest.current += 1; }, [projectId]);
+  const [openedApproval, setOpenedApproval] = useState<string | null>(null);
+  const [approving, setApproving] = useState(false);
   const [replay, setReplay] = useState<ReplayState | null>(null);
   const [archivedEvents, setArchivedEvents] = useState<SwarmEvent[]>([]);
   const [mapMode, setMapMode] = useState<'both' | 'work' | 'constellation'>(() => {
@@ -857,7 +862,7 @@ export function AiSwarmView() {
   const modeKey = shown?.mode ? MODE_KEYS[shown.mode] : null;
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto [&>*]:shrink-0 gap-3 p-3 md:p-6 max-w-[1500px] mx-auto w-full">
+    <div className={`flex flex-col h-full overflow-y-auto [&>*]:shrink-0 gap-3 w-full ${embedded ? "p-3" : "p-3 md:p-6 max-w-[1500px] mx-auto"}`}>
       {/* header */}
       <div className="flex flex-wrap items-center gap-3">
         <div>
@@ -892,6 +897,7 @@ export function AiSwarmView() {
       </div>
 
       {shown?.eventsJournal && <div className="text-xs opacity-65 flex flex-wrap gap-2"><a className="underline" href={`${BASE_URL}/api/ai/runs/${encodeURIComponent(shown.runId)}/events`} target="_blank" rel="noreferrer">Hent fuld aktivitetslog · {shown.eventCount ?? '—'} hændelser</a>{shown.eventsTruncated && <span>Loggen kan ikke indlæses komplet til genafspilning. Brug den fulde aktivitetslog.</span>}</div>}
+      {shown?.projectId && <p className="text-xs opacity-70">Projekt: {projects.find(project => project.id === shown.projectId)?.name ?? shown.projectId}{embedded && shown.projectId !== projectId ? ' · Et andet projekt end samtalen' : ''}</p>}
       <RunQueuePanel />
       {recoveredProcesses.length > 0 && <section aria-label="Processer fra afbrudte kørsler" className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm space-y-2">
         <h2 className="font-semibold flex items-center gap-2"><AlertTriangle size={16} />En tidligere agent kan stadig arbejde</h2>
@@ -906,7 +912,15 @@ export function AiSwarmView() {
           <AlertTriangle size={14} className="text-amber-300 shrink-0" />
           <span className="text-[12px] font-semibold text-amber-200">{t('swarm.approvalWaiting')}</span>
           <span className="text-xs opacity-65 flex-1">{t('swarm.approvalWaitingHint')}</span>
-          <button className="btn-primary text-xs" onClick={() => setHiddenApproval(null)}>Redigér og godkend planen</button>
+          <button className="btn-ghost text-xs" onClick={() => setOpenedApproval(approval.runId)}>Redigér og godkend planen</button>
+          <button disabled={approving} className="btn-primary text-xs" onClick={async () => {
+            setApproving(true);
+            try {
+              const result = await approvePlanResult(approval.runId, approval.jobs);
+              if (!result.ok) showToast(result.reason ?? 'Planen kunne ikke godkendes.');
+            } catch { showToast('Forbindelsen blev afbrudt. Kontrollér kørslen før et nyt forsøg.'); }
+            finally { setApproving(false); }
+          }}>Godkend planen</button>
         </div>
       )}
 
@@ -919,9 +933,11 @@ export function AiSwarmView() {
       ) : (
         <>
           {/* statuslinje */}
-          <div className="rounded-2xl border border-white/10 glass-panel p-3.5 space-y-2.5">
+          <div role="region" aria-label="Kørselsstatus" className="rounded-2xl border border-white/10 glass-panel p-3.5 space-y-2.5">
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[12px]">
               <span className="font-semibold text-sm w-full break-words" title={shown.goal}>{shown.goal}</span>
+              <span className="font-semibold">{shown.status === 'done' ? 'Leveret til gennemgang' : runLabels[shown.status] ?? shown.status}</span>
+              <span className="opacity-70">Kontroller: {verificationLabels[shown.verification?.status ?? 'not_run'] ?? shown.verification?.status}</span>
               {modeKey && (
                 <span className="text-[9px] px-1.5 py-0.5 rounded-full border border-violet-400/40 text-violet-300">{t(modeKey)}</span>
               )}
@@ -988,7 +1004,7 @@ export function AiSwarmView() {
           {/* handlingsbjælke for afsluttede/arkiverede kørsler: genoptag, eksport, link til opgave */}
           {!active && shown && !replay && (
             <div className="rounded-2xl border border-white/10 glass-panel px-3 py-2">
-              <RunActionsBar run={shown} onToast={showToast} />
+              <RunActionsBar key={shown.runId} run={shown} onToast={showToast} />
             </div>
           )}
 
@@ -1071,6 +1087,8 @@ export function AiSwarmView() {
         </>
       )}
 
+      {shown?.status === 'done' && shown.projectId && shown.projectPlan && <ProjectPlanReview key={shown.runId} runId={shown.runId} plan={shown.projectPlan} />}
+      {shown?.projectPlanError && <p role="alert" className="text-amber-500 text-xs">{shown.projectPlanError}</p>}
       {/* Sjældent brugte driftsfunktioner ligger bag en tydelig indgang. */}
       <details className="rounded-xl border border-zinc-200 dark:border-white/10 p-3"><summary className="cursor-pointer text-xs opacity-65">Automatisering, skabeloner og analyse</summary>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
@@ -1086,7 +1104,7 @@ export function AiSwarmView() {
       <RunHistory refreshKey={`${run?.runId ?? ''}:${run?.status ?? ''}`} onOpen={r => void openArchived(r)} />
 
       {/* godkendelsesmodal til plan-pause */}
-      {approval && <ApprovalModal services={services} open={hiddenApproval !== approval.runId} onClose={() => setHiddenApproval(approval.runId)} />}
+      {approval && <ApprovalModal services={services} open={openedApproval === approval.runId} onClose={() => setOpenedApproval(null)} />}
 
       {/* lille toast til handlinger (genoptagelse, link, eksport) */}
       {toast && (

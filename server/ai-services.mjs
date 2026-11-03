@@ -1,3 +1,4 @@
+import { permissionBlock } from './ai-delivery-status.mjs';
 // Orbit AI-motor — abonnement-first orkestrering.
 // Primære motorer: lokale CLI-værktøjer (Codex, Claude Code, Kimi Code, Gemini CLI, Ollama/Qwen).
 // The historical kind names do not establish billing. Every external connection
@@ -536,6 +537,7 @@ export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent,
     for (const key of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'MOONSHOT_API_KEY', 'DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'KIMI_API_KEY', 'XAI_API_KEY', 'GROK_API_KEY', 'GROK_DEPLOYMENT_KEY']) delete env[key];
     if (grok) { env.GROK_DISABLE_AUTOUPDATER = '1'; env.GROK_MEMORY = '0'; }
     const child = spawn(launch.cmd, launch.args, { cwd: cwd ?? process.cwd(), env, detached: process.platform !== 'win32' });
+    let permissionFailure;
     let terminationTimer, windowsStop, callbackError, stopped = false, out = '', lineBuf = '', bytes = 0;
     const kill = () => {
       if (stopped) return;
@@ -550,6 +552,8 @@ export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent,
       if (!text.trim()) return;
       let event;
       try { event = JSON.parse(text); } catch { out += text + '\n'; return; }
+      const denied = permissionBlock(event);
+      if (denied) { permissionFailure = new Error(denied); permissionFailure.code = 'ORBIT_PERMISSION_BLOCKED'; }
       // Event-handler failures must not be misclassified as invalid JSON.
       call(() => onEvent?.(event));
     };
@@ -578,6 +582,7 @@ export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent,
       if (callbackError) reject(callbackError);
       else if (signal?.aborted) reject(new Error('Afbrudt'));
       else if (stopped) reject(new Error('Jobbet nåede tidsgrænsen på 60 minutter.'));
+      else if (permissionFailure) reject(permissionFailure);
       else if (code === 0) resolve(out);
       else reject(new Error(`'${cmd}' afsluttede med kode ${code}${out.trim() ? `: ${out.trim().slice(-1200)}` : ' uden output'}`));
     });

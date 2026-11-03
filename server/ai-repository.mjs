@@ -56,7 +56,8 @@ export async function verifyRepository(cwd, checks, signal, { onProgress, onProc
         command = found.stdout.trim().split(/\r?\n/)[0];
       }
       const launch = cliSpawnSpec(command, check.args);
-      const result = await runCheckProcess(launch.cmd, launch.args, { cwd, signal, timeoutMs, onProcess: info => onProcess?.({ ...info, checkName: check.name }) });
+      const godot = /^godot(?:[_.-].*)?(?:\.exe)?$/i.test(command.split(/[\\/]/).at(-1));
+      const result = await runCheckProcess(launch.cmd, launch.args, { cwd, signal, timeoutMs, failOnErrorOutput: godot, onProcess: info => onProcess?.({ ...info, checkName: check.name }) });
       results.push({ ...check, startedAt, finishedAt: Date.now(), ...result });
     } catch (e) {
       results.push({ ...check, startedAt, finishedAt: Date.now(), exitCode: typeof e.code === 'number' ? e.code : null, status: 'failed', output: `${e.stdout ?? ''}\n${e.stderr ?? ''}\n${e.message}`.slice(-20000) });

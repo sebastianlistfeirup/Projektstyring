@@ -290,3 +290,18 @@ test('required review cannot silently disappear when no independent service is a
 });
 
 test('cleanup leaves no active run', () => { assert.equal(activeRuns.size, 0); assert.equal(swarmState.active, null); globalThis.fetch = originalFetch; });
+
+test('agent waiting for approval is blocked, persists explanation and never starts its dependant', async () => {
+  const dirs = fixture(), events = [];
+  const waiting = join(root, 'awaiting-agent.mjs');
+  writeFileSync(waiting, `console.log('Afventer din godkendelse af planen.');`);
+  const awaitingCfg = { ...cfg, aiProviders: { codex: { ...cfg.aiProviders.codex, cliTemplate: `"${waiting}" {prompt}` } } };
+  await start(dirs, { cfg: awaitingCfg, predefinedJobs: [job('wait', 'Inspect'), job('next', 'Do not start', [0])], emit: event => events.push(event) });
+  const run = readRun(dirs, 'test');
+  assert.deepEqual(run.jobs.map(j => j.status), ['blocked', 'blocked']);
+  assert.equal(run.status, 'blocked');
+  assert.equal(run.results.length, 0);
+  assert.match(run.jobs[0].error, /godkendelse/);
+  assert.match(run.jobs[0].text, /Afventer din godkendelse af planen/);
+  assert.ok(!events.some(e => e.type === 'job_done' || e.type === 'done' || (e.type === 'job_start' && e.job.id === 'next')));
+});

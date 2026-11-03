@@ -383,7 +383,7 @@ function ConnectionPanel({ services, prefs, onChanged }: {
 
 /* ---------- hovedvisning ---------- */
 
-export function AiChatView() {
+export function AiChatView({ embedded = false }: { embedded?: boolean }) {
   useLang();
   const projects = useStore((s) => s.projects);
   const tasks = useStore(s => s.tasks);
@@ -637,9 +637,9 @@ export function AiChatView() {
   const availableCount = useMemo(() => (services ? Object.values(services).filter((s) => s.available).length : 0), [services]);
 
   return (
-    <div className="flex h-full min-h-0 gap-4 p-3 md:p-6 max-w-[1500px] mx-auto overflow-hidden">
+    <div className={embedded ? "orbit-chat-embedded flex h-full min-h-0 p-3 overflow-hidden" : "flex h-full min-h-0 gap-4 p-3 md:p-6 max-w-[1500px] mx-auto overflow-hidden"}>
       {/* venstre: samtaler + tilslutning */}
-      <aside className="w-64 shrink-0 hidden lg:flex flex-col gap-3 overflow-y-auto pr-1">
+      {!embedded && <aside className={embedded ? "hidden" : "w-64 shrink-0 hidden lg:flex flex-col gap-3 overflow-y-auto pr-1"}>
         <div className="flex items-center gap-1.5">
           <select
             aria-label="Projekt til ny samtale"
@@ -677,11 +677,15 @@ export function AiChatView() {
           <summary className="cursor-pointer text-xs font-medium">Forbindelser · {availableCount} klar</summary>
           <div className="mt-3"><ConnectionPanel services={services} prefs={prefs} onChanged={refresh} /></div>
         </details>
-      </aside>
+      </aside>}
 
       {/* hoved: beskeder + komponist */}
       <main className="flex-1 min-w-0 min-h-0 flex flex-col gap-3 overflow-y-auto pr-1 [&>*]:shrink-0">
-        <details className="lg:hidden rounded-xl border border-zinc-200 dark:border-white/10 p-3 text-xs">
+        {embedded && <div className="flex items-center gap-2">
+          <select aria-label="Projekt til ny samtale" className="input min-w-0 flex-1 text-xs" value={newProjectId} onChange={e => setNewProjectId(e.target.value)}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+          <button className="btn-primary text-xs" onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); }}>{t('chat.newChat')}</button>
+        </div>}
+        <details className={`${embedded ? "max-h-64 overflow-auto" : "lg:hidden"} rounded-xl border border-zinc-200 dark:border-white/10 p-3 text-xs`}>
           <summary className="cursor-pointer font-medium">Samtaler og forbindelser</summary>
           <div className="mt-3 space-y-3">
             <CreateProjectChat onCreate={(projectId, id) => { setNewProjectId(projectId); setChatId(id); }} />
@@ -728,7 +732,7 @@ export function AiChatView() {
                 {tasks.filter(t => t.projectId === chat.projectId && !['done', 'canceled'].includes(t.status) && (!chatProject?.scopeTaskIds || chatProject.scopeTaskIds.includes(t.id))).map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
               </select>
             </label>
-            <OrbitRunPanel projectId={chat.projectId} />
+            {!embedded && <OrbitRunPanel projectId={chat.projectId} />}
             {chat.projectId && (
               <div className="rounded-2xl border border-white/10 bg-black/10 dark:bg-white/5 overflow-hidden">
                 <button onClick={() => setBibleOpen((o) => !o)} className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/5 transition">
@@ -775,7 +779,7 @@ export function AiChatView() {
               </div>
             )}
 
-            <div className="flex-1 overflow-y-auto rounded-2xl border border-white/10 bg-black/5 dark:bg-black/20 p-4 space-y-4 min-h-[300px] max-h-[65vh]">
+            <div className="orbit-chat-history flex-1 overflow-y-auto rounded-2xl border border-white/10 bg-black/5 dark:bg-black/20 p-4 space-y-4 min-h-[300px] max-h-[65vh]">
               {sendIssue && <p role="alert" className="text-rose-400 text-sm">{sendIssue}</p>}
               {chat.messages.length === 0 && (
                 <div className="h-full flex flex-col items-center justify-center text-center text-[12px] px-8 gap-4"><p className="opacity-60">{t('chat.firstMessage')}</p><div className="flex flex-wrap justify-center gap-2"><button className="btn-ghost text-xs" onClick={prepareTakeover}>Kortlæg eksisterende projekt</button><button className="btn-ghost text-xs" onClick={() => { setText('Undersøg og ret fejlen på det vedhæftede billede. Find årsagen i projektet, gennemfør den mindste nødvendige rettelse, og dokumentér en faktisk kontrol af det berørte forløb.'); textareaRef.current?.focus(); }}>Ret en fejl fra et billede</button><button className="btn-ghost text-xs" onClick={() => { fileInputRef.current?.click(); setBibleOpen(true); }}>Upload projektbibel</button></div></div>
@@ -788,7 +792,7 @@ export function AiChatView() {
 
             {/* komponist */}
             <div
-              className={cn('rounded-2xl border transition', dragOver ? 'border-indigo-400/70 bg-indigo-500/10' : 'border-white/10 glass-panel')}
+              className={cn('orbit-chat-composer rounded-2xl border transition', dragOver ? 'border-indigo-400/70 bg-indigo-500/10' : 'border-white/10 glass-panel')}
               onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
               onDragLeave={() => setDragOver(false)}
               onDrop={(e) => { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files); }}

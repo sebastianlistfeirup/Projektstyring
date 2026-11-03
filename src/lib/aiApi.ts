@@ -383,9 +383,9 @@ export async function approvePlan(runId: string, jobs: unknown[]): Promise<boole
 /* ---------- nye funktioner (30-ideer-pakken) ---------- */
 
 /** Genoptag en afsluttet kørsel: kun ikke-leverede jobs køres igen. */
-export async function resumeRun(runId: string): Promise<{ ok: boolean; reason?: string }> {
+export async function resumeRun(runId: string, instruction?: string): Promise<{ ok: boolean; reason?: string }> {
   try {
-    const r = await fetch(`${BASE}/api/ai/runs/${runId}/resume`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const r = await fetch(`${BASE}/api/ai/runs/${runId}/resume`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction }) });
     const j = await r.json().catch(() => ({}));
     return r.ok ? { ok: true } : { ok: false, reason: j?.reason ?? `Companion svarede ${r.status}` };
   } catch (e) {

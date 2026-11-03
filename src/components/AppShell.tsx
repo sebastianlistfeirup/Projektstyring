@@ -75,7 +75,8 @@ export default function AppShell() {
   }, []);
 
   const me = users.find((u) => u.id === currentUserId);
-  const currentView = VIEWS.find((v) => location.pathname.startsWith(v.to));
+  const workspacePath = location.pathname.startsWith('/swarm') ? '/chat' : location.pathname;
+  const currentView = VIEWS.find((v) => workspacePath.startsWith(v.to));
   const activeProject = projects.find((p) => p.id === activeProjectId);
   const activeProjects = projects.filter((p) => !p.archived);
   const archivedProjects = projects.filter((p) => p.archived);
@@ -169,7 +170,7 @@ export default function AppShell() {
             className={({ isActive }) =>
               cn(
                 'grid h-10 w-10 place-items-center rounded-xl transition-all duration-150',
-                isActive
+                isActive || (view.to === '/chat' && workspacePath === '/chat')
                   ? 'bg-indigo-500/15 text-indigo-500 dark:bg-indigo-400/15 dark:text-indigo-300'
                   : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/[0.06] dark:hover:text-zinc-100',
               )
@@ -195,7 +196,7 @@ export default function AppShell() {
       <aside
         className={cn(
           'hidden md:flex w-64 shrink-0 flex-col border-r border-zinc-200/80 bg-zinc-50/60 dark:border-white/[0.06] dark:bg-[#1a1b1f]/60',
-          (tvMode || location.pathname.startsWith('/chat')) && '!hidden',
+          (tvMode || workspacePath.startsWith('/chat')) && '!hidden',
         )}
       >
         <div className="flex items-center gap-2.5 px-4 pb-2 pt-4">

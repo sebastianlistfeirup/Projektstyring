@@ -1,3 +1,4 @@
+import { deliveryBlock, DELIVERY_STATUS_INSTRUCTION } from './ai-delivery-status.mjs';
 // Orbit AI-kørsler: planlægning, sværm, hukommelse og triggere.
 import { execFile } from 'child_process';
 import { promisify } from 'node:util';
@@ -448,7 +449,9 @@ function updateSwarm(run, obj) {
       }
     } else if (obj.type === 'job_blocked' || obj.type === 'job_cancelled') {
       const j = run.jobs.find(x => x.id === obj.jobId);
-      if (j) { j.status = obj.type === 'job_blocked' ? 'blocked' : 'cancelled'; j.error = obj.error; j.finishedAt = Date.now(); }
+      if (j) { j.status = obj.type === 'job_blocked' ? 'blocked' : 'cancelled'; j.error = obj.error; j.finishedAt = Date.now();
+        if (obj.text) { j.text = obj.text; j.textTruncated = Boolean(obj.textTruncated); }
+      }
     } else if (obj.type === 'job_error') {
       const j = run.jobs.find((x) => x.id === obj.jobId);
       if (j) { j.status = 'error'; j.error = String(obj.error ?? ''); j.finishedAt = Date.now(); }
@@ -663,6 +666,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       { role: 'user', text: `EKSEKVERINGSFASE — udfør din tildelte opgave nu. Returnér ikke blot en plan eller en beskrivelse af, hvad der bør gøres. Eventuelle planlægningsinstruktioner i det oprindelige projektmål gjaldt kun orkestratorens tidligere planfase.\n\nProjektmål: ${goal}\n\nDin opgave (${job.phase}): ${job.title}\n${job.description}\n\nLav et konkret, færdigt resultat. Svar på dansk.` },
       ...deliverables.map((d) => ({ role: 'user', text: d })),
       ...fileContext.messages,
+      { role: 'user', text: DELIVERY_STATUS_INSTRUCTION },
     ].filter(Boolean);
 
     const attempt = async (extra) => {
@@ -696,12 +700,22 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       } catch (e1) {
         // Selvhealing kan ikke rette en manglende/ugyldig CLI-sti; undgå et spildt genforsøg.
         const startupFailure = /ENOENT|Kunne ikke starte|Windows-shim/i.test(String(e1.message));
-        if (prefs.selfHeal && !startupFailure && !handle.skip.has(job.id) && !handle.cancelled) {
+        if (prefs.selfHeal && e1.code !== 'ORBIT_PERMISSION_BLOCKED' && !startupFailure && !handle.skip.has(job.id) && !handle.cancelled) {
           track({ type: 'job_healing', jobId: job.id, attempt: 2, error: String(e1.message).slice(0, 300) });
           track({ type: 'job_note', jobId: job.id, note: 'Forsøger igen med fejlkontekst (selvhealing).' });
           text = await attempt([{ role: 'user', text: `Dit første forsøg slog fejl med: "${e1.message}". Ret årsagen og leverér resultatet.` }]);
         } else {
           throw e1;
+        }
+      }
+      if (!isMedia) {
+        const blocked = deliveryBlock(text);
+        if (blocked) {
+          writeDeliverable(run.auditDir, job, text);
+          const failure = new Error(blocked);
+          failure.code = 'ORBIT_DELIVERY_BLOCKED';
+          failure.partialText = text;
+          throw failure;
         }
       }
       // Kvalitets-dommer (idé: auto-judge): en ANDEN tilgængelig tjeneste scorer
@@ -765,7 +779,14 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
         handle.abort.abort();
         track({ type: 'job_note', jobId: job.id, note: `Kørslen standses, fordi arbejdsområdet ikke kunne sikres: ${checkpointError.message}` });
       }
-      track({ type: handle.cancelled ? 'job_cancelled' : 'job_error', jobId: job.id, error: e.message });
+      const partialText = e.partialText ?? (e.code === 'ORBIT_PERMISSION_BLOCKED' ? run.jobs.find(j => j.id === job.id)?.liveText : '');
+      track({ type: handle.cancelled ? 'job_cancelled' : ['ORBIT_PERMISSION_BLOCKED', 'ORBIT_DELIVERY_BLOCKED'].includes(e.code) ? 'job_blocked' : 'job_error', jobId: job.id, error: e.message,
+        ...(partialText ? { text: partialText.slice(0, 2000), textTruncated: partialText.length > 2000 } : {}),
+      });
+      if (partialText) {
+        const failed = run.jobs.find(j => j.id === job.id);
+        if (failed) { failed.text = partialText; failed.textTruncated = false; handle.persist(); }
+      }
     }
   };
 

@@ -33,6 +33,7 @@ test.beforeAll(async ({ request }) => {
 if(p.includes('PLANLÆGNINGSFASE')) console.log(JSON.stringify({jobs:[{title:'Verificeret rettelse',service:'codex',phase:'produktion',dependsOn:[],description:p.includes('FAIL_MARKER')?'FAIL_MARKER':'Ret game.txt efter biblen'}]}));
 else if(p.includes('READ_ONLY_PLAN')) console.log('Read-only inspection completed');
 else if(p.includes('FAIL_MARKER')) { console.error('Reproduced test failure'); process.exit(9); }
+else if(p.includes('WAIT_FOR_DECISION')&&!p.includes('DECISION_ACCEPTED')) console.log('Afventer din godkendelse af planen.');
 else if(p.includes('REPAIR_TEST')&&!p.includes('RETTELSE EFTER FAKTISK TESTFEJL')) { fs.writeFileSync('game.txt','broken'); console.log('First implementation requires a test repair'); }
 else if(p.includes('"orbitProjectPlan"')) console.log(JSON.stringify({orbitProjectPlan:{version:1,releaseGoal:'En stabil save/load-cyklus',summary:'Et afgrænset restarbejde',firstMilestone:'Gem og indlæs en kampagne',unknowns:['Gameplay skal afprøves manuelt'],tasks:[{id:'save',title:'Verificér save-format',description:'Bevar kompatibilitet',priority:'high',scope:'version1',acceptanceCriteria:['Data bevares'],verification:['Kør save/load-test'],evidence:['game.txt'],dependsOn:[]}]}}));
 else if(p.includes('Kortlæg kode og gældende beslutninger')) console.log('game.txt er læst. Ingen tests er kørt i denne analyse.');
@@ -76,8 +77,8 @@ test('upload bible → work order → isolated code → reload → real test evi
   await page.getByRole('button', { name: 'Brug teksten som bibelkladde' }).click();
   await page.getByRole('button', { name: 'Gør kladden gældende' }).click();
   await expect(page.getByText('Gældende version 1.', { exact: false })).toBeVisible();
-  await page.locator('textarea').last().fill('Ret gemt tilstand efter arbejdsordren.');
-  await page.locator('textarea').last().press('Enter');
+  await page.getByLabel('Besked til Orbit', { exact: true }).fill('Ret gemt tilstand efter arbejdsordren.');
+  await page.getByLabel('Besked til Orbit', { exact: true }).press('Enter');
   await expect(page.getByRole('region', { name: 'Orbit Live' })).toBeVisible();
   await expect.poll(async () => page.evaluate(async () => {
     // @ts-expect-error Vite browser module
@@ -87,6 +88,9 @@ test('upload bible → work order → isolated code → reload → real test evi
   await page.reload();
   await expect(page.getByRole('region', { name: 'Orbit Live' }).getByText('Leveret til gennemgang', { exact: true })).toBeVisible();
   await expect(page.getByText('Kontroller: Bestået', { exact: false })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Chatpanel' }).locator('table').filter({ hasText: 'game.txt' })).toBeVisible();
+  await page.getByRole('button', { name: 'Kun arbejdskort', exact: true }).click();
+  await page.screenshot({ path: testInfo.outputPath('orbit-workspace-desktop.png') });
   await expect.poll(async () => page.evaluate(async id => {
     // @ts-expect-error Vite browser module
     const { useStore } = await import('/src/store/useStore.ts');
@@ -112,15 +116,15 @@ test('upload bible → work order → isolated code → reload → real test evi
   await review.getByRole('button', { name: 'Luk kodegennemgang' }).click();
   await page.setViewportSize({ width: 1280, height: 900 });
   await expect(review).not.toBeVisible();
-  await expect(page.locator('table').filter({ hasText: 'game.txt' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Chatpanel' }).locator('table').filter({ hasText: 'game.txt' })).toBeVisible();
   expect(errors).toEqual([]);
   await testInfo.attach('Orbit completion', { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
 });
 
 test('failed execution stays failed in chat and never marks task ready for review', async ({ page, request }) => {
   const projectId = await setup(page);
-  await page.locator('textarea').last().fill('FAIL_MARKER: reproducer en fejl.');
-  await page.locator('textarea').last().press('Enter');
+  await page.getByLabel('Besked til Orbit', { exact: true }).fill('FAIL_MARKER: reproducer en fejl.');
+  await page.getByLabel('Besked til Orbit', { exact: true }).press('Enter');
   await expect(page.getByRole('region', { name: 'Orbit Live' }).getByText('Fejlet', { exact: true }).first()).toBeVisible();
   await expect.poll(async () => page.evaluate(async id => {
     // @ts-expect-error Vite browser module
@@ -289,11 +293,12 @@ test('a real failed check creates one visible repair job and retains both test r
   await request.post(`${base}/api/ai/prefs`, { data: { selfHeal: true, autoJudge: false } });
   try {
     await setup(page);
-    await page.locator('textarea').last().fill('REPAIR_TEST: Ret gemt tilstand og verificér resultatet.');
-    await page.locator('textarea').last().press('Enter');
+    await page.getByLabel('Besked til Orbit', { exact: true }).fill('REPAIR_TEST: Ret gemt tilstand og verificér resultatet.');
+    await page.getByLabel('Besked til Orbit', { exact: true }).press('Enter');
     const live = page.getByRole('region', { name: 'Orbit Live' });
+    await expect(live.getByRole('region', { name: 'Kørselsstatus' })).toContainText('REPAIR_TEST:');
     await expect(live.getByText('Leveret til gennemgang', { exact: true })).toBeVisible();
-    await expect(live.getByText('Ret dokumenteret testfejl (forsøg 1)', { exact: true })).toBeVisible();
+    await expect(live.getByRole('button', { name: 'Opgave 2: Ret dokumenteret testfejl (forsøg 1)', exact: true })).toBeVisible();
     await live.getByText('Kontrolhistorik · 2 gennemløb').click();
     await expect(live.getByText('Kontrol 1: Fejlet', { exact: true })).toBeVisible();
     await expect(live.getByText('Kontrol 2: Bestået', { exact: true })).toBeVisible();
@@ -348,7 +353,7 @@ test('work orders can be queued from their drawer and execute serially with the 
 test('image previews and unsent drafts survive reload without leaking uploads into another chat', async ({ page }) => {
   await setup(page);
   const firstUrl = page.url();
-  await page.locator('textarea').last().fill('Første kladde: undersøg billedet.');
+  await page.getByLabel('Besked til Orbit', { exact: true }).fill('Første kladde: undersøg billedet.');
   let uploads = 0;
   await page.route(`${base}/api/ai/upload`, async route => { await new Promise(resolve => setTimeout(resolve, 250)); await route.continue(); uploads++; });
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
@@ -356,13 +361,13 @@ test('image previews and unsent drafts survive reload without leaking uploads in
   await page.locator('input[type=file]').setInputFiles({ name: 'second-shot.png', mimeType: 'image/png', buffer: png });
   await page.getByRole('button', { name: 'Ny chat', exact: true }).first().click();
   const secondUrl = page.url();
-  await expect(page.locator('textarea').last()).toHaveValue('');
-  await page.locator('textarea').last().fill('Anden kladde uden billeder.');
+  await expect(page.getByLabel('Besked til Orbit', { exact: true })).toHaveValue('');
+  await page.getByLabel('Besked til Orbit', { exact: true }).fill('Anden kladde uden billeder.');
   await expect.poll(() => uploads).toBe(2);
   await expect.poll(() => page.evaluate(() => Object.values(JSON.parse(sessionStorage.getItem('orbit-chat-drafts-v1') ?? '{}')).some(draft => (draft as { attachments: unknown[] }).attachments.length === 2))).toBe(true);
   await expect(page.getByRole('button', { name: 'Åbn billede: first-shot.png' })).toHaveCount(0);
   await page.goto(firstUrl);
-  await expect(page.locator('textarea').last()).toHaveValue('Første kladde: undersøg billedet.');
+  await expect(page.getByLabel('Besked til Orbit', { exact: true })).toHaveValue('Første kladde: undersøg billedet.');
   await page.getByRole('button', { name: 'Åbn billede: first-shot.png' }).click();
   const preview = page.getByRole('dialog', { name: 'Billedvisning: first-shot.png' });
   await expect(preview).toBeVisible();
@@ -374,9 +379,9 @@ test('image previews and unsent drafts survive reload without leaking uploads in
   await expect(page.getByRole('button', { name: 'Åbn billede: first-shot.png' })).toBeFocused();
   await page.reload();
   await expect(page.getByRole('button', { name: 'Åbn billede: second-shot.png' })).toBeVisible();
-  await expect(page.locator('textarea').last()).toHaveValue('Første kladde: undersøg billedet.');
+  await expect(page.getByLabel('Besked til Orbit', { exact: true })).toHaveValue('Første kladde: undersøg billedet.');
   await page.goto(secondUrl);
-  await expect(page.locator('textarea').last()).toHaveValue('Anden kladde uden billeder.');
+  await expect(page.getByLabel('Besked til Orbit', { exact: true })).toHaveValue('Anden kladde uden billeder.');
   await expect(page.getByRole('button', { name: 'Åbn billede: first-shot.png' })).toHaveCount(0);
 });
 
@@ -537,6 +542,7 @@ test('plan editing retains read-only context, dependency identities and visible 
   });
   await page.goto('/#/swarm');
   const modal = page.getByRole('dialog', { name: 'Gennemgå jobplan' });
+  await page.getByRole('button', { name: 'Redigér og godkend planen', exact: true }).click();
   await expect(modal).toBeVisible();
   await modal.getByRole('button', { name: 'Fjern job 1', exact: true }).click();
   const first = modal.getByRole('group', { name: 'Planjob 1', exact: true });
@@ -779,19 +785,69 @@ test('service light follows provider calls, not job status, and expires with sta
 });
 
 
+test('blocked agent keeps its explanation and resumes with a decision from the shared workspace', async ({ page, request }) => {
+  await setup(page);
+  const composer = page.getByLabel('Besked til Orbit', { exact: true });
+  await composer.fill('WAIT_FOR_DECISION: ret game.txt efter min beslutning.');
+  await composer.press('Enter');
+  const live = page.getByRole('region', { name: 'Orbit Live' });
+  await expect(live.getByText('Blokeret', { exact: true }).first()).toBeVisible();
+  const blocked = (await (await request.get(`${base}/api/ai/swarm`)).json()).run;
+  expect(blocked.results).toHaveLength(0);
+  expect(blocked.jobs[0].text).toContain('Afventer din godkendelse af planen.');
+  await live.getByText('Beslutning før genoptagelse', { exact: true }).click();
+  await live.getByLabel('Beslutning til genoptagelse').fill('DECISION_ACCEPTED: Ret filen og kør kontrollen.');
+  await live.getByRole('button', { name: /Genoptag/ }).click();
+  await expect(live.getByText('Leveret til gennemgang', { exact: true })).toBeVisible();
+  const resumed = (await (await request.get(`${base}/api/ai/swarm`)).json()).run;
+  expect(resumed.runId).not.toBe(blocked.runId);
+  expect(resumed.instructions).toContain('DECISION_ACCEPTED: Ret filen og kør kontrollen.');
+  expect(resumed.verification.status).toBe('passed');
+  expect((await (await request.get(`${base}/api/ai/runs/${blocked.runId}`)).json()).run.status).toBe('blocked');
+});
+
 test('account test starts through connection settings and keeps billing and quota separate from delivery', async ({ page, request }) => {
   const dir = mkdtempSync(join(tmpdir(), 'orbit-account-browser-')), fake = join(dir, 'check.mjs');
   writeFileSync(fake, "console.log(process.argv.at(-1).match(/ORBIT_CHECK_[a-f0-9]+/)?.[0] ?? 'NO_MARKER');");
   await request.post(`${base}/api/ai/services/codex`, { data: { cmd: process.execPath, cliTemplate: `"${fake}" {prompt}`, billingMode: 'included', noExtraCharges: true } });
   await page.addInitScript(() => localStorage.setItem('orbit-toured', '1'));
   await page.goto('/#/chat');
+  await page.getByText('Samtaler og forbindelser', { exact: true }).click();
   await page.getByText(/^Forbindelser · /).first().click();
   await page.getByRole('button', { name: /^Codex Inkluderet/ }).click();
   await page.getByRole('button', { name: 'Kør én kontotest', exact: true }).click();
   await expect(page.getByText(/Kontotest: Prøve leveret/)).toBeVisible();
   await expect(page.getByText(/Kvoten er ukendt/)).toBeVisible();
   await page.reload();
+  await page.getByText('Samtaler og forbindelser', { exact: true }).click();
   await page.getByText(/^Forbindelser · /).first().click();
   await page.getByRole('button', { name: /^Codex Inkluderet/ }).click();
   await expect(page.getByText(/Kontotest: Prøve leveret/)).toBeVisible();
+});
+
+test('unified workspace resizes, persists layout and keeps drafts mounted when focusing panels', async ({ page }) => {
+  await setup(page);
+  const composer = page.getByLabel('Besked til Orbit', { exact: true });
+  await composer.fill('Bevar min kladde under panelændringer');
+  const divider = page.getByRole('separator', { name: 'Tilpas chat og Orbit Live' });
+  await divider.focus();
+  await divider.press('ArrowRight');
+  await expect(divider).toHaveAttribute('aria-valuenow', '50');
+  await page.getByRole('button', { name: 'Fokusér Orbit Live', exact: true }).click();
+  await expect(composer).toBeHidden();
+  await page.getByRole('button', { name: 'Begge paneler', exact: true }).click();
+  await expect(composer).toHaveValue('Bevar min kladde under panelændringer');
+  const box = (await divider.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down(); await page.mouse.move(box.x + 75, box.y + box.height / 2); await page.mouse.up();
+  const split = await divider.getAttribute('aria-valuenow');
+  expect(Number(split)).toBeGreaterThan(50);
+  await page.reload();
+  await expect(divider).toHaveAttribute('aria-valuenow', split!);
+  await expect(composer).toHaveValue('Bevar min kladde under panelændringer');
+  await page.getByRole('button', { name: 'Paneler over hinanden', exact: true }).click();
+  await expect(divider).toHaveAttribute('aria-orientation', 'horizontal');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(divider).toBeHidden();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
 });

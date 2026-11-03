@@ -1,0 +1,24 @@
+.orbit-workspace { height:100%; min-height:0; display:flex; flex-direction:column; padding:12px; gap:12px; }
+.orbit-workspace-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; }
+.orbit-workspace-toolbar button[aria-pressed=true] { background:rgb(99 102 241 / .18); color:#818cf8; }
+.orbit-workspace-panels { flex:1; min-height:0; display:grid; }
+.orbit-workspace-pane { min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden; border:1px solid rgb(128 128 160 / .22); border-radius:18px; background:rgb(128 128 160 / .035); }
+.orbit-pane-heading { display:flex; align-items:center; gap:8px; padding:12px 16px; font-size:12px; font-weight:600; border-bottom:1px solid rgb(128 128 160 / .16); background:linear-gradient(110deg,rgb(99 102 241 / .10),transparent); }
+.orbit-pane-heading span { margin-left:auto; opacity:.55; font-size:10px; font-weight:400; }
+.orbit-pane-content { flex:1; min-height:0; min-width:0; }
+.orbit-workspace-divider { display:flex; align-items:center; justify-content:center; cursor:col-resize; touch-action:none; border-radius:8px; }
+.orbit-workspace-divider span { width:3px; height:42px; border-radius:4px; background:rgb(128 128 160 / .35); }
+.orbit-workspace-divider:hover, .orbit-workspace-divider:focus-visible { background:rgb(99 102 241 / .2); outline:2px solid #818cf8; outline-offset:-2px; }
+.orbit-workspace-panels[data-dragging=true] { user-select:none; }
+.orbit-workspace[data-direction=rows] .orbit-workspace-divider { cursor:row-resize; }
+.orbit-workspace[data-direction=rows] .orbit-workspace-divider span { width:42px; height:3px; }
+.orbit-workspace[data-focus=chat] .orbit-live-pane, .orbit-workspace[data-focus=live] .orbit-chat-pane, .orbit-workspace:not([data-focus=both]) .orbit-workspace-divider { display:none; }
+.orbit-workspace:not([data-focus=both]) .orbit-workspace-panels { grid-template-columns:minmax(0,1fr)!important; grid-template-rows:minmax(0,1fr)!important; }
+.orbit-chat-embedded main { overflow:auto; }
+.orbit-chat-embedded .orbit-chat-history { min-height:100px; max-height:none; flex:1 1 0%; }
+.orbit-chat-embedded .orbit-chat-composer { max-height:45%; overflow:auto; position:sticky; bottom:0; z-index:5; }
+@media (max-width: 900px) {
+  .orbit-workspace[data-focus=both] .orbit-workspace-panels { grid-template-columns:minmax(0,1fr)!important; grid-template-rows:minmax(260px,1fr) minmax(260px,1fr)!important; gap:12px; overflow:auto; }
+  .orbit-workspace-divider { display:none; }
+  .orbit-workspace { padding:8px; }
+}

@@ -418,7 +418,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
           run: {
             ...cur,
             jobs: cur.jobs.map((j) =>
-              j.id === id ? { ...j, status: (evt.type === 'job_blocked' ? 'blocked' : evt.type === 'job_cancelled' ? 'cancelled' : 'error') as SwarmJob['status'], error: String(evt.error ?? ''), finishedAt: Date.now() } : j,
+              j.id === id ? { ...j, status: (evt.type === 'job_blocked' ? 'blocked' : evt.type === 'job_cancelled' ? 'cancelled' : 'error') as SwarmJob['status'], error: String(evt.error ?? ''), ...(evt.text ? { text: String(evt.text), textTruncated: Boolean(evt.textTruncated) } : {}), finishedAt: Date.now() } : j,
             ),
           },
         });
@@ -662,7 +662,7 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
       return {
         ...run,
         jobs: run.jobs.map((j) =>
-          j.id === String(evt.jobId ?? '') ? { ...j, status: (evt.type === 'job_blocked' ? 'blocked' : evt.type === 'job_cancelled' ? 'cancelled' : 'error') as SwarmJob['status'], error: String(evt.error ?? ''), finishedAt: Number(evt.at) } : j,
+          j.id === String(evt.jobId ?? '') ? { ...j, status: (evt.type === 'job_blocked' ? 'blocked' : evt.type === 'job_cancelled' ? 'cancelled' : 'error') as SwarmJob['status'], error: String(evt.error ?? ''), ...(evt.text ? { text: String(evt.text), textTruncated: Boolean(evt.textTruncated) } : {}), finishedAt: Number(evt.at) } : j,
         ),
       };
     case 'job_judged':
