@@ -806,6 +806,20 @@ test('blocked agent keeps its explanation and resumes with a decision from the s
   expect((await (await request.get(`${base}/api/ai/runs/${blocked.runId}`)).json()).run.status).toBe('blocked');
 });
 
+test('a recovered plan pause can be resumed without approving it implicitly', async ({ page }) => {
+  const run = { runId: 'recovered-plan', goal: 'Gemt plan efter genstart', status: 'awaiting_approval', recoveredAt: Date.now(), startedAt: Date.now(), notes: [], jobs: [{ id: 'waiting', title: 'Gennemgå ændringen', serviceId: 'codex', phase: 'testing', description: 'Kontrollér leverancen', status: 'queued', dependsOn: [], notes: [], actions: [], artifacts: [], text: '', liveText: '', subagents: [] }] };
+  let resumed = false, approvals = 0;
+  await page.addInitScript(() => localStorage.setItem('orbit-toured', '1'));
+  await page.route(`${base}/api/ai/swarm*`, route => route.fulfill({ json: { ok: true, run } }));
+  await page.route(`${base}/api/ai/runs/recovered-plan/resume`, route => { resumed = true; return route.fulfill({ json: { ok: true, runId: 'new-plan' } }); });
+  await page.route(`${base}/api/ai/runs/recovered-plan/approve`, route => { approvals++; return route.fulfill({ json: { ok: true } }); });
+  await page.goto('/#/chat');
+  await expect(page.getByText('Planpausen er gendannet efter genstart.', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: /Genoptag/ }).click();
+  await expect.poll(() => resumed).toBe(true);
+  expect(approvals).toBe(0);
+});
+
 test('account test starts through connection settings and keeps billing and quota separate from delivery', async ({ page, request }) => {
   const dir = mkdtempSync(join(tmpdir(), 'orbit-account-browser-')), fake = join(dir, 'check.mjs');
   writeFileSync(fake, "console.log(process.argv.at(-1).match(/ORBIT_CHECK_[a-f0-9]+/)?.[0] ?? 'NO_MARKER');");

@@ -51,6 +51,7 @@ export interface SwarmJob {
 export interface ServiceCall { callId: string; serviceId: string; jobId: string | null; role: 'planning' | 'execution' | 'review' | 'media'; startedAt: number }
 
 export interface SwarmRun {
+  recoveredAt?: number;
   serviceCalls?: ServiceCall[];
   repository?: { source: string; baseCommit: string; branch?: string; workDir?: string } | null;
   eventsJournal?: boolean;

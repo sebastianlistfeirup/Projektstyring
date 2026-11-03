@@ -296,7 +296,7 @@ export function RunActionsBar({ run, onToast }: { run: SwarmRun; onToast?: (msg:
   }, [query, tasks, projects]);
 
   const unfinished = run.jobs.filter((j) => j.status !== 'done').length;
-  const resumable = run.status !== 'awaiting_approval' && (unfinished > 0 || ['failed', 'interrupted', 'cancelled'].includes(run.verification?.status ?? ''));
+  const resumable = (run.status !== 'awaiting_approval' || Boolean(run.recoveredAt)) && (unfinished > 0 || ['failed', 'interrupted', 'cancelled'].includes(run.verification?.status ?? ''));
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">

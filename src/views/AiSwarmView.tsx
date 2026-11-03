@@ -912,6 +912,7 @@ export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolea
           <AlertTriangle size={14} className="text-amber-300 shrink-0" />
           <span className="text-[12px] font-semibold text-amber-200">{t('swarm.approvalWaiting')}</span>
           <span className="text-xs opacity-65 flex-1">{t('swarm.approvalWaitingHint')}</span>
+          {run?.runId === approval.runId && run.recoveredAt && <p className="w-full text-xs">Planpausen er gendannet efter genstart. Brug Genoptag for at aktivere den gemte plan, før du godkender den.</p>}
           <button className="btn-ghost text-xs" onClick={() => setOpenedApproval(approval.runId)}>Redigér og godkend planen</button>
           <button disabled={approving} className="btn-primary text-xs" onClick={async () => {
             setApproving(true);
