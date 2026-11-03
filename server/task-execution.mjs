@@ -8,7 +8,7 @@ export function projectExecution(snapshot, input) {
   const project = snapshot?.projects?.find(p => p.id === input.projectId);
   if (!project) throw new Error('Projektet er ikke gemt på Companion endnu. Gem/synkronisér projektet først.');
   const state = snapshot.workspaceState ?? {};
-  const workspace = project.continueVerifiedWork && project.aiWorkspace?.source === project.repositoryPath ? project.aiWorkspace : null;
+  const workspace = project.continueVerifiedWork && project.aiWorkspace?.source === project.repositoryPath && (project.aiWorkspace?.baseRef ?? null) === (project.repositoryBaseRef ?? null) ? project.aiWorkspace : null;
   const task = input.taskId ? snapshot.tasks?.find(t => t.id === input.taskId && t.projectId === project.id) : null;
   if (input.taskId && !task) throw new Error('Arbejdsordren findes ikke i dette projekt.');
   if (task) {
@@ -25,7 +25,7 @@ export function projectExecution(snapshot, input) {
     if (task.status !== 'inprogress' && Number.isFinite(limit) && count >= limit) throw new Error('Projektets grænse for igangværende arbejde er nået.');
   }
   const context = captureProjectContext(project, task, state, input.bible ?? '');
-  return { ...input, ...context, repositoryPath: project.repositoryPath || undefined, repositoryStartCommit: workspace?.commit ?? undefined, continuationTaskIds: [...(workspace?.includedTaskIds ?? [])], checks: project.verificationChecks ?? [],
+  return { ...input, ...context, repositoryPath: project.repositoryPath || undefined, repositoryStartCommit: workspace?.commit ?? undefined, repositoryStartRef: project.repositoryBaseRef || undefined, continuationTaskIds: [...(workspace?.includedTaskIds ?? [])], checks: project.verificationChecks ?? [],
     goal: [project.releaseGoal ? `Versionsmål: ${project.releaseGoal}` : '', input.goal, task ? `Autoritativ arbejdsordre: ${task.title}\n${task.description ?? ''}` : ''].filter(Boolean).join('\n\n') };
 }
 
@@ -50,9 +50,9 @@ export function applyRunToWorkspace(snapshot, run, eventType) {
   const delivery = { runId: run.runId, status: run.status, verification: run.verification?.status ?? 'not_run', commit: run.evidence?.commit, updatedAt: now };
   const tasks = snapshot.tasks.map(t => t.id === task.id ? { ...t, status, aiDelivery: delivery, updatedAt: now } : t);
   const projects = (snapshot.projects ?? []).map(project => {
-    const currentCommit = project.aiWorkspace?.source === run.repository?.source ? project.aiWorkspace?.commit : null;
+    const currentCommit = project.aiWorkspace?.source === run.repository?.source && (project.aiWorkspace?.baseRef ?? null) === (project.repositoryBaseRef ?? null) ? project.aiWorkspace?.commit : null;
     if (project.id !== run.projectId || !project.continueVerifiedWork || eventType !== 'run_finished' || run.status !== 'done' || run.verification?.status !== 'passed' || !run.evidence?.commit || !run.repository || project.repositoryPath !== run.repository.source || (currentCommit ?? null) !== (run.continuationFromCommit ?? null)) return project;
-    return { ...project, updatedAt: now, aiWorkspace: { runId: run.runId, source: run.repository.source, sourceCommit: run.repository.sourceCommit, commit: run.evidence.commit, branch: run.repository.branch, workDir: run.workDir, updatedAt: now, includedTaskIds: [...new Set([...(run.continuationTaskIds ?? []), task.id])] } };
+    return { ...project, updatedAt: now, aiWorkspace: { runId: run.runId, source: run.repository.source, sourceCommit: run.repository.sourceCommit, baseRef: project.repositoryBaseRef ?? null, commit: run.evidence.commit, branch: run.repository.branch, workDir: run.workDir, updatedAt: now, includedTaskIds: [...new Set([...(run.continuationTaskIds ?? []), task.id])] } };
   });
   return { ...snapshot, tasks, projects, workspaceState: { ...state, tasks, projects, aiTaskLinks: { ...state.aiTaskLinks, [task.id]: { runId: run.runId, goal: run.goal, linkedAt: eventType === 'run_start' ? now : link.linkedAt } } }, workspaceVersions: { ...snapshot.workspaceVersions, aiTaskLinks: now } };
 }

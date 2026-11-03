@@ -415,6 +415,8 @@ export function AiChatView({ embedded = false }: { embedded?: boolean }) {
   const bibleVersions = useStore(s => s.bibleVersions);
   const publishBible = useStore(s => s.publishBible);
   const [sendIssue, setSendIssue] = useState('');
+  const [startingIdea, setStartingIdea] = useState('');
+  const starterDraft = useRef<string | null>(null);
 
   const [newProjectId, setNewProjectId] = useState<string>(() => useStore.getState().activeProjectId ?? projects[0]?.id ?? '');
   const [services, setServices] = useState<Record<string, AiServiceInfo> | null>(null);
@@ -429,6 +431,12 @@ export function AiChatView({ embedded = false }: { embedded?: boolean }) {
   const [suggestingBible, setSuggestingBible] = useState(false);
   const [loadingBibleFile, setLoadingBibleFile] = useState(false);
   const { text, pending, planDraft, setText, setPending, setPlanDraft, getPending, persistenceIssue } = useChatDraft(chatId);
+  useEffect(() => {
+    if (!chatId || starterDraft.current === null) return;
+    const draft = starterDraft.current;
+    starterDraft.current = null;
+    setText(draft);
+  }, [chatId, setText]);
   const uploadQueue = useRef(Promise.resolve());
   const uploadsWaiting = useRef(0);
   const [dragOver, setDragOver] = useState(false);
@@ -635,6 +643,15 @@ export function AiChatView({ embedded = false }: { embedded?: boolean }) {
   }, [text, pending, running, activeRun, uploading, chat, chatProject, service, services, bible, aiChats, runMode, pausePlan, planDraft, addAiMessage, updateAiMessage, setText, setPending, setPlanDraft]);
 
   const availableCount = useMemo(() => (services ? Object.values(services).filter((s) => s.available).length : 0), [services]);
+  const selectedProject = projects.find(p => p.id === newProjectId);
+  const codingConnectionFound = Object.values(services ?? {}).some(s => s.available && s.capabilities?.repository);
+  const beginConversation = (idea = '') => {
+    const projectId = newProjectId || projects[0]?.id;
+    if (!projectId) { setSendIssue('Opret et projekt først, så Orbit ved, hvor samtalen hører til.'); return; }
+    starterDraft.current = idea.trim() || null;
+    const conversation = addAiChat({ projectId, title: t('chat.untitled') });
+    setChatId(conversation.id);
+  };
 
   return (
     <div className={embedded ? "orbit-chat-embedded flex h-full min-h-0 p-3 overflow-hidden" : "flex h-full min-h-0 gap-4 p-3 md:p-6 max-w-[1500px] mx-auto overflow-hidden"}>
@@ -708,18 +725,20 @@ export function AiChatView({ embedded = false }: { embedded?: boolean }) {
         )}
 
         {!chat ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-center gap-3">
-            <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white shadow-xl shadow-indigo-500/30">
-              <Send size={26} />
+          <div className="flex-1 flex flex-col items-center justify-center px-2 py-8">
+            <div className="w-full max-w-xl rounded-3xl border border-indigo-400/20 bg-gradient-to-br from-indigo-500/10 to-transparent p-5 sm:p-7 space-y-5">
+              <div className="flex items-start gap-3"><div className="w-11 h-11 shrink-0 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white"><Send size={19} /></div><div><h2 className="text-xl font-semibold">Hvad skal Orbit hjælpe dig videre med?</h2><p className="text-sm opacity-65 mt-1">Skriv dit mål med dine egne ord. Du kan gennemgå beskeden, før arbejdet starter.</p></div></div>
+              <div className="text-xs rounded-xl border border-white/10 bg-black/5 dark:bg-black/15 p-3 space-y-1">
+                <p><strong>Projekt:</strong> {selectedProject?.name ?? 'Vælg eller opret et projekt'}</p>
+                <p>{selectedProject?.repositoryPath ? 'Projektmappe valgt. Orbit kontrollerer den ved en kørsel.' : 'Projektmappe mangler endnu til kodearbejde.'}</p>
+                <p>{codingConnectionFound ? 'En coding-forbindelse er fundet; konto og levering skal stadig afprøves.' : 'Ingen coding-forbindelse er klar endnu. Tilslut en under Forbindelser.'}</p>
+              </div>
+              {!projects.length && <CreateProjectChat onCreate={(projectId, id) => { setNewProjectId(projectId); setChatId(id); }} />}
+              <div className="space-y-2"><label htmlFor="orbit-starting-idea" className="text-sm font-medium">Dit mål</label><textarea id="orbit-starting-idea" value={startingIdea} onChange={event => setStartingIdea(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); beginConversation(startingIdea); } }} rows={3} className="input w-full resize-y text-sm" placeholder="Fx: Fortsæt arbejdet med byscenen og vis mig resultatet" /></div>
+              <div className="space-y-2"><p className="text-xs opacity-60">Eller begynd med et forslag</p><div className="flex flex-wrap gap-2">{['Undersøg seneste verificerede arbejde, og foreslå næste skridt.', 'Undersøg projektet og fortæl mig, hvad der blokerer.', 'Forbedr én synlig del mod de eksisterende referencer, og vis før og efter.'].map(idea => <button type="button" key={idea} className="btn-ghost text-xs text-left" onClick={() => setStartingIdea(idea)}>{idea}</button>)}</div></div>
+              {sendIssue && <p role="alert" className="text-xs text-rose-400">{sendIssue}</p>}
+              <div className="flex flex-wrap items-center gap-3"><button type="button" onClick={() => beginConversation(startingIdea)} className="btn-primary text-sm">Åbn samtale <ArrowUp size={15} /></button><button type="button" onClick={() => beginConversation()} className="btn-ghost text-xs"><Plus size={14} /> {t('chat.newChat')}</button></div>
             </div>
-            <h2 className="text-xl font-bold">{t('chat.emptyTitle')}</h2>
-            <p className="text-[13px] opacity-60 max-w-sm leading-relaxed">{t('chat.emptyHint')}</p>
-            <button
-              onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); }}
-              className="btn-primary rounded-xl px-4 py-2 text-[13px] flex items-center gap-1.5"
-            >
-              <Plus size={14} /> {t('chat.newChat')}
-            </button>
           </div>
         ) : (
           <>
@@ -782,7 +801,7 @@ export function AiChatView({ embedded = false }: { embedded?: boolean }) {
             <div className="orbit-chat-history flex-1 overflow-y-auto rounded-2xl border border-white/10 bg-black/5 dark:bg-black/20 p-4 space-y-4 min-h-[300px] max-h-[65vh]">
               {sendIssue && <p role="alert" className="text-rose-400 text-sm">{sendIssue}</p>}
               {chat.messages.length === 0 && (
-                <div className="h-full flex flex-col items-center justify-center text-center text-[12px] px-8 gap-4"><p className="opacity-60">{t('chat.firstMessage')}</p><div className="flex flex-wrap justify-center gap-2"><button className="btn-ghost text-xs" onClick={prepareTakeover}>Kortlæg eksisterende projekt</button><button className="btn-ghost text-xs" onClick={() => { setText('Undersøg og ret fejlen på det vedhæftede billede. Find årsagen i projektet, gennemfør den mindste nødvendige rettelse, og dokumentér en faktisk kontrol af det berørte forløb.'); textareaRef.current?.focus(); }}>Ret en fejl fra et billede</button><button className="btn-ghost text-xs" onClick={() => { fileInputRef.current?.click(); setBibleOpen(true); }}>Upload projektbibel</button></div></div>
+                <div className="h-full flex flex-col items-center justify-center text-center text-[12px] px-5 gap-4"><div><p className="text-base font-medium">Fortæl Orbit, hvad du vil opnå i {chatProject?.name ?? 'projektet'}</p><p className="opacity-60 mt-1">Skriv nedenfor. Orbit viser en plan og de kontroller, der faktisk bliver kørt.</p></div><div className="flex flex-wrap justify-center gap-2"><button className="btn-ghost text-xs" onClick={prepareTakeover}>Kortlæg eksisterende projekt</button><button className="btn-ghost text-xs" onClick={() => { setText('Undersøg og ret fejlen på det vedhæftede billede. Find årsagen i projektet, gennemfør den mindste nødvendige rettelse, og dokumentér en faktisk kontrol af det berørte forløb.'); textareaRef.current?.focus(); }}>Ret en fejl fra et billede</button><button className="btn-ghost text-xs" onClick={() => { fileInputRef.current?.click(); setBibleOpen(true); }}>Upload projektbibel</button></div>{!chatProject?.repositoryPath && <p className="opacity-55">Kodearbejde kræver en projektmappe under Repository og kvalitetskontroller.</p>}</div>
               )}
               {chat.messages.map((m) => (
                 <MessageBubble key={m.id} m={m} color={m.serviceId ? services?.[m.serviceId]?.color : undefined} />

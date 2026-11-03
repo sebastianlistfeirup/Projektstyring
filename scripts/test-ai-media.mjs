@@ -44,6 +44,22 @@ test('resume polls the saved provider job without submitting again', async t => 
   assert.equal(submissions, 0);
 });
 
+test('Meshy preview becomes visible while the job is processing and remains with the GLB', async t => {
+  t.after(() => { globalThis.fetch = nativeFetch; });
+  const events = [];
+  globalThis.fetch = async url => {
+    if (url.endsWith('/remote-preview')) return Response.json({ status: 'SUCCEEDED', progress: 100, thumbnail_url: 'https://assets.example/preview.png', model_urls: { glb: 'https://assets.example/model.glb' } });
+    if (url.endsWith('/preview.png')) return new Response(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]));
+    return new Response(Buffer.from('glTFfixture'));
+  };
+  const artifacts = await produceMedia({ id: 'model', serviceId: 'meshy', description: 'A model', media: { state: 'processing', remoteId: 'remote-preview' } }, '', cfg, dirs, event => events.push(event));
+  assert.deepEqual(artifacts.map(artifact => artifact.mime), ['model/gltf-binary', 'image/png']);
+  assert.equal(events.find(event => event.media?.artifacts?.[0]?.mime === 'image/png')?.media.state, 'processing');
+  assert.ok(events.some(event => event.status === 'Meshy: SUCCEEDED · 100%'));
+  assert.deepEqual(events.at(-1).media.artifacts, artifacts);
+  assert.equal(readFileSync(join(root, artifacts[1].url.split('/').at(-1))).subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+});
+
 test('unknown submission outcome blocks replay instead of spending credits twice', async t => {
   t.after(() => { globalThis.fetch = nativeFetch; });
   let calls = 0; globalThis.fetch = async () => { calls++; throw new Error('must not call'); };
@@ -92,6 +108,20 @@ test('ElevenLabs explains a key ID mistaken for a secret without echoing credent
     return true;
   });
   assert.equal(calls, 1);
+});
+
+test('ElevenLabs saves an MP3-signature response with progress and rejects a non-MP3 success body', async t => {
+  t.after(() => { globalThis.fetch = nativeFetch; });
+  const events = [];
+  globalThis.fetch = async () => new Response(Buffer.from('ID3\x04\x00\x00\x00\x00\x00\x00'));
+  const voiceCfg = { aiProviders: { elevenlabs: { apiKey: 'voice-test', billingMode: 'included', noExtraCharges: true } } };
+  const artifacts = await produceMedia({ id: 'voice-ok', serviceId: 'elevenlabs', description: 'Hallo' }, '', voiceCfg, dirs, event => events.push(event));
+  assert.equal(artifacts[0].mime, 'audio/mpeg');
+  assert.equal(readFileSync(join(root, artifacts[0].url.split('/').at(-1))).subarray(0, 3).toString(), 'ID3');
+  assert.ok(events.some(event => event.status === 'ElevenLabs: lyd genereres'));
+  assert.equal(events.at(-1).media.state, 'completed');
+  globalThis.fetch = async () => new Response('<html>temporary gateway error</html>');
+  await assert.rejects(produceMedia({ id: 'voice-bad', serviceId: 'elevenlabs', description: 'Hallo' }, '', voiceCfg, dirs, () => {}), /ikke en gyldig MP3-fil/);
 });
 
 test('media HTTP diagnostics redact keys returned by providers', async t => {

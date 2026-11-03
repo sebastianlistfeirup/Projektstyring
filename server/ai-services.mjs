@@ -697,10 +697,11 @@ async function mediaHttpError(provider, response, apiKey) {
   return new Error(`${provider} fejl ${response.status}: ${detail}`);
 }
 
-async function elevenTts({ text, cfg, dirs, signal }) {
+async function elevenTts({ text, cfg, dirs, signal, onStatus }) {
   const { providers } = aiCfg(cfg);
   const p = providers.elevenlabs ?? {};
   const voice = p.voiceId ?? p.model ?? '21m00Tcm4TlvDq8ikWAM';
+  onStatus?.('ElevenLabs: lyd genereres');
   const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}?output_format=mp3_44100_128`, {
     method: 'POST', signal: requestSignal(signal),
     headers: { 'Content-Type': 'application/json', 'xi-api-key': p.apiKey },
@@ -708,11 +709,13 @@ async function elevenTts({ text, cfg, dirs, signal }) {
   });
   if (!r.ok) throw await mediaHttpError('ElevenLabs', r, p.apiKey);
   const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.length > 64 * 1024 * 1024) throw new Error('ElevenLabs returnerede en lydfil over 64 MB. Hent den hos leverandøren.');
+  if (buf.subarray(0, 3).toString() !== 'ID3' && !(buf.length > 1 && buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0)) throw new Error('ElevenLabs returnerede ikke en gyldig MP3-fil.');
   const name = ` tale-${Date.now()}.mp3`;
   return saveArtifact(buf, name, dirs);
 }
 
-async function meshyTextTo3d({ prompt, cfg, dirs, onStatus, signal, existingId, onSubmitted }) {
+async function meshyTextTo3d({ prompt, cfg, dirs, onStatus, onPreview, signal, existingId, onSubmitted }) {
   const { providers } = aiCfg(cfg);
   const p = providers.meshy ?? {};
   let result = existingId;
@@ -727,17 +730,36 @@ async function meshyTextTo3d({ prompt, cfg, dirs, onStatus, signal, existingId, 
   if (!result) throw new Error('Meshy returnerede ikke et job-id.');
   onSubmitted(result);
   }
+  let preview;
+  let previewUrl;
   for (let i = 0; i < 60; i++) {
     if (i > 0) await delay(5000, undefined, { signal });
     const response = await fetch(`${MESHY_TEXT_TO_3D}/${encodeURIComponent(result)}`, { signal: requestSignal(signal), headers: { Authorization: `Bearer ${p.apiKey}` } });
     if (!response.ok) throw await mediaHttpError('Meshy', response, p.apiKey);
     const st = await response.json();
-    onStatus?.(`Meshy: ${st.status}`);
+    const progress = Number(st.progress);
+    onStatus?.(`Meshy: ${st.status}${Number.isFinite(progress) && progress >= 0 && progress <= 100 ? ` · ${Math.round(progress)}%` : ''}`);
+    if (st.thumbnail_url && st.thumbnail_url !== previewUrl) {
+      previewUrl = st.thumbnail_url;
+      try {
+        const image = await downloadMedia(previewUrl, signal, 16 * 1024 * 1024);
+        const format = image.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ? 'png'
+          : image.subarray(0, 3).equals(Buffer.from([255, 216, 255])) ? 'jpg'
+          : image.subarray(0, 4).toString() === 'RIFF' && image.subarray(8, 12).toString() === 'WEBP' ? 'webp' : null;
+        if (format) {
+          preview = saveArtifact(image, ` model-preview-${Date.now()}.${format}`, dirs);
+          onPreview?.(preview);
+        }
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        // A missing optional preview must not discard a valid model job.
+      }
+    }
     if (st.status === 'SUCCEEDED') {
       if (!st.model_urls?.glb) throw new Error('Meshy meldte færdig, men leverede ingen GLB-downloadadresse.');
       const glb = await downloadMedia(st.model_urls.glb, signal);
       if (glb.subarray(0, 4).toString() !== 'glTF') throw new Error('Meshy returnerede ikke en gyldig GLB-fil.');
-      return saveArtifact(glb, ` model-${Date.now()}.glb`, dirs);
+      return [saveArtifact(glb, ` model-${Date.now()}.glb`, dirs), ...(preview ? [preview] : [])];
     }
     if (['FAILED', 'CANCELED', 'CANCELLED', 'EXPIRED'].includes(st.status)) throw new Error(`Meshy 3D-generering stoppede (${st.status}). Kontrollér jobbet ${result} på din Meshy-konto før en ny bestilling.`);
     if (!['PENDING', 'IN_PROGRESS'].includes(st.status)) throw new Error(`Meshy returnerede en ukendt jobstatus: ${String(st.status).slice(0, 80)}`);
@@ -776,14 +798,14 @@ async function heygenAvatar({ text, cfg, dirs, onStatus, signal, existingId, onS
   throw new Error('HeyGen: timeout efter 6 minutter');
 }
 
-async function downloadMedia(url, signal) {
+async function downloadMedia(url, signal, maxBytes = 256 * 1024 * 1024) {
   if (new URL(url).protocol !== 'https:') throw new Error('Mediefilen skal hentes via HTTPS.');
   const response = await fetch(url, { signal: requestSignal(signal) });
   if (!response.ok || !response.body) throw new Error(`Mediefilen kunne ikke hentes (${response.status}).`);
   const chunks = []; let size = 0;
   for await (const chunk of response.body) {
     size += chunk.length;
-    if (size > 256 * 1024 * 1024) throw new Error('Mediefilen er over 256 MB. Hent den hos leverandøren.');
+    if (size > maxBytes) throw new Error('Mediefilen er for stor. Hent den hos leverandøren.');
     chunks.push(Buffer.from(chunk));
   }
   if (!size) throw new Error('Leverandøren returnerede en tom fil.');
@@ -801,6 +823,7 @@ function guessMime(n) {
   if (/\.mp3$/i.test(n)) return 'audio/mpeg';
   if (/\.glb$/i.test(n)) return 'model/gltf-binary';
   if (/\.png$/i.test(n)) return 'image/png';
+  if (/\.webp$/i.test(n)) return 'image/webp';
   if (/\.jpe?g$/i.test(n)) return 'image/jpeg';
   if (/\.mp4$/i.test(n)) return 'video/mp4';
   return 'application/octet-stream';
@@ -820,6 +843,7 @@ export async function produceMedia(job, text, cfg, dirs, emit, signal) {
     cfg, dirs, signal, existingId: media.remoteId,
     onSubmitted: remoteId => checkpoint({ state: 'processing', remoteId }),
     onStatus: status => emit({ type: 'job_status', jobId: job.id, status }),
+    onPreview: preview => checkpoint({ artifacts: [preview] }),
   };
   try {
     let artifact;
@@ -827,8 +851,9 @@ export async function produceMedia(job, text, cfg, dirs, emit, signal) {
     else if (job.serviceId === 'meshy') artifact = await meshyTextTo3d({ prompt: job.description || text, ...options });
     else if (job.serviceId === 'heygen') artifact = await heygenAvatar({ text: text || job.description, ...options });
     else throw new Error('Ukendt medietjeneste.');
-    checkpoint({ state: 'completed', artifacts: [artifact] });
-    return [artifact];
+    const artifacts = Array.isArray(artifact) ? artifact : [artifact];
+    checkpoint({ state: 'completed', artifacts });
+    return artifacts;
   } catch (e) {
     throw new Error(`Medieproduktion fejlede: ${e.message}`);
   }

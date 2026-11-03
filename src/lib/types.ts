@@ -256,8 +256,9 @@ export interface Project {
   scopeTaskIds?: string[];
   scopeCapturedAt?: string;
   repositoryPath?: string;
+  repositoryBaseRef?: string;
   continueVerifiedWork?: boolean;
-  aiWorkspace?: { runId: string; source: string; sourceCommit: string; commit: string; branch: string; workDir: string; updatedAt: string; includedTaskIds: string[] };
+  aiWorkspace?: { runId: string; source: string; sourceCommit: string; baseRef?: string | null; commit: string; branch: string; workDir: string; updatedAt: string; includedTaskIds: string[] };
   verificationChecks?: { name: string; command: string; args: string[] }[];
   id: string;
   name: string;

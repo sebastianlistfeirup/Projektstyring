@@ -37,7 +37,7 @@ else if(p.includes('WAIT_FOR_DECISION')&&!p.includes('DECISION_ACCEPTED')) conso
 else if(p.includes('REPAIR_TEST')&&!p.includes('RETTELSE EFTER FAKTISK TESTFEJL')) { fs.writeFileSync('game.txt','broken'); console.log('First implementation requires a test repair'); }
 else if(p.includes('"orbitProjectPlan"')) console.log(JSON.stringify({orbitProjectPlan:{version:1,releaseGoal:'En stabil save/load-cyklus',summary:'Et afgrænset restarbejde',firstMilestone:'Gem og indlæs en kampagne',unknowns:['Gameplay skal afprøves manuelt'],tasks:[{id:'save',title:'Verificér save-format',description:'Bevar kompatibilitet',priority:'high',scope:'version1',acceptanceCriteria:['Data bevares'],verification:['Kør save/load-test'],evidence:['game.txt'],dependsOn:[]}]}}));
 else if(p.includes('Kortlæg kode og gældende beslutninger')) console.log('game.txt er læst. Ingen tests er kørt i denne analyse.');
-else { await new Promise(r=>setTimeout(r,1800)); if(p.includes('CHAIN_FIRST')) fs.writeFileSync('first-delivery.txt','retained first task'); if(p.includes('CHAIN_SECOND')) { if(fs.readFileSync('first-delivery.txt','utf8')!=='retained first task') process.exit(12); fs.writeFileSync('second-delivery.txt','second task built on first'); } fs.writeFileSync('game.txt','fixed'); console.log('## Leverance\\n\\n| Fil | Resultat |\\n| --- | --- |\\n| game.txt | fixed |\\n\\nÆndringen er implementeret.'); }`);
+else { await new Promise(r=>setTimeout(r,1800)); if(p.includes('CHAIN_FIRST')) fs.writeFileSync('first-delivery.txt','retained first task'); if(p.includes('CHAIN_SECOND')) { if(fs.readFileSync('first-delivery.txt','utf8')!=='retained first task') process.exit(12); fs.writeFileSync('second-delivery.txt','second task built on first'); } if(p.includes('VISUAL_FIXTURE')) { fs.mkdirSync('reports/screenshots',{recursive:true}); fs.writeFileSync('reports/screenshots/after.png',Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/rZkAAAAASUVORK5CYII=','base64')); } fs.writeFileSync('game.txt','fixed'); console.log('## Leverance\\n\\n| Fil | Resultat |\\n| --- | --- |\\n| game.txt | fixed |\\n\\nÆndringen er implementeret.'); }`);
   expect((await request.post(`${base}/api/ai/services/codex`, { data: { cmd: process.execPath, cliTemplate: `"${fake}" {prompt}`, billingMode: 'included', noExtraCharges: true } })).ok()).toBeTruthy();
   await request.post(`${base}/api/ai/prefs`, { data: { autoJudge: false, selfHeal: false, orchestrator: 'codex' } });
 });
@@ -443,6 +443,7 @@ test('immediate Enter after a work-order selection keeps the task link while nav
 test('dependent work orders continue on verified code while their human review and source checkout remain intact', async ({ page, request }) => {
   await request.post(`${base}/api/ai/queue/control`, { data: { action: 'pause' } });
   const projectId = await setup(page);
+  await page.getByText('Repository og kvalitetskontroller', { exact: false }).first().click();
   await page.getByLabel('Fortsæt på projektets verificerede AI-arbejdsgren', { exact: true }).check();
   await page.getByRole('button', { name: 'Kontrollér og gem', exact: true }).click();
   await expect.poll(() => page.evaluate(async id => {
@@ -822,6 +823,7 @@ test('a recovered plan pause can be resumed without approving it implicitly', as
 
 test('native permission waits through reload, approves once, rejects stale approval and cancels with Stop', async ({ page, request }, testInfo) => {
   const projectId = await setup(page);
+  await page.getByText('Repository og kvalitetskontroller', { exact: false }).first().click();
   await page.getByRole('button', { name: 'Vis projektets Git-grundlag' }).click();
   const repository = page.getByRole('region', { name: 'Projektets Git-grundlag' });
   await expect(repository).toContainText(execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: source, encoding: 'utf8' }).trim());
@@ -870,6 +872,43 @@ test('native permission waits through reload, approves once, rejects stale appro
   await expect(panel.getByLabel('Dit svar')).toHaveValue('Realmread');
   await panel.getByRole('button', { name: 'Send svar' }).click();
   await expect.poll(async () => (await (await request.get(`${base}/api/ai/swarm`)).json()).run.status).toBe('done');
+});
+
+test('project can start isolated work from a selected descendant branch', async ({ page, request }) => {
+  const projectId = await setup(page);
+  const branchWork = mkdtempSync(join(tmpdir(), 'orbit-browser-existing-fix-'));
+  execFileSync('git', ['worktree', 'add', '-qb', 'orbit/browser-prior-fix', branchWork, 'HEAD'], { cwd: source });
+  writeFileSync(join(branchWork, 'existing-fix.txt'), 'already corrected');
+  execFileSync('git', ['add', '.'], { cwd: branchWork });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'Existing correction'], { cwd: branchWork });
+  const selectedCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: branchWork, encoding: 'utf8' }).trim();
+  const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' }).trim();
+  await page.getByText('Repository og kvalitetskontroller', { exact: false }).first().click();
+  await page.getByRole('button', { name: 'Vis projektets Git-grundlag' }).click();
+  await page.getByLabel('Grundlag for næste arbejdsordre').selectOption('orbit/browser-prior-fix');
+  await page.getByRole('button', { name: 'Kontrollér og gem' }).click();
+  await expect(page.getByText('Gemt. Orbit arbejder på en separat Git-gren', { exact: false })).toBeVisible();
+  await expect.poll(async () => {
+    const { snapshot } = await (await request.get(`${base}/api/sync/state`)).json();
+    return snapshot.projects.find((project: { id: string }) => project.id === projectId)?.repositoryBaseRef;
+  }).toBe('orbit/browser-prior-fix');
+  await page.getByLabel('Besked til Orbit', { exact: true }).fill('VISUAL_FIXTURE: Fortsæt fra den eksisterende rettelse.');
+  await page.getByLabel('Besked til Orbit', { exact: true }).press('Enter');
+  await expect.poll(async () => {
+    const { run } = await (await request.get(`${base}/api/ai/swarm`)).json();
+    return run?.projectId === projectId && run?.goal.includes('VISUAL_FIXTURE') ? run.status : null;
+  }).toBe('done');
+  const run = (await (await request.get(`${base}/api/ai/swarm`)).json()).run;
+  expect(run.repository.baseCommit).toBe(selectedCommit);
+  expect(run.repository.sourceCommit).toBe(sourceCommit);
+  expect(readFileSync(join(run.workDir, 'existing-fix.txt'), 'utf8')).toBe('already corrected');
+  const image = run.results.flatMap((result: { artifacts?: { name: string; url: string }[] }) => result.artifacts ?? []).find((artifact: { name: string }) => artifact.name === 'reports/screenshots/after.png');
+  expect(image).toBeTruthy();
+  expect((await request.get(`${base}${image.url}`)).ok()).toBe(true);
+  await expect(page.getByRole('region', { name: 'Leverancer og medieproduktion' }).getByAltText('reports/screenshots/after.png')).toBeVisible();
+  expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' }).trim()).toBe(sourceCommit);
+  expect(readFileSync(join(source, 'game.txt'), 'utf8')).toBe('original');
+  expect(projectId).toBeTruthy();
 });
 
 test('account test starts through connection settings and keeps billing and quota separate from delivery', async ({ page, request }) => {

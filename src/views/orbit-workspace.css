@@ -1,5 +1,12 @@
 .orbit-workspace { height:100%; min-height:0; display:flex; flex-direction:column; padding:12px; gap:12px; }
 .orbit-workspace-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; }
+.orbit-workspace-identity { display:flex; min-width:0; max-width:100%; align-items:center; flex-wrap:wrap; gap:8px; }
+.orbit-workspace-identity strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:min(42vw,320px); }
+.orbit-workspace-status { border:1px solid rgb(128 128 160 / .22); border-radius:999px; padding:3px 9px; font-size:11px; font-weight:600; color:var(--text-muted,inherit); background:rgb(128 128 160 / .08); }
+.orbit-workspace-preset { position:relative; min-width:125px; font-size:11px; }
+.orbit-workspace-preset summary { cursor:pointer; list-style:none; border:1px solid rgb(128 128 160 / .24); border-radius:9px; padding:7px 9px; }
+.orbit-workspace-preset summary::-webkit-details-marker { display:none; }
+.orbit-workspace-preset-menu { position:absolute; z-index:20; top:calc(100% + 5px); right:0; min-width:180px; padding:5px; border:1px solid rgb(128 128 160 / .35); border-radius:12px; background:#242335; color:#f5f5fa; box-shadow:0 14px 35px rgb(0 0 0 / .22); }
 .orbit-workspace-toolbar button[aria-pressed=true] { background:rgb(99 102 241 / .18); color:#818cf8; }
 .orbit-workspace-panels { flex:1; min-height:0; display:grid; }
 .orbit-workspace-pane { min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden; border:1px solid rgb(128 128 160 / .22); border-radius:18px; background:rgb(128 128 160 / .035); }

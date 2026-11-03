@@ -14,6 +14,20 @@ test('server uses authoritative work order, published bible, repository and chec
   assert.throws(() => projectExecution(blocked, { projectId: 'p', taskId: 't' }), /forgænger/);
 });
 
+test('project-selected branch is authoritative and a continuation stays pinned to its matching work', () => {
+  const snapshot = fixture(); snapshot.projects[0].repositoryBaseRef = 'orbit/texture-fix';
+  snapshot.projects[0].continueVerifiedWork = true;
+  const input = projectExecution(snapshot, { projectId: 'p', taskId: 't', goal: 'Improve city', repositoryStartRef: 'untrusted-branch' });
+  assert.equal(input.repositoryStartRef, 'orbit/texture-fix');
+  assert.equal(input.repositoryStartCommit, undefined);
+  snapshot.projects[0].aiWorkspace = { source: '/correct/repo', baseRef: 'orbit/texture-fix', commit: 'verified', includedTaskIds: [] };
+  assert.equal(projectExecution(snapshot, { projectId: 'p', taskId: 't' }).repositoryStartCommit, 'verified');
+  snapshot.projects[0].repositoryBaseRef = 'orbit/route-only';
+  const changed = projectExecution(snapshot, { projectId: 'p', taskId: 't' });
+  assert.equal(changed.repositoryStartCommit, undefined);
+  assert.equal(changed.repositoryStartRef, 'orbit/route-only');
+});
+
 test('server completes into review without browser and stale push cannot undo it', () => {
   const initial = fixture(), run = { runId: 'r', projectId: 'p', taskId: 't', goal: 'Fix', status: 'running' };
   const active = applyRunToWorkspace(initial, run, 'run_start');

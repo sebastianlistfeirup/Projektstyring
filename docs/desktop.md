@@ -2,6 +2,52 @@
 
 Denne vejledning beskriver, hvordan Orbit køres som en næsten-native oplevelse på Windows: via genveje, som installeret PWA eller som Tauri-desktopapp.
 
+## Start, opdater og kontrollér
+
+Når den nye Orbit-version er installeret og startet, sørger `scripts/Ensure-Shortcut.ps1` for to genveje på skrivebordet: **Orbit** starter appen; **Orbit - Opdater** henter den aftalte udviklingsversion, installerer afhængigheder og starter Orbit igen. Du kan også dobbeltklikke på `scripts/Install-Orbit-Preview.bat` eller `scripts/Check-Orbit.bat` direkte i Orbit-mappen.
+
+Opdateringsgenvejen bruger grenen `codex/orbit-reliable-autonomy`. Den kontrollerer lokale ændringer og commits før grenvalg og afviser opdatering, mens en AI-kørsel er aktiv. Dit Epoch Isles-repository vælges ikke som installationsmappe. **Check-Orbit** viser, om Node.js, Git, appen og Companion svarer, hvilken Orbit-gren der er valgt, og om en kørsel afventer en beslutning. Kontrollen foretager ingen modelkald.
+
+Hvis arbejdskøen kørte før en bevidst opdatering, fortsætter den efter genstart, når Companion svarer, og køens indhold er uændret uden afbrudt arbejde eller ventende tilladelser. En kø, du havde sat på pause, bliver på pause. Hvis den tidligere køtilstand ikke kan kontrolleres, viser opdateringen, at køen skal gennemgås og genoptages i Orbit Live.
+
+### Første opdatering fra en ældre Orbit-installation
+
+Den gamle installation har endnu ikke **Orbit - Opdater**. Find først **Orbit-kodens mappe**: Højreklik på den eksisterende Orbit-genvej, vælg **Egenskaber**, og find `Start-Orbit.bat` under **Destination**. Åbn mappen med filen, gå ét niveau op, og vælg **Åbn i Terminal/PowerShell her** fra Stifinder. Hvis genvejen mangler, find `Start-Orbit.bat` i din Orbit-installation og gør det samme. Mappen skal indeholde `scripts` og `.git`; vælg ikke Epoch Isles-projektmappen.
+
+Indsæt derefter blokken samlet i PowerShell. Den stopper med en forklaring ved lokale ændringer, egne commits uden for opdateringen eller en aktiv AI-kørsel. Den bruger hverken `reset`, `clean` eller tvungen grenændring.
+
+```powershell
+& {
+$orbitRepo = (Get-Location).ProviderPath
+$orbitBranch = 'codex/orbit-reliable-autonomy'
+if (-not (Test-Path -LiteralPath (Join-Path $orbitRepo '.git'))) { throw "Orbit-mappen blev ikke fundet: $orbitRepo" }
+$dirty = @(& git -C $orbitRepo status --porcelain --untracked-files=normal)
+if ($LASTEXITCODE -ne 0 -or $dirty.Count) { throw 'Orbit-mappen har lokale ændringer eller kunne ikke læses. Intet er overskrevet.' }
+& git -C $orbitRepo fetch origin "refs/heads/${orbitBranch}:refs/remotes/origin/${orbitBranch}"
+if ($LASTEXITCODE -ne 0) { throw 'Opdateringsgrenen kunne ikke hentes. Ingen lokale filer er ændret.' }
+$before = (& git -C $orbitRepo rev-parse HEAD).Trim()
+& git -C $orbitRepo merge-base --is-ancestor $before "origin/$orbitBranch"
+if ($LASTEXITCODE -ne 0) { throw 'Den nuværende gren har egne commits uden for opdateringen. Ingen gren er skiftet.' }
+& git -C $orbitRepo show-ref --verify --quiet "refs/heads/$orbitBranch"
+$hasBranch = $LASTEXITCODE -eq 0
+if ($hasBranch) {
+  & git -C $orbitRepo merge-base --is-ancestor $orbitBranch "origin/$orbitBranch"
+  if ($LASTEXITCODE -ne 0) { throw 'Den lokale opdateringsgren har egne commits. Ingen gren er skiftet.' }
+}
+& (Join-Path $orbitRepo 'scripts/Stop-Orbit.ps1') -RefuseActive
+if ($LASTEXITCODE -ne 0) { throw 'Orbit arbejder stadig. Stop eller afslut kørslen i Orbit før opdatering.' }
+$dirty = @(& git -C $orbitRepo status --porcelain --untracked-files=normal)
+$after = (& git -C $orbitRepo rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or $dirty.Count -or $after -ne $before) { throw 'Orbit-mappen ændrede sig under opdateringen. Ingen gren er skiftet.' }
+if ($hasBranch) { & git -C $orbitRepo switch $orbitBranch }
+else { & git -C $orbitRepo switch -c $orbitBranch --track "origin/$orbitBranch" }
+if ($LASTEXITCODE -ne 0) { throw 'Grenen kunne ikke vælges. Dine filer er bevaret.' }
+& (Join-Path $orbitRepo 'scripts/Install-Orbit-Preview.bat')
+}
+```
+
+Efter den første start ligger **Orbit - Opdater** på skrivebordet. Denne engangsovergang kan ikke aflæse den gamle køtilstand efter stop; gennemgå arbejdskøen i Orbit Live og vælg **Fortsæt køen**, hvis opgaverne stadig er aktuelle. Hvis blokken stopper, står forklaringen i PowerShell; den eksisterende Orbit-mappe og Git-historik bevares.
+
 ## 1. Hurtig start med Start-Orbit.bat
 
 Dobbeltklik på `scripts/Start-Orbit.bat`. Scriptet:

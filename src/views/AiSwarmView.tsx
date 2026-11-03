@@ -1,5 +1,6 @@
 import ProjectPlanReview from '../components/ProjectPlanReview';
 import NativePermissionPanel from '../components/NativePermissionPanel';
+import VisualResultGallery from '../components/VisualResultGallery';
 import { runLabels, verificationLabels } from '../lib/runPresentation';
 import OrbitPerformanceProbe from '../components/OrbitPerformanceProbe';
 import ServiceConstellation from '../components/ServiceConstellation';
@@ -1008,10 +1009,12 @@ export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolea
 
           {/* handlingsbjælke for afsluttede/arkiverede kørsler: genoptag, eksport, link til opgave */}
           {!active && shown && !replay && (
-            <div className="rounded-2xl border border-white/10 glass-panel px-3 py-2">
+            <div id="orbit-run-results" className="rounded-2xl border border-white/10 glass-panel px-3 py-2 scroll-mt-4">
               <RunActionsBar key={shown.runId} run={shown} onToast={showToast} />
             </div>
           )}
+
+          {!replay && <VisualResultGallery run={shown} />}
 
           {/* besked til orkestratoren mens der køres */}
           {active && run && <RunControls run={run} />}

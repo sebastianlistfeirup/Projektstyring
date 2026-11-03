@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Archive, ChevronRight, Crosshair, Moon, Plus, RotateCcw, Search, Sun, Trash2, X } from 'lucide-react';
+import { Archive, ChevronLeft, ChevronRight, Crosshair, Moon, Plus, RotateCcw, Search, Sun, Trash2, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { VIEWS } from '../lib/nav';
 import type { Project } from '../lib/types';
@@ -45,6 +45,8 @@ export default function AppShell() {
   const [tvMode, setTvMode] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [allTools, setAllTools] = useState(false);
+  const [navExpanded, setNavExpanded] = useState(() => { try { return localStorage.getItem('orbit-navigation-expanded') !== 'false'; } catch { return true; } });
+  const toggleNavigation = () => setNavExpanded(value => { try { localStorage.setItem('orbit-navigation-expanded', String(!value)); } catch { /* Preferences remain usable in this tab. */ } return !value; });
 
   // TV-tilstand: TvMode-komponenten dispatcher 'orbit:tv' – skjul app-chrome
   useEffect(() => {
@@ -152,11 +154,12 @@ export default function AppShell() {
       <nav
         className={cn(
           'flex w-14 shrink-0 flex-col items-center gap-1 border-r border-zinc-200/80 bg-white py-3 dark:border-white/[0.06] dark:bg-[#131417]',
+          navExpanded && 'xl:w-40 xl:items-stretch xl:px-2',
           tvMode && 'hidden',
         )}
       >
         <div
-          className="mb-3 grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-bold text-white shadow-glow"
+          className="mb-3 flex h-9 w-9 items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-bold text-white shadow-glow"
           title="Orbit"
         >
           O
@@ -169,17 +172,19 @@ export default function AppShell() {
             aria-label={t(view.labelKey)}
             className={({ isActive }) =>
               cn(
-                'grid h-10 w-10 place-items-center rounded-xl transition-all duration-150',
+                'flex h-10 w-10 items-center justify-center gap-2 rounded-xl transition-colors duration-150',
+                navExpanded && 'xl:w-full xl:justify-start xl:px-3',
                 isActive || (view.to === '/chat' && workspacePath === '/chat')
                   ? 'bg-indigo-500/15 text-indigo-500 dark:bg-indigo-400/15 dark:text-indigo-300'
                   : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/[0.06] dark:hover:text-zinc-100',
               )
             }
           >
-            <view.icon className="h-5 w-5" />
+            <view.icon className="h-5 w-5 shrink-0" /><span className={cn('hidden truncate text-xs font-medium', navExpanded && 'xl:inline')}>{t(view.labelKey)}</span>
           </NavLink>
         ))}
-        {!simpleMode && <button onClick={() => setAllTools(v => !v)} aria-expanded={allTools} title={allTools ? 'Vis færre værktøjer' : 'Alle værktøjer'} aria-label={allTools ? 'Vis færre værktøjer' : 'Alle værktøjer'} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-zinc-500 hover:bg-indigo-500/10"><ChevronRight className={cn('h-5 w-5', allTools && 'rotate-180')} /></button>}
+        {!simpleMode && <button onClick={() => setAllTools(v => !v)} aria-expanded={allTools} title={allTools ? 'Vis færre værktøjer' : 'Alle værktøjer'} aria-label={allTools ? 'Vis færre værktøjer' : 'Alle værktøjer'} className={cn('flex h-10 w-10 shrink-0 items-center justify-center gap-2 rounded-xl text-zinc-500 hover:bg-indigo-500/10', navExpanded && 'xl:w-full xl:justify-start xl:px-3')}><ChevronRight className={cn('h-5 w-5 shrink-0', allTools && 'rotate-180')} /><span className={cn('hidden truncate text-xs', navExpanded && 'xl:inline')}>{allTools ? 'Færre værktøjer' : 'Alle værktøjer'}</span></button>}
+        <button type="button" onClick={toggleNavigation} aria-label={navExpanded ? 'Skjul menutekster' : 'Vis menutekster'} title={navExpanded ? 'Skjul menutekster' : 'Vis menutekster'} className="hidden xl:flex h-9 w-full items-center justify-center rounded-xl text-zinc-500 hover:bg-indigo-500/10">{navExpanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}</button>
         <div className="mt-auto flex flex-col items-center gap-2">
           <button
             onClick={toggleTheme}

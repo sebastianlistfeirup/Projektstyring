@@ -63,6 +63,7 @@ if !START_ATTEMPT! lss 2 goto start_servers
 echo.
 echo  [FEJL] Orbit kunne ikke starte stabilt efter to forsøg.
 echo  Se fejlmeddelelsen i de to minimerede servervinduer.
+echo  Kør scripts\Check-Orbit.bat for en kort lokal kontrol.
 echo  Genvejen åbner ikke en side, som ikke svarer.
 echo.
 pause

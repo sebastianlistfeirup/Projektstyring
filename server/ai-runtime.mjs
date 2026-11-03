@@ -3,7 +3,7 @@ import { nativePermissions } from './ai-permissions.mjs';
 // Orbit AI-kørsler: planlægning, sværm, hukommelse og triggere.
 import { execFile } from 'child_process';
 import { promisify } from 'node:util';
-import { createRunWorktree, verifyRepository, repositoryEvidence } from './ai-repository.mjs';
+import { createRunWorktree, runWorktreeArtifacts, verifyRepository, repositoryEvidence } from './ai-repository.mjs';
 import { validatePlan, executeGraph, runOutcome, saveRun, appendRunEvent, saveRunHeartbeat } from './ai-state.mjs';
 import { validateProjectPlan, PROJECT_PLAN_FORMAT } from './project-plan.mjs';
 import { serviceCapabilities, assertJobCapability } from './ai-capabilities.mjs';
@@ -584,7 +584,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
   try {
   track({ type: 'run_start', runId, goal, projectId, taskId, startedAt: new Date().toISOString() });
   handle.abort.signal.throwIfAborted();
-  if (repository && !previousRun) run.repository = await createRunWorktree(repository.source, handle.runDir, runId, repository.startCommit);
+  if (repository && !previousRun) run.repository = await createRunWorktree(repository.source, handle.runDir, runId, repository.startCommit, repository.startRef);
   handle.abort.signal.throwIfAborted();
   await initRunWorkdir(handle.runDir, goal);
   mkdirSync(run.auditDir, { recursive: true });
@@ -609,7 +609,8 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       ?? planByRules({ goal, availability });
     if (!jobs.some((j) => j.title.startsWith('Dommer'))) track({ type: 'job_note', jobId: null, note: 'For få tilgængelige motorer til race (kræver 3) — bruger standardplan.' });
   } else if (orchestratorId) {
-    try { jobs = await planWithLLM({ orchestratorId, goal, bible, attachments: run.attachments, cfg, dirs: { ...dirs, cwd: handle.runDir }, availability, signal: handle.abort.signal, track }); }
+    try { jobs = await planWithLLM({ orchestratorId, goal, bible, attachments: run.attachments, cfg, dirs: { ...dirs, cwd: handle.runDir }, availability, signal: handle.abort.signal, track,
+      extra: run.repository?.startRef ? `Arbejdsgrenen starter fra den valgte lokale gren ${run.repository.startRef} på commit ${run.repository.baseCommit}. Undersøg de rettelser, som allerede indgår der, før du planlægger nye.` : undefined }); }
     catch (e) { track({ type: 'job_note', jobId: null, note: `Orkestrator-plan fejlede (${e.message}) — bruger regelbaseret plan.` }); jobs = planByRules({ goal, availability }); }
   } else {
     jobs = planByRules({ goal, availability });
@@ -663,6 +664,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     if (trackedJob) trackedJob.contextDocuments = fileContext.documents;
     const baseCtx = [
       bible ? { role: 'system', text: `Projektets bibel:\n${bible}` } : null,
+      run.repository?.startRef ? { role: 'system', text: `Git-grundlag: Denne arbejdsgren starter fra ${run.repository.startRef} på commit ${run.repository.baseCommit}; kildecheckouten står på ${run.repository.sourceCommit}. Undersøg de eksisterende rettelser på denne gren før ny implementering. Skift ikke kildecheckouten.` } : null,
       serviceMemory ? { role: 'system', text: `Hvad du tidligere har lavet for denne bruger (din hukommelse):\n${serviceMemory}` } : null,
       ...userInstructions,
       attachmentContext(run.attachments),
@@ -765,6 +767,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       }
       const commit = candidateCommit ?? await gitCommit(handle.runDir, job.title);
       doneText.set(job.id, text);
+      if (run.repository) artifacts = [...artifacts, ...await runWorktreeArtifacts(handle.runDir, runId)];
       const res = { jobId: job.id, title: job.title, serviceId: job.serviceId, phase: job.phase, text, artifacts, deliverable: fname, commit, verification: 'requires_review', score, judgeNote };
       results.push(res);
       track({ type: 'job_done', result: res });

@@ -1,4 +1,4 @@
-# Orbit – selvhelende skrivebordsgenvej
+﻿# Orbit – selvhelende skrivebordsgenvej
 # Kaldes af Start-Orbit.bat ved hver start. Sikrer at "Orbit.lnk" findes på
 # skrivebordet og peger på den rigtige Start-Orbit.bat (også hvis brugeren
 # har flyttet mappen, fået nyt skrivebord via OneDrive osv.).
@@ -33,6 +33,30 @@ try {
     $sc.Description = 'Orbit – projektstyring'
     $sc.Save()
     Write-Host "Orbit-genvejen blev oprettet/repareret: $lnk"
+  }
+  $updateBat = Join-Path $workingDirectory 'Install-Orbit-Preview.bat'
+  if (Test-Path -LiteralPath $updateBat -PathType Leaf) {
+    $updateBat = (Resolve-Path -LiteralPath $updateBat).ProviderPath
+    $updateLink = Join-Path $desktop 'Orbit - Opdater.lnk'
+    $updateOk = $false
+    if (Test-Path $updateLink) {
+      try {
+        $existing = $shell.CreateShortcut($updateLink)
+        $updateOk = ($existing.TargetPath -ieq $updateBat) -and
+                    [string]::IsNullOrWhiteSpace($existing.Arguments) -and
+                    ($existing.WorkingDirectory -ieq $workingDirectory)
+      } catch { $updateOk = $false }
+    }
+    if (-not $updateOk) {
+      $update = $shell.CreateShortcut($updateLink)
+      $update.TargetPath = $updateBat
+      $update.Arguments = ''
+      $update.WorkingDirectory = $workingDirectory
+      $update.IconLocation = "$env:SystemRoot\System32\shell32.dll,14"
+      $update.Description = 'Orbit - hent opdateringen og start'
+      $update.Save()
+      Write-Host "Orbit-opdateringsgenvejen blev oprettet/repareret: $updateLink"
+    }
   }
 } catch { }
 exit 0

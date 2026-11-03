@@ -1,11 +1,36 @@
 import { execFile } from 'node:child_process';
 import { cliSpawnSpec } from './ai-services.mjs';
 import { promisify } from 'node:util';
-import { realpathSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { realpathSync, statSync } from 'node:fs';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import { runCheckProcess } from './ai-check-process.mjs';
 const exec = promisify(execFile);
 const git = async (cwd, args) => (await exec('git', args, { cwd, timeout: 30000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
+
+export function runArtifactPath(workDir, name) {
+  if (typeof name !== 'string' || !name || name.includes('\\') || name.split('/').some(part => !part || part === '.' || part === '..') || !/\.(png|jpe?g|webp|glb|mp3|wav|mp4|webm)$/i.test(name) || !/(^|\/)(reports|screenshots|visual|captures)(\/|$)/i.test(name)) throw new Error('Mediefilen ligger ikke i en rapportmappe.');
+  const root = realpathSync(workDir), file = realpathSync(join(root, name));
+  const rel = relative(root, file);
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('Billedet ligger uden for arbejdsgrenen.');
+  const stat = statSync(file);
+  if (!stat.isFile() || stat.size > 256 * 1024 * 1024) throw new Error('Mediefilen kan ikke vises.');
+  return file;
+}
+
+export async function runWorktreeArtifacts(workDir, runId) {
+  const paths = (await git(workDir, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])).split('\0').filter(Boolean);
+  const files = paths.filter(name => /\.(png|jpe?g|webp|glb|mp3|wav|mp4|webm)$/i.test(name) && /(^|\/)(reports|screenshots|visual|captures)(\/|$)/i.test(name)).flatMap(name => {
+    try {
+      const path = runArtifactPath(workDir, name);
+      return [{ name, modified: statSync(path).mtimeMs }];
+    } catch { return []; }
+  });
+  return files.sort((a, b) => b.modified - a.modified).slice(0, 30).map(({ name }) => {
+    const ext = name.split('.').at(-1).toLowerCase();
+    const mime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', glb: 'model/gltf-binary', mp3: 'audio/mpeg', wav: 'audio/wav', mp4: 'video/mp4', webm: 'video/webm' }[ext];
+    return { kind: mime.startsWith('image/') ? 'image' : 'file', name, mime, url: `/api/ai/runs/${encodeURIComponent(runId)}/visual?path=${encodeURIComponent(name)}` };
+  });
+}
 
 export async function inspectRepository(path) {
   const source = realpathSync(path);
@@ -26,18 +51,34 @@ export async function repositoryReadiness(path) {
   ]);
   const changes = status ? status.split('\n') : [];
   const unmerged = branches ? branches.split('\n').map(line => { const [branch, commit] = line.split('\t'); return { branch, commit }; }) : [];
+  const branchDetails = await Promise.all(unmerged.slice(0, 30).map(async item => {
+    const [counts, subject] = await Promise.all([
+      git(repo.source, ['rev-list', '--left-right', '--count', `HEAD...refs/heads/${item.branch}`]),
+      git(repo.source, ['log', '-1', '--format=%s', item.commit]),
+    ]);
+    const [behind, ahead] = counts.split(/\s+/).map(Number);
+    return { ...item, ahead, behind, subject };
+  }));
   return { ...repo, checkedAt: new Date().toISOString(), changedFiles: changes.slice(0, 50), changedFileCount: changes.length,
     recentCommits: history.split('\n').filter(Boolean).map(line => { const [commit, ...subject] = line.split('\t'); return { commit, subject: subject.join('\t') }; }),
-    otherBranches: unmerged.slice(0, 30), otherBranchCount: unmerged.length, godotProject: Boolean(tracked),
+    otherBranches: branchDetails, otherBranchCount: unmerged.length, godotProject: Boolean(tracked),
     stable: repo.baseCommit === await git(repo.source, ['rev-parse', 'HEAD']),
   };
 }
 
-export async function createRunWorktree(path, workDir, runId, startCommit) {
+export async function createRunWorktree(path, workDir, runId, startCommit, startRef) {
   const repo = await inspectRepository(path);
   // Snapshot the committed base. Uncommitted work is never silently omitted.
   if (repo.dirty) throw new Error('Repository har lokale ændringer. Commit eller gem dem før Orbit opretter en arbejdsgren.');
   let baseCommit = repo.baseCommit;
+  if (startRef && !startCommit) {
+    if (typeof startRef !== 'string' || !/^[a-zA-Z0-9_][a-zA-Z0-9_./-]{0,180}$/.test(startRef) || startRef.includes('..') || startRef.includes('//') || startRef.endsWith('/') || startRef.endsWith('.')) throw new Error('Den valgte Git-gren har et ugyldigt navn.');
+    const ref = `refs/heads/${startRef}`;
+    const candidate = await git(repo.source, ['show-ref', '--verify', '--hash', ref]).catch(() => { throw new Error('Den valgte Git-gren findes ikke længere. Kontrollér projektgrundlaget igen.'); });
+    try { await git(repo.source, ['merge-base', '--is-ancestor', repo.baseCommit, candidate]); }
+    catch { throw new Error('Den valgte gren er ikke en fortsættelse af kildens commit. Saml grenene under gennemgang først.'); }
+    baseCommit = candidate;
+  }
   if (startCommit) {
     if (!/^[a-f0-9]{40,64}$/.test(startCommit)) throw new Error('Den gemte AI-arbejdsgren har et ugyldigt commit.');
     const ancestor = async (before, after) => {
@@ -49,7 +90,7 @@ export async function createRunWorktree(path, workDir, runId, startCommit) {
   }
   const branch = `orbit/${runId}`;
   await git(repo.source, ['worktree', 'add', '-b', branch, workDir, baseCommit]);
-  return { ...repo, sourceCommit: repo.baseCommit, baseCommit, branch, workDir };
+  return { ...repo, sourceCommit: repo.baseCommit, baseCommit, startRef: startRef ?? null, branch, workDir };
 }
 
 export function validateChecks(checks) {

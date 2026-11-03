@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createRunWorktree, inspectRepository, repositoryReadiness, verifyRepository, repositoryEvidence } from '../server/ai-repository.mjs';
+import { createRunWorktree, inspectRepository, repositoryReadiness, runWorktreeArtifacts, runArtifactPath, verifyRepository, repositoryEvidence } from '../server/ai-repository.mjs';
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
 test('repository readiness reveals fixes on another branch without changing the checkout', async () => {
@@ -19,8 +19,42 @@ test('repository readiness reveals fixes on another branch without changing the 
   assert.equal(report.baseCommit, original); assert.equal(report.godotProject, true);
   assert.equal(report.changedFileCount, 1); assert.match(report.changedFiles[0], /notes.txt/);
   assert.equal(report.otherBranches[0].branch, 'orbit/texture-repair');
+  assert.equal(report.otherBranches[0].ahead, 1); assert.equal(report.otherBranches[0].behind, 0);
+  assert.equal(report.otherBranches[0].subject, 'Restore textures');
   assert.equal(report.recentCommits[0].subject, 'Base project'); assert.equal(report.stable, true);
   assert.equal(git(root, 'rev-parse', 'HEAD'), original); assert.equal(readFileSync(join(root, 'notes.txt'), 'utf8'), 'Uncommitted user notes');
+});
+
+test('a selected descendant branch becomes the isolated starting commit without changing source', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-selected-branch-'));
+  git(root, 'init', '-q'); writeFileSync(join(root, 'base.txt'), 'base'); git(root, 'add', '.');
+  git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'base');
+  const sourceHead = git(root, 'rev-parse', 'HEAD'), sourceBranch = git(root, 'branch', '--show-current');
+  git(root, 'checkout', '-qb', 'orbit/route-fix'); writeFileSync(join(root, 'route.txt'), 'new route'); git(root, 'add', '.');
+  git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'route');
+  git(root, 'checkout', '-qb', 'orbit/texture-fix'); writeFileSync(join(root, 'texture.txt'), 'new texture'); git(root, 'add', '.');
+  git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'texture');
+  const selectedHead = git(root, 'rev-parse', 'HEAD'); git(root, 'checkout', '-q', sourceBranch);
+  const isolated = await createRunWorktree(root, `${root}-work`, 'branch-choice', undefined, 'orbit/texture-fix');
+  assert.equal(isolated.baseCommit, selectedHead); assert.equal(isolated.sourceCommit, sourceHead);
+  assert.equal(readFileSync(join(isolated.workDir, 'route.txt'), 'utf8'), 'new route');
+  assert.equal(readFileSync(join(isolated.workDir, 'texture.txt'), 'utf8'), 'new texture');
+  assert.equal(git(root, 'rev-parse', 'HEAD'), sourceHead);
+  assert.equal(git(root, 'branch', '--show-current'), sourceBranch);
+  await assert.rejects(createRunWorktree(root, `${root}-bad`, 'invalid-choice', undefined, 'other/unknown'), /findes ikke længere/);
+});
+
+test('visual evidence lists real worktree captures and confines reads to image report paths', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-images-'));
+  git(root, 'init', '-q'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'base');
+  mkdirSync(join(root, 'reports', 'screenshots'), { recursive: true });
+  writeFileSync(join(root, 'reports', 'screenshots', 'before.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  writeFileSync(join(root, 'secret.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  const images = await runWorktreeArtifacts(root, 'run-1');
+  assert.deepEqual(images.map(image => image.name), ['reports/screenshots/before.png']);
+  assert.equal(runArtifactPath(root, images[0].name), join(root, 'reports', 'screenshots', 'before.png'));
+  assert.throws(() => runArtifactPath(root, '../reports/screenshots/before.png'));
+  assert.throws(() => runArtifactPath(root, 'secret.png'));
 });
 
 test('isolated worktree preserves source checkout and records actual checks and commit', async () => {

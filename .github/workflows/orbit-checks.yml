@@ -48,6 +48,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $parseErrors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/Stop-Orbit.ps1), [ref]$null, [ref]$parseErrors) | Out-Null
-          if ($parseErrors.Count) { $parseErrors | Format-List; exit 1 }
+          $scripts = @('Stop-Orbit.ps1', 'Ensure-Shortcut.ps1', 'Install-Orbit-Preview.ps1', 'Check-Orbit.ps1')
+          foreach ($script in $scripts) {
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/$script"), [ref]$null, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count) { Write-Host "Invalid PowerShell: $script"; $parseErrors | Format-List; exit 1 }
+          }
+          foreach ($script in @('Install-Orbit-Preview.bat', 'Check-Orbit.bat')) {
+            if (-not (Test-Path "scripts/$script")) { throw "Missing Windows launcher: $script" }
+          }

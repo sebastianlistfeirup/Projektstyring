@@ -19,6 +19,7 @@ export interface SwarmSubagent {
 }
 
 export interface SwarmJob {
+  media?: { state?: string; serviceId?: string; remoteId?: string; submittedAt?: number; artifacts?: { kind: string; name: string; mime: string; url?: string }[] };
   review?: { serviceId: string; commit: string; score: number; minimumScore: number; note: string; status: string; examinedFiles: string[]; findings: { severity: string; file: string; message: string }[] };
   repairFor?: number;
   readOnly?: boolean;
@@ -415,6 +416,11 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
         });
         break;
       }
+      case 'job_media': {
+        if (!cur) break;
+        set({ run: { ...cur, jobs: cur.jobs.map(j => j.id === evt.jobId ? { ...j, media: evt.media as SwarmJob['media'] } : j) } });
+        break;
+      }
       case 'job_blocked':
       case 'job_cancelled':
       case 'job_error': {
@@ -665,6 +671,8 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
         ),
       };
     }
+    case 'job_media':
+      return { ...run, jobs: run.jobs.map(j => j.id === evt.jobId ? { ...j, media: evt.media as SwarmJob['media'] } : j) };
     case 'job_blocked':
     case 'job_cancelled':
     case 'job_error':

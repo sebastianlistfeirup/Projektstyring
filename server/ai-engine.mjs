@@ -6,7 +6,7 @@ import { join, basename, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { serviceById, serviceAvailability, runChat, setSecretsDir, loadKeySecrets, saveKeySecrets, aiCfg, inspectCliInstallation, parseCliTemplate } from './ai-services.mjs';
 import { extractDocument, hydrateAttachment, validateAttachmentList } from './ai-documents.mjs';
-import { inspectRepository, repositoryReadiness, validateChecks } from './ai-repository.mjs';
+import { inspectRepository, repositoryReadiness, runArtifactPath, validateChecks } from './ai-repository.mjs';
 import { projectExecution } from './task-execution.mjs';
 import { importProjectPlan } from './project-plan.mjs';
 import { DurableRunQueue } from './ai-queue.mjs';
@@ -63,7 +63,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     isBusy: () => Boolean(swarmState.active) || app.locals.aiStopping === true, canResume: orphanGuard,
     readRun: runId => readRun(dirs, runId),
     resolveInput: input => getSnapshot ? projectExecution(getSnapshot(), input) : input,
-    execute: input => executeRun({ ...input, repository: input.repositoryPath ? { source: String(input.repositoryPath), startCommit: input.repositoryStartCommit } : null,
+    execute: input => executeRun({ ...input, repository: input.repositoryPath ? { source: String(input.repositoryPath), startCommit: input.repositoryStartCommit, startRef: input.repositoryStartRef } : null,
       checks: validateChecks(input.checks ?? []), cfg: loadConfig(), dirs, emit: event => broadcast?.({ kind: 'ai', ...event }) }),
     onUpdate: state => broadcast?.({ kind: 'ai_queue', type: 'queue_updated', updatedAt: state.updatedAt }),
   });
@@ -251,6 +251,17 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
       }
     }
     res.status(404).end();
+  });
+
+  app.get('/api/ai/runs/:id/visual', (req, res) => {
+    try {
+      const run = readRun(dirs, req.params.id);
+      if (!run.repository || !run.workDir) throw new Error('Kørslen har ingen arbejdsgren.');
+      const path = runArtifactPath(run.workDir, req.query.path);
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.sendFile(path);
+    } catch { res.status(404).end(); }
   });
 
   app.get('/api/ai/attachment-text/:name', async (req, res) => {
@@ -692,7 +703,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     try { input = getSnapshot ? projectExecution(getSnapshot(), req.body ?? {}) : req.body ?? {}; validateAttachmentList(input.attachments); }
     catch (error) { return res.status(409).json({ ok: false, reason: error.message }); }
     const emit = sse(res);
-    const { goal, bible, attachments, jobs, mode, pauseAfterPlan, projectId, taskId, repositoryPath, repositoryStartCommit, continuationTaskIds, checks, contextManifest } = input;
+    const { goal, bible, attachments, jobs, mode, pauseAfterPlan, projectId, taskId, repositoryPath, repositoryStartCommit, repositoryStartRef, continuationTaskIds, checks, contextManifest } = input;
     const runId = randomUUID().slice(0, 12);
     const cfg = loadConfig();
     try {
@@ -701,7 +712,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
         goal: String(goal ?? ''),
         bible: String(bible ?? ''),
         attachments, projectId, taskId, contextManifest, continuationTaskIds,
-        repository: repositoryPath ? { source: String(repositoryPath), startCommit: repositoryStartCommit } : null,
+        repository: repositoryPath ? { source: String(repositoryPath), startCommit: repositoryStartCommit, startRef: repositoryStartRef } : null,
         checks: validateChecks(checks ?? []),
         predefinedJobs: jobs,
         cfg, dirs, emit,

@@ -103,7 +103,7 @@ npm run tauri build    # Windows-desktopapp (MSI/EXE) – se docs/desktop.md
 
 - **Web/PWA** – installerbar i Chrome/Edge, virker offline (service worker)
 - **Desktop** – Tauri-app med MSI/NSIS-installer (`src-tauri/`, se docs/desktop.md)
-- **Windows-genveje** – `scripts/Start-Orbit.bat` + autostart (Install-Autostart.bat)
+- **Windows-genveje** – Orbit, Orbit - Opdater og autostart; [første opdatering fra en ældre installation](docs/desktop.md#første-opdatering-fra-en-ældre-orbit-installation); `scripts/Check-Orbit.bat` viser lokal status
 
 ## Opsætning
 
