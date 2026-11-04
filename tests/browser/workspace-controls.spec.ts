@@ -39,9 +39,15 @@ test('project work limits can be saved through setup without starting an AI run'
   const projectId = await page.evaluate(async () => {
     // @ts-expect-error Vite browser module.
     const { useStore } = await import('/src/store/useStore.ts');
+    // The shared Companion may have a restored workspace epoch. Direct store
+    // setup bypasses the startup splash, so finish initial hydration before
+    // creating this fixture in that restored workspace.
+    // @ts-expect-error Vite browser module.
+    const { pullAndMerge } = await import('/src/lib/sync.ts');
+    await pullAndMerge();
     return useStore.getState().addProject('Arbejdsrammer browserprøve').id;
   });
-  await page.locator('select').first().selectOption(projectId);
+  await page.getByRole('combobox', { name: 'Projekt til ny samtale', exact: true }).selectOption(projectId);
   await page.getByRole('button', { name: 'Ny chat', exact: true }).first().click();
   await page.getByRole('button', { name: 'Vælg projektmappe' }).click();
   // A newly created chat exposes the project's settings inline in Chat.

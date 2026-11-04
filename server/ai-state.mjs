@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, readFileSync, statSync, readdirSync, openSync, fsyncSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeAtomicJson } from './atomic-json.mjs';
-import { saveRunSummary, summarizeRun } from './ai-history.mjs';
+import { summarizeRun } from './ai-history.mjs';
 import { durableStorePath, readDurableDocument, visitDurableDocuments, saveDurableRun } from './ai-durable-store.mjs';
 import { processMayBeWorking } from './ai-processes.mjs';
 import { AI_PHASES, normalizePhase } from '../shared/ai-plan.mjs';
@@ -85,7 +85,6 @@ export function saveRun(dirs, run) {
   // exports and previous versions; a crash before its write cannot lose state.
   saveDurableRun(dirs, saved, summarizeRun(saved));
   writeAtomicJson(path, saved);
-  try { saveRunSummary(dirs, run); } catch { /* Derived index; full run is saved. */ }
 }
 
 export function eventJournalPath(dirs, runId) {
@@ -150,7 +149,6 @@ export function recoverRuns(dirs, { force = false } = {}) {
   visitDurableDocuments(durableStorePath(dirs), 'run:', record => {
     const run = record.value;
     writeAtomicJson(runPath(dirs, run.runId), run);
-    try { saveRunSummary(dirs, run); } catch { /* Derived cache only. */ }
   });
   for (const file of readdirSync(dirs.runs).filter(f => f.endsWith('.json'))) {
     let run;

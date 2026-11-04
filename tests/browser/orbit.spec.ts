@@ -12,12 +12,18 @@ test.afterEach(async ({ request }, info) => {
   // A failed assertion at a plan pause must not leave the next test's server
   // occupied. Preserve the failure/trace, then clean up this isolated fixture.
   await request.post(`${base}/api/ai/queue/control`, { data: { action: 'pause' } });
-  const state = await (await request.get(`${base}/api/ai/swarm`)).json();
+  // Retry one reset of these read-only observations so fixture cleanup still
+  // cancels its active run; mutations must never be replayed automatically.
+  const state = await (await request.get(`${base}/api/ai/swarm`, { maxRetries: 1 })).json();
+  if (state.run) await info.attach('failed-run-timeline', {
+    body: JSON.stringify({ runId: state.run.runId, status: state.run.status, startedAt: state.run.startedAt, finishedAt: state.run.finishedAt, jobs: state.run.jobs, verification: state.run.verification, events: state.run.events }, null, 2),
+    contentType: 'application/json',
+  });
   if (state.run && ['running', 'awaiting_approval'].includes(state.run.status)) {
     await request.post(`${base}/api/ai/runs/${state.run.runId}/cancel`);
-    await expect.poll(async () => (await (await request.get(`${base}/api/ai/swarm`)).json()).run?.status).not.toMatch(/^(running|awaiting_approval)$/);
+    await expect.poll(async () => (await (await request.get(`${base}/api/ai/swarm`, { maxRetries: 1 })).json()).run?.status).not.toMatch(/^(running|awaiting_approval)$/);
   }
-  const { queue } = await (await request.get(`${base}/api/ai/queue`)).json();
+  const { queue } = await (await request.get(`${base}/api/ai/queue`, { maxRetries: 1 })).json();
   for (const entry of queue.entries.filter((entry: { status: string }) => entry.status === 'queued')) await request.delete(`${base}/api/ai/queue/${entry.id}`);
   await request.post(`${base}/api/ai/queue/control`, { data: { action: 'resume' } });
 });
@@ -301,13 +307,21 @@ test('work map explains dependencies and preserves historical tool evidence and 
 test('a real failed check creates one visible repair job and retains both test results', async ({ page, request }) => {
   await request.post(`${base}/api/ai/prefs`, { data: { selfHeal: true, autoJudge: false } });
   try {
-    await setup(page);
+    const projectId = await setup(page);
     await page.getByLabel('Besked til Orbit', { exact: true }).fill('REPAIR_TEST: Ret gemt tilstand og verificér resultatet.');
     await page.getByLabel('Besked til Orbit', { exact: true }).press('Enter');
     const live = page.getByRole('region', { name: 'Orbit Live' });
     await expect(live.getByRole('region', { name: 'Kørselsstatus' })).toContainText('REPAIR_TEST:');
-    await expect(live.getByText('Leveret til gennemgang', { exact: true })).toBeVisible();
+    // This flow has two executions and two real checks. Windows CI spent 9.75s
+    // preparing the first job, and only created its repair after 16.9s. Observe
+    // those dependent stages before applying the normal 15s terminal deadline.
+    await expect.poll(async () => {
+      const run = (await (await request.get(`${base}/api/ai/swarm`, { maxRetries: 1 })).json()).run;
+      return run?.projectId === projectId && run.goal.includes('REPAIR_TEST')
+        && run.jobs.some((job: { startedAt?: number }) => Boolean(job.startedAt));
+    }, { message: 'The repair fixture must start its first implementation after repository setup and planning' }).toBe(true);
     await expect(live.getByRole('button', { name: 'Opgave 2: Ret dokumenteret testfejl (forsøg 1)', exact: true })).toBeVisible();
+    await expect(live.getByText('Leveret til gennemgang', { exact: true })).toBeVisible();
     await live.getByText('Kontrolhistorik · 2 gennemløb').click();
     await expect(live.getByText('Kontrol 1: Fejlet', { exact: true })).toBeVisible();
     await expect(live.getByText('Kontrol 2: Bestået', { exact: true })).toBeVisible();
@@ -319,6 +333,9 @@ test('a real failed check creates one visible repair job and retains both test r
 });
 
 test('work orders can be queued from their drawer and execute serially with the browser closed', async ({ page, request }) => {
+  // Two independent repository preparations/executions: allow their bounded
+  // stage budgets plus UI setup, without retrying either queued work order.
+  test.setTimeout(120000);
   await request.post(`${base}/api/ai/queue/control`, { data: { action: 'pause' } });
   const projectId = await setup(page);
   const taskIds = await page.evaluate(async id => {
@@ -349,10 +366,22 @@ test('work orders can be queued from their drawer and execute serially with the 
   // A reused local HTTP connection can reset between status polls on Windows.
   // Retry only this idempotent observation once; never replay queue mutations.
   const observe = (path: string) => request.get(`${base}${path}`, { maxRetries: 1 });
-  await expect.poll(async () => {
-    const snapshot = (await (await observe('/api/ai/queue')).json()).queue;
-    return snapshot.entries.filter((entry: { input: { projectId: string } }) => entry.input.projectId === projectId).map((entry: { status: string }) => entry.status);
-  }, { timeout: 30000 }).toEqual(['done', 'done']);
+  const projectEntries = async () => (await (await observe('/api/ai/queue')).json()).queue.entries
+    .filter((entry: { input: { projectId: string } }) => entry.input.projectId === projectId);
+  // The Windows trace exhausted the old shared 30s budget during the first run,
+  // including several multi-second HTTP responses. Observe each real execution
+  // starting, then require its terminal result before examining the next entry.
+  for (let index = 0; index < 2; index++) {
+    await expect.poll(async () => {
+      const entry = (await projectEntries())[index];
+      if (!entry?.runId) return false;
+      const run = (await (await observe(`/api/ai/runs/${entry.runId}`)).json()).run;
+      return run?.jobs.some((job: { startedAt?: number }) => Boolean(job.startedAt));
+    }, { timeout: 30000, message: `Queued work order ${index + 1} must start its own job after repository preparation` }).toBe(true);
+    await expect.poll(async () => (await projectEntries())[index]?.status,
+      { message: `Queued work order ${index + 1} must finish with verified success after execution starts` }).toBe('done');
+  }
+  expect((await projectEntries()).map((entry: { status: string }) => entry.status)).toEqual(['done', 'done']);
   const entries = (await (await observe('/api/ai/queue')).json()).queue.entries.filter((entry: { input: { projectId: string } }) => entry.input.projectId === projectId);
   expect(entries[1].startedAt).toBeGreaterThanOrEqual(entries[0].finishedAt);
   for (const entry of entries) {

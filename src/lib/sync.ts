@@ -6,6 +6,7 @@ import type { SyncSnapshotPayload } from './companion';
 import { syncPull, syncPush, getSyncToken, companionBase } from './companion';
 import type { ActivityEntry, Label, Project, Sprint, Task, User } from './types';
 import { localFields, mergeWorkspaceExtras } from './workspaceSync';
+import { preserveBootstrapEdits } from './bootstrapWorkspace';
 import { entityCollections, mergeEntityLists, mergeTombstones, type Tombstones } from '../../shared/workspace-merge.mjs';
 
 const CLIENT_KEY = 'orbit-client-id';
@@ -76,6 +77,9 @@ let pushTimer: number | null = null;
 let ws: WebSocket | null = null;
 let reconnectTimer: number | null = null;
 let started = false;
+// A client with a known epoch must honor subsequent restores as replacements.
+// Only a first connection may retain work created during initial hydration.
+let bootstrapBaseline = workspaceEpoch ? null : structuredClone(snapshotFromStore().workspaceState!);
 
 function mergeById<T extends { id: string; updatedAt?: string }>(local: T[], remote: T[]): T[] {
   const map = new Map(local.map((e) => [e.id, e]));
@@ -115,8 +119,21 @@ export async function pullAndMerge(): Promise<boolean> {
   const remote = await syncPull();
   if (request !== pullRequest) return false;
   if (!remote?.ok || !remote.snapshot || !remote.updatedAt) return false;
+  const bootstrap = bootstrapBaseline;
+  bootstrapBaseline = null;
   if ((remote.snapshot.workspaceEpoch ?? null) !== (workspaceEpoch ?? null)) {
+    const local = bootstrap ? snapshotFromStore().workspaceState! : null;
     applySnapshot(remote.snapshot, { push: false });
+    if (bootstrap && local) {
+      const { patch, conflicts } = preserveBootstrapEdits(bootstrap, local, snapshotFromStore().workspaceState!);
+      // Apply through the usual subscription so retained edits acquire current
+      // field versions/deletion markers and are pushed with the adopted epoch.
+      if (Object.keys(patch).length) useStore.setState(patch);
+      if (conflicts) {
+        const state = useStore.getState();
+        state.addNotification(state.currentUserId, 'Den gendannede version er beholdt ved modstridende ændringer under opstart. Dine lokale ændringer findes i gendannelseskopien under Forbindelser → Backup.');
+      }
+    }
     lastSyncedAt = remote.updatedAt;
     return true;
   }
@@ -145,6 +162,7 @@ export async function pullAndMerge(): Promise<boolean> {
 // Restore is replacement, not conflict merging. Only known data fields may be
 // restored; actions and methods always remain the current application version.
 export function applySnapshot(snapshot: SyncSnapshotPayload, { push = true } = {}): void {
+  bootstrapBaseline = null;
   const current = useStore.getState();
   const data = snapshot.schemaVersion === 2 && snapshot.workspaceState
     ? snapshot.workspaceState

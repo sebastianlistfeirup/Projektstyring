@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mergeWorkspaceExtras } from '../src/lib/workspaceSync';
+import { preserveBootstrapEdits } from '../src/lib/bootstrapWorkspace';
 const storage = new Map<string, string>();
 Object.defineProperty(globalThis, 'localStorage', { value: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) } });
 Object.defineProperty(globalThis, 'window', { value: { localStorage: globalThis.localStorage } });
@@ -39,6 +40,31 @@ test('workspace extras recover in new browser and preserve newer local drafts', 
   assert.deepEqual(first.patch.bibles, { p: 'remote' });
   const next = mergeWorkspaceExtras({ bibles: { p: 'local' }, aiChats: [] }, { bibles: { p: 'old' }, aiChats: [{ id: 'new' }] }, { bibles: '3' }, { bibles: '2', aiChats: '4' });
   assert.ok(!Object.hasOwn(next.patch, 'bibles')); assert.deepEqual(next.patch.aiChats, [{ id: 'new' }]);
+});
+
+test('first hydration preserves only startup edits, without resurrecting stale entities or overriding restore conflicts', () => {
+  const stale = { id: 'stale', name: 'Deleted before this session' };
+  const shared = { id: 'shared', name: 'Original', color: 'blue' };
+  const fresh = { id: 'fresh', name: 'Created while loading' };
+  const before = { projects: [stale, shared], aiChats: [], bibles: { stale: 'Old bible' }, activeProjectId: 'stale' };
+  const current = { projects: [stale, { ...shared, name: 'Local conflict', color: 'green' }, fresh], aiChats: [{ id: 'new-chat', projectId: 'fresh' }], bibles: { stale: 'Old bible', fresh: 'New draft' }, activeProjectId: 'fresh' };
+  const restored = { projects: [{ ...shared, name: 'Restored name' }], aiChats: [], bibles: { shared: 'Restored bible' }, activeProjectId: 'shared' };
+  const { patch, conflicts } = preserveBootstrapEdits(before, current, restored);
+  assert.deepEqual(patch.projects, [{ ...shared, name: 'Restored name', color: 'green' }, fresh]);
+  assert.deepEqual(patch.aiChats, current.aiChats);
+  assert.deepEqual(patch.bibles, { shared: 'Restored bible', fresh: 'New draft' });
+  assert.equal(patch.activeProjectId, 'fresh');
+  assert.equal(conflicts, 1);
+});
+
+test('startup edits to remotely removed entities cannot resurrect them; uncontested deletion is retained', () => {
+  const before = { tasks: [{ id: 'gone', title: 'Old' }, { id: 'delete', title: 'Delete me' }] };
+  const current = { tasks: [{ id: 'gone', title: 'Edited after launch' }] };
+  const restored = { tasks: [{ id: 'delete', title: 'Delete me' }] };
+  const result = preserveBootstrapEdits(before, current, restored);
+  assert.deepEqual(result.patch.tasks, []);
+  assert.equal(result.conflicts, 1);
+  assert.deepEqual(preserveBootstrapEdits(before, before, restored), { patch: {}, conflicts: 0 });
 });
 
 test('historical run presentation preserves actual timestamps and evidence without inventing success', async () => {

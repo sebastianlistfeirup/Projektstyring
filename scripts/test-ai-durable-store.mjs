@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { durableStorePath, readDurableDocument, transactDurableDocument, claimExternalSubmission, updateExternalSubmission, readExternalSubmission, captureExternalSubmissionLedger, mergeExternalSubmissionLedger } from '../server/ai-durable-store.mjs';
 import { DurableRunQueue, pauseRestoredQueue } from '../server/ai-queue.mjs';
 import { saveRun, readRun, recoverRuns } from '../server/ai-state.mjs';
-import { listRunSummaries } from '../server/ai-history.mjs';
+import { listRunSummaries, readRunSummary } from '../server/ai-history.mjs';
 import { createWorkspaceBackup, restoreWorkspaceBackup } from '../server/workspace-backup.mjs';
 
 const dirs = () => ({ runs: mkdtempSync(join(tmpdir(), 'orbit-durable-')) });
@@ -31,6 +31,27 @@ test('run and history survive a crash between SQLite commit and JSON projection'
   writeFileSync(file, JSON.stringify({ runId: 'run', status: 'running', goal: 'Old export' }));
   assert.equal(readRun(root, 'run').status, 'done');
   assert.equal(listRunSummaries(root).runs[0].goal, 'Committed');
+});
+
+test('database-backed history and projection recovery never require redundant legacy summary writes', () => {
+  const root = dirs(), projection = join(root.runs, 'durable.json'), legacyCache = join(root.runs, 'durable.summary');
+  saveRun(root, { runId: 'durable', status: 'running', goal: 'Original' });
+  saveRun(root, { runId: 'durable', status: 'done', goal: 'Latest committed result', results: [{ jobId: 'job', title: 'Kept result' }] });
+  assert.equal(existsSync(legacyCache), false);
+  assert.equal(JSON.parse(readFileSync(projection, 'utf8')).goal, 'Latest committed result');
+  assert.equal(readRunSummary(root, 'durable').status, 'done');
+  assert.equal(listRunSummaries(root).runs[0].goal, 'Latest committed result');
+  assert.equal(existsSync(legacyCache), false);
+  rmSync(projection);
+  recoverRuns(root);
+  assert.equal(JSON.parse(readFileSync(projection, 'utf8')).results[0].title, 'Kept result');
+  assert.equal(readRunSummary(root, 'durable').results[0].title, 'Kept result');
+  assert.equal(existsSync(legacyCache), false);
+  // An export from an older app cannot override the transactional summary and
+  // need not be repaired on each read; legacy-only runs have their own test.
+  writeFileSync(legacyCache, 'obsolete cache');
+  assert.equal(readRunSummary(root, 'durable').goal, 'Latest committed result');
+  assert.equal(readFileSync(legacyCache, 'utf8'), 'obsolete cache');
 });
 
 test('an abrupt process exit rolls back an uncommitted write and leaves the store usable', () => {

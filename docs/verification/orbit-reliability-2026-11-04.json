@@ -1,15 +1,15 @@
 {
   "format": "orbit-reliability-sample",
   "version": 1,
-  "startedAt": "2026-11-04T03:28:37.991Z",
-  "finishedAt": "2026-11-04T03:28:57.215Z",
-  "elapsedMs": 19223,
+  "startedAt": "2026-11-04T04:17:34.743Z",
+  "finishedAt": "2026-11-04T04:17:48.527Z",
+  "elapsedMs": 13784,
   "status": "passed",
   "platform": "linux",
   "architecture": "x64",
   "nodeVersion": "v24.19.0",
   "sqliteVersion": "3.53.3",
-  "baselineCommit": "ab4347bfcdcd79ea1785adb1e8ca81725a8f1f67",
+  "baselineCommit": "f100418027f19bc97954449fe85d0191f4afcd3c",
   "workingTreeDirty": true,
   "testedSourceSha256": {
     "server/ai-account-checks.mjs": "e2a1c7ba381537881661d5c0e2433fd9e7e0c7d20764d7e1377339a367066766",
@@ -37,7 +37,7 @@
     "server/ai-review.mjs": "9fea9a9bb442bb70ade0f5763c62609c46340c380aa0378558aad8bec612e027",
     "server/ai-runtime.mjs": "bc99d0213f2e41c621a6909e3fed252c1768398abc3ed1f5b1aa4a542968ddfd",
     "server/ai-services.mjs": "576885a9577cd50515d8badcd57c1698eb3209096468013cccc8cdaa808b7753",
-    "server/ai-state.mjs": "d1f7f36ec960320303c6e859b31886fdff84525f82eb119fd9254f23d5996906",
+    "server/ai-state.mjs": "6865dcdb98d6f800cd5a2509c1daab64245337205c4ff8ee5f99e3af55e43805",
     "server/ai-stream.mjs": "849d85481a05be6355cc69e0040394d8252b542567398675344b94390696340d",
     "server/ai-workshop.mjs": "011fef430888a72dcf8376a876141f6f29e8a237d1c7e3c8eea183443cdfba0d",
     "server/atomic-json.mjs": "cb0da577564ba3cdf241e3f62855313257152f3b8c19beb2ac003097600921d5",
@@ -67,7 +67,7 @@
       "providerPosts": 10,
       "duplicatePosts": 0,
       "restoredArchives": 10,
-      "elapsedMs": 7281,
+      "elapsedMs": 5529,
       "status": "passed"
     },
     {
@@ -78,7 +78,7 @@
       "providerPosts": 10,
       "duplicatePosts": 0,
       "restoredArchives": 10,
-      "elapsedMs": 6824,
+      "elapsedMs": 4587,
       "status": "passed"
     },
     {
@@ -89,7 +89,7 @@
       "providerPosts": 10,
       "duplicatePosts": 0,
       "explicitlyBlockedResumes": 10,
-      "elapsedMs": 5097,
+      "elapsedMs": 3651,
       "status": "passed"
     }
   ],
