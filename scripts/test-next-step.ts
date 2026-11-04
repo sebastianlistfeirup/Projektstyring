@@ -27,3 +27,11 @@ test('pending decisions take priority and blocked work links to inspection, not 
   const failedChecks = run('done'); failedChecks.verification!.status = 'failed';
   assert.equal(nextStepForRun(failedChecks).title, 'Afklar fejlede kontroller');
 });
+
+test('a recovered live plan must resume even when its approval panel is restored', () => {
+  const recovered = { ...run('awaiting_approval'), recoveredAt: Date.now() };
+  const next = nextStepForRun(recovered, { approval: true });
+  assert.equal(next.action, 'Se genoptagelse');
+  assert.equal(next.target, 'orbit-run-results');
+  assert.equal(nextStepForRun(run('awaiting_approval'), { approval: true }).target, 'orbit-plan-approval');
+});

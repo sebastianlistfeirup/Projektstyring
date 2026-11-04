@@ -915,7 +915,7 @@ export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolea
 
       {/* pulserende banner når en plan afventer godkendelse */}
       {approval && (
-        <div id="orbit-plan-approval" className="rounded-2xl border border-amber-400/50 bg-amber-400/10 px-3.5 py-2.5 flex flex-wrap items-center gap-2 scroll-mt-4">
+        <div id="orbit-plan-approval" tabIndex={-1} className="rounded-2xl border border-amber-400/50 bg-amber-400/10 px-3.5 py-2.5 flex flex-wrap items-center gap-2 scroll-mt-4">
           <AlertTriangle size={14} className="text-amber-300 shrink-0" />
           <span className="text-[12px] font-semibold text-amber-200">{t('swarm.approvalWaiting')}</span>
           <span className="text-xs opacity-65 flex-1">{t('swarm.approvalWaitingHint')}</span>
@@ -942,7 +942,11 @@ export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolea
         <>
           {nextStep && <section aria-label="Næste skridt" className="rounded-2xl border border-indigo-400/30 bg-indigo-500/[0.07] p-4 flex flex-wrap items-center gap-3">
             <div className="flex-1 min-w-52"><p className="text-[10px] uppercase tracking-wider opacity-55">Næste skridt</p><h2 className="font-semibold text-sm mt-0.5">{nextStep.title}</h2><p className="text-xs opacity-70 mt-1">{nextStep.detail}</p></div>
-            <button type="button" onClick={() => document.getElementById(nextStep.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="btn-primary text-xs">{nextStep.action}</button>
+            <button type="button" onClick={() => {
+              const target = document.getElementById(nextStep.target);
+              target?.focus({ preventScroll: true });
+              target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }} className="btn-primary text-xs">{nextStep.action}</button>
           </section>}
           {/* statuslinje */}
           <div role="region" aria-label="Kørselsstatus" className="rounded-2xl border border-white/10 glass-panel p-3.5 space-y-2.5">
@@ -1015,7 +1019,7 @@ export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolea
 
           {/* handlingsbjælke for afsluttede/arkiverede kørsler: genoptag, eksport, link til opgave */}
           {!active && shown && !replay && (
-            <div id="orbit-run-results" className="rounded-2xl border border-white/10 glass-panel px-3 py-3 scroll-mt-4 space-y-3">
+            <div id="orbit-run-results" tabIndex={-1} className="rounded-2xl border border-white/10 glass-panel px-3 py-3 scroll-mt-4 space-y-3">
               <div className="text-xs space-y-1">
                 <h2 className="font-semibold">Kørselsresultat</h2>
                 {shown.evidence && <p>Git-leverance: <code className="break-all">{shown.evidence.commit}</code> · {shown.evidence.changedFiles?.length ?? 0} ændrede filer</p>}
@@ -1070,7 +1074,7 @@ export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolea
             </div>
           )}
 
-          <div id="orbit-job-list" className="flex flex-wrap items-center gap-2 scroll-mt-4" role="group" aria-label="Visning af arbejdet">
+          <div id="orbit-job-list" tabIndex={-1} className="flex flex-wrap items-center gap-2 scroll-mt-4" role="group" aria-label="Visning af arbejdet">
             {([['both', 'Kugler og arbejdskort'], ['constellation', 'Kun kugler'], ['work', 'Kun arbejdskort']] as const).map(([mode, label]) => <button key={mode} className="btn-ghost text-xs" aria-pressed={mapMode === mode} onClick={() => { setMapMode(mode); localStorage.setItem('orbit-live-view', mode); }}>{label}</button>)}
           </div>
           {mapMode !== 'work' && <section aria-label="Animeret agentunivers" className="rounded-2xl border border-zinc-200 dark:border-white/10 bg-black/5 dark:bg-black/20 overflow-hidden">

@@ -39,14 +39,41 @@ function reportFiles(workDir) {
   return found;
 }
 
-export async function runWorktreeArtifacts(workDir, runId, baseCommit) {
-  const [changed, untracked, trackedReports] = await Promise.all([
-    baseCommit ? git(workDir, ['diff', '--name-only', '--diff-filter=AM', '-z', baseCommit, 'HEAD']) : git(workDir, ['ls-files', '-z', '--cached']),
+async function untrackedArtifactPaths(workDir) {
+  const [untracked, trackedReports] = await Promise.all([
     git(workDir, ['ls-files', '-z', '--others', '--exclude-standard']),
     git(workDir, ['ls-files', '-z', '--cached', '--', 'reports', 'screenshots', 'visual', 'captures']),
   ]);
   const tracked = new Set(trackedReports.split('\0').filter(Boolean));
-  const paths = [...new Set([...changed.split('\0'), ...untracked.split('\0'), ...reportFiles(workDir).filter(name => !tracked.has(name))].filter(Boolean))];
+  return [...new Set([...untracked.split('\0'), ...reportFiles(workDir).filter(name => !tracked.has(name))].filter(Boolean))];
+}
+
+function artifactStamp(workDir, name) {
+  const stat = statSync(runArtifactPath(workDir, name));
+  return `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+}
+
+// Generated reports can be ignored by Git and survive earlier jobs, including
+// failed attempts. Snapshot them before a job so they are not its evidence.
+export async function snapshotRunArtifacts(workDir) {
+  const baseline = new Map();
+  for (const name of await untrackedArtifactPaths(workDir)) {
+    try { baseline.set(name, artifactStamp(workDir, name)); }
+    catch { /* Missing, unsupported or unsafe files cannot be evidence. */ }
+  }
+  return baseline;
+}
+
+export async function runWorktreeArtifacts(workDir, runId, baseCommit, baseline = new Map()) {
+  const [changed, untracked] = await Promise.all([
+    baseCommit ? git(workDir, ['diff', '--name-only', '--diff-filter=AM', '-z', baseCommit, 'HEAD']) : git(workDir, ['ls-files', '-z', '--cached']),
+    untrackedArtifactPaths(workDir),
+  ]);
+  const fresh = untracked.filter(name => {
+    try { return baseline.get(name) !== artifactStamp(workDir, name); }
+    catch { return false; }
+  });
+  const paths = [...new Set([...changed.split('\0'), ...fresh].filter(Boolean))];
   const files = paths.filter(name => /\.(png|jpe?g|webp|glb|mp3|wav|mp4|webm)$/i.test(name) && /(^|\/)(reports|screenshots|visual|captures)(\/|$)/i.test(name)).flatMap(name => {
     try {
       const path = runArtifactPath(workDir, name);
@@ -87,7 +114,8 @@ export async function repositoryReadiness(path) {
     const [behind, ahead] = counts.split(/\s+/).map(Number);
     return { ...item, ahead, behind, subject };
   }));
-  const descendants = branchDetails.filter(item => item.behind === 0 && item.ahead > 0);
+  const descendants = branchDetails.filter(item => item.behind === 0 && item.ahead > 0 && !item.branch.startsWith('orbit-attempt/'))
+    .filter((item, index, items) => items.findIndex(other => other.commit === item.commit) === index);
   let suggestedBranch = null;
   // Suggest only an unambiguous latest tip; diverging fixes require an owner choice.
   if (unmerged.length === branchDetails.length && descendants.length > 0 && descendants.length <= 10) {

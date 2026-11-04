@@ -3,7 +3,7 @@ import { nativePermissions } from './ai-permissions.mjs';
 // Orbit AI-kørsler: planlægning, sværm, hukommelse og triggere.
 import { execFile } from 'child_process';
 import { promisify } from 'node:util';
-import { createRunWorktree, runWorktreeArtifacts, verifyRepository, repositoryEvidence } from './ai-repository.mjs';
+import { createRunWorktree, runWorktreeArtifacts, snapshotRunArtifacts, verifyRepository, repositoryEvidence } from './ai-repository.mjs';
 import { validatePlan, executeGraph, runOutcome, saveRun, appendRunEvent, saveRunHeartbeat } from './ai-state.mjs';
 import { validateProjectPlan, PROJECT_PLAN_FORMAT } from './project-plan.mjs';
 import { serviceCapabilities, assertJobCapability } from './ai-capabilities.mjs';
@@ -690,6 +690,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     const baseCommit = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: handle.runDir })).stdout.trim();
     let candidateCommit = null;
     try {
+      const artifactBaseline = run.repository ? await snapshotRunArtifacts(handle.runDir) : undefined;
       assertJobCapability(job, serviceById(job.serviceId), run.repository);
       const isMedia = ['meshy', 'elevenlabs', 'heygen'].includes(job.serviceId);
       const judgeId = !isMedia && prefs.autoJudge !== false ? ['claude', 'kimi', 'gemini', 'codex', 'qwen-code'].find(id => id !== job.serviceId && availability[id]?.available) : null;
@@ -767,7 +768,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       }
       const commit = candidateCommit ?? await gitCommit(handle.runDir, job.title);
       doneText.set(job.id, text);
-      if (run.repository) artifacts = [...artifacts, ...await runWorktreeArtifacts(handle.runDir, runId, baseCommit)];
+      if (run.repository) artifacts = [...artifacts, ...await runWorktreeArtifacts(handle.runDir, runId, baseCommit, artifactBaseline)];
       const res = { jobId: job.id, title: job.title, serviceId: job.serviceId, phase: job.phase, text, artifacts, deliverable: fname, commit, verification: 'requires_review', score, judgeNote };
       results.push(res);
       track({ type: 'job_done', result: res });

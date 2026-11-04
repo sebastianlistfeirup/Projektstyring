@@ -20,9 +20,11 @@ test('Orbit Live points to visual review after a technical pass and to recovery 
   const visual = page.locator('#orbit-run-visual');
   await expect(visual).toBeVisible();
   const chatHash = await page.evaluate(() => location.hash);
-  await next.getByRole('button', { name: 'Se billeder' }).click();
+  await next.getByRole('button', { name: 'Se billeder' }).focus();
+  await page.keyboard.press('Enter');
   await expect.poll(() => page.evaluate(() => location.hash)).toBe(chatHash);
   await expect(visual).toBeInViewport();
+  await expect(visual).toBeFocused();
 
   await page.evaluate(async value => {
     // @ts-expect-error Vite browser module
@@ -34,4 +36,17 @@ test('Orbit Live points to visual review after a technical pass and to recovery 
   await next.getByRole('button', { name: 'Se årsag og muligheder' }).click();
   await expect.poll(() => page.evaluate(() => location.hash)).toBe(chatHash);
   await expect(results).toBeInViewport();
+  await expect(results).toBeFocused();
+
+  await page.evaluate(async value => {
+    // @ts-expect-error Vite browser module
+    const { useSwarm } = await import('/src/lib/swarm.ts'); useSwarm.getState().setRun(value);
+  }, { ...run, status: 'awaiting_approval', jobs: [{ ...job, status: 'pending', artifacts: [] }] });
+  await next.getByRole('button', { name: 'Se planen' }).focus();
+  await page.keyboard.press('Enter');
+  const approval = page.locator('#orbit-plan-approval');
+  await expect(approval).toBeFocused();
+  await expect.poll(() => page.evaluate(() => location.hash)).toBe(chatHash);
+  await page.keyboard.press('Tab');
+  await expect(approval.getByRole('button', { name: 'Redigér og godkend planen' })).toBeFocused();
 });

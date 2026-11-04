@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createRunWorktree, inspectRepository, repositoryReadiness, runWorktreeArtifacts, runArtifactPath, verifyRepository, repositoryEvidence } from '../server/ai-repository.mjs';
+import { createRunWorktree, inspectRepository, repositoryReadiness, runWorktreeArtifacts, snapshotRunArtifacts, runArtifactPath, verifyRepository, repositoryEvidence } from '../server/ai-repository.mjs';
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
 test('repository readiness reveals fixes on another branch without changing the checkout', async () => {
@@ -57,6 +57,28 @@ test('repository does not suggest a branch when descendant fixes diverge', async
   const report = await repositoryReadiness(root);
   assert.equal(report.otherBranches.length, 2);
   assert.equal(report.suggestedBranch, null);
+  // Two names for one tip must not eliminate that tip from the comparison and
+  // make the other, divergent tip look like the only possible continuation.
+  git(root, 'branch', 'orbit/route-alias', 'orbit/route');
+  const aliased = await repositoryReadiness(root);
+  assert.equal(aliased.otherBranches.length, 3);
+  assert.equal(aliased.suggestedBranch, null);
+});
+
+test('repository never recommends preserved failed attempts as the next branch', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-failed-branch-'));
+  git(root, 'init', '-q'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'base');
+  const sourceBranch = git(root, 'branch', '--show-current');
+  git(root, 'checkout', '-qb', 'orbit-attempt/run/job');
+  git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'rejected attempt');
+  git(root, 'checkout', '-q', sourceBranch);
+  const report = await repositoryReadiness(root);
+  assert.equal(report.otherBranches[0].branch, 'orbit-attempt/run/job');
+  assert.equal(report.suggestedBranch, null);
+  git(root, 'checkout', '-qb', 'orbit/accepted');
+  git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'accepted fix');
+  git(root, 'checkout', '-q', sourceBranch);
+  assert.equal((await repositoryReadiness(root)).suggestedBranch, 'orbit/accepted');
 });
 
 test('visual evidence lists real worktree captures and confines reads to image report paths', async () => {
@@ -91,6 +113,28 @@ test('visual evidence includes new captures in ignored report directories', asyn
   mkdirSync(join(root, 'reports', 'screenshots'), { recursive: true });
   writeFileSync(join(root, 'reports', 'screenshots', 'actual.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
   assert.deepEqual((await runWorktreeArtifacts(root, 'run-ignored', baseCommit)).map(item => item.name), ['reports/screenshots/actual.png']);
+});
+
+test('each job includes only its new or changed generated captures', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-job-captures-'));
+  git(root, 'init', '-q'); writeFileSync(join(root, '.gitignore'), 'reports/\n');
+  git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'base');
+  mkdirSync(join(root, 'reports'), { recursive: true });
+  mkdirSync(join(root, 'visual'), { recursive: true });
+  writeFileSync(join(root, 'reports', 'previous.png'), 'previous ignored capture');
+  writeFileSync(join(root, 'visual', 'previous.png'), 'previous untracked capture');
+  const baseCommit = git(root, 'rev-parse', 'HEAD');
+  const baseline = await snapshotRunArtifacts(root);
+  writeFileSync(join(root, 'code.txt'), 'unrelated code change');
+  git(root, 'add', 'code.txt'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'code only');
+  assert.deepEqual(await runWorktreeArtifacts(root, 'code-job', baseCommit, baseline), []);
+  const nextBase = git(root, 'rev-parse', 'HEAD'), nextBaseline = await snapshotRunArtifacts(root);
+  writeFileSync(join(root, 'reports', 'previous.png'), 'updated ignored capture with new contents');
+  writeFileSync(join(root, 'reports', 'new.png'), 'new ignored capture');
+  writeFileSync(join(root, 'visual', 'new.png'), 'new tracked capture');
+  git(root, 'add', 'visual/new.png'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'visual update');
+  assert.deepEqual((await runWorktreeArtifacts(root, 'visual-job', nextBase, nextBaseline)).map(item => item.name).sort(),
+    ['reports/new.png', 'reports/previous.png', 'visual/new.png']);
 });
 
 test('isolated worktree preserves source checkout and records actual checks and commit', async () => {
