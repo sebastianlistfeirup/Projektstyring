@@ -11,9 +11,16 @@ import { fileDigest, releaseFiles, verifyRelease } from './desktop/release.mjs';
 import { launchRelease, stopManaged } from './desktop/launch.mjs';
 import { installRelease } from './desktop/install.mjs';
 
-async function freePort() {
-  const server = createServer(); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const port = server.address().port; await new Promise(resolve => server.close(resolve)); return port;
+async function freePorts(count = 1) {
+  const servers = [];
+  try {
+    // Keep all reservations listening until every distinct port is allocated.
+    // Closing one before allocating the next lets the OS reuse the same port.
+    for (let i = 0; i < count; i++) {
+      const server = createServer(); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); servers.push(server);
+    }
+    return servers.map(server => server.address().port);
+  } finally { await Promise.all(servers.map(server => new Promise(resolve => server.close(resolve)))); }
 }
 
 async function fixture(root, id, { failReal = false } = {}) {
@@ -47,9 +54,10 @@ test('release verification rejects changed bytes, extra files and unsafe manifes
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('managed startup verifies identity, reuses same release and refuses shutdown while busy', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'orbit-desktop-start-')), appDir = join(root, 'app'), port = await freePort();
-  try {
+test('managed startup verifies identity, reuses same release and refuses shutdown while busy', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-desktop-start-')), appDir = join(root, 'app'), [port] = await freePorts();
+  t.after(async () => { rmSync(join(appDir, 'busy'), { force: true }); await stopManaged(appDir, port); rmSync(root, { recursive: true, force: true }); });
+  {
     const dir = await fixture(root, 'start');
     assert.equal((await launchRelease(dir, { appDir, port })).reused, false);
     assert.equal((await launchRelease(dir, { appDir, port })).reused, true);
@@ -57,12 +65,13 @@ test('managed startup verifies identity, reuses same release and refuses shutdow
     assert.equal((await (await fetch(`http://127.0.0.1:${port}/api/ping`)).json()).releaseId, 'start');
     rmSync(join(appDir, 'busy')); await stopManaged(appDir, port);
     assert.equal(existsSync(join(appDir, 'desktop-control.json')), false);
-  } finally { await stopManaged(appDir, port); rmSync(root, { recursive: true, force: true }); }
+  }
 });
 
-test('failed release activation restarts compatible previous release and preserves user data and launcher', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'orbit-desktop-update-')), appDir = join(root, 'app'), installDir = join(root, 'installed'), port = await freePort(), smokePort = await freePort();
-  try {
+test('failed release activation restarts compatible previous release and preserves user data and launcher', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-desktop-update-')), appDir = join(root, 'app'), installDir = join(root, 'installed'), [port, smokePort] = await freePorts(2);
+  t.after(async () => { rmSync(join(appDir, 'busy'), { force: true }); await stopManaged(appDir, port); rmSync(root, { recursive: true, force: true }); });
+  {
     const first = await fixture(root, 'first'), bad = await fixture(root, 'bad', { failReal: true });
     await installRelease(first, { appDir, installDir, port, smokePort, open: false, createShortcuts: false });
     writeFileSync(join(appDir, 'user-data'), 'precious decisions');
@@ -77,7 +86,7 @@ test('failed release activation restarts compatible previous release and preserv
     assert.equal(readFileSync(join(installDir, 'Start-Orbit.cmd'), 'utf8'), launcher);
     assert.equal(JSON.parse(readFileSync(join(installDir, 'installation.json'))).current, 'first');
     assert.equal(existsSync(join(installDir, '.update-lock')), false);
-  } finally { await stopManaged(appDir, port); rmSync(root, { recursive: true, force: true }); }
+  }
 });
 
 test('packaged service worker never intercepts API or public project responses', () => {
