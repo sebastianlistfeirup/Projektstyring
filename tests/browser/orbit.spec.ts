@@ -346,14 +346,17 @@ test('work orders can be queued from their drawer and execute serially with the 
   await expect(queue.getByText('Arbejdskø · 2 opgaver', { exact: true })).toBeVisible();
   await queue.getByRole('button', { name: 'Fortsæt køen' }).click();
   await page.close();
+  // A reused local HTTP connection can reset between status polls on Windows.
+  // Retry only this idempotent observation once; never replay queue mutations.
+  const observe = (path: string) => request.get(`${base}${path}`, { maxRetries: 1 });
   await expect.poll(async () => {
-    const snapshot = (await (await request.get(`${base}/api/ai/queue`)).json()).queue;
+    const snapshot = (await (await observe('/api/ai/queue')).json()).queue;
     return snapshot.entries.filter((entry: { input: { projectId: string } }) => entry.input.projectId === projectId).map((entry: { status: string }) => entry.status);
   }, { timeout: 30000 }).toEqual(['done', 'done']);
-  const entries = (await (await request.get(`${base}/api/ai/queue`)).json()).queue.entries.filter((entry: { input: { projectId: string } }) => entry.input.projectId === projectId);
+  const entries = (await (await observe('/api/ai/queue')).json()).queue.entries.filter((entry: { input: { projectId: string } }) => entry.input.projectId === projectId);
   expect(entries[1].startedAt).toBeGreaterThanOrEqual(entries[0].finishedAt);
   for (const entry of entries) {
-    const run = (await (await request.get(`${base}/api/ai/runs/${entry.runId}`)).json()).run;
+    const run = (await (await observe(`/api/ai/runs/${entry.runId}`)).json()).run;
     expect(run.taskId).toBeTruthy(); expect(run.verification.status).toBe('passed'); expect(run.contextManifest.projectId).toBe(projectId);
   }
   expect(readFileSync(join(source, 'game.txt'), 'utf8')).toBe('original');

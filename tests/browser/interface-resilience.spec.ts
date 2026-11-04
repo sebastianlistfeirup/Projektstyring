@@ -9,6 +9,12 @@ test('command search finds existing work before creating tasks and preserves the
   const fixture = await page.evaluate(async () => {
     // @ts-expect-error Vite browser module
     const { useStore } = await import('/src/store/useStore.ts');
+    // Prior browser fixtures share Companion's workspace. Hydrate those tasks
+    // before recording the baseline, so their arrival is not mistaken for a
+    // task created by command search (Windows CI observed 32 local / 34 remote).
+    // @ts-expect-error Vite browser module
+    const { pullAndMerge } = await import('/src/lib/sync.ts');
+    await pullAndMerge();
     const store = useStore.getState();
     const project = store.addProject('Copper Basin');
     const chat = store.addAiChat({ projectId: project.id, title: 'City lighting review' });
