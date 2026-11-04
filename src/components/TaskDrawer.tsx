@@ -18,6 +18,7 @@ import {
 import type { Comment, CustomFieldDef, Priority, Sprint, Task, TaskStatus, User } from '../lib/types';
 import { estimateSuggestion } from '../lib/radar';
 import { Avatar, LabelChip, ProgressBar, StatusBadge } from '../components/common';
+import TaskExecutionPanel from './TaskExecutionPanel';
 
 export default function TaskDrawer() {
   useLang();
@@ -891,6 +892,7 @@ export default function TaskDrawer() {
           </section>
 
           {/* AI-assistent */}
+          <TaskExecutionPanel key={task.id} task={task} />
           <section>
             <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
               <Sparkles className="h-3.5 w-3.5" />

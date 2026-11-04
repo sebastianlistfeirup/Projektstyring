@@ -1,0 +1,37 @@
+{
+  "checkedAt": "2026-10-30T15:16:38.559283+00:00",
+  "scenario": "Controlled WebSocket text bursts through the real browser store. Nine active provider-call fixtures, 270 registered subagents, 108 visible. Not live provider accounts.",
+  "sample": {
+    "measuredAt": "2026-10-30T15:14:51.553Z",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+    "viewport": {
+      "width": 1440,
+      "height": 1000,
+      "pixelRatio": 1
+    },
+    "durationMs": 10001,
+    "frames": 402,
+    "medianFrameMs": 16.700000000000728,
+    "p95FrameMs": 50,
+    "maxFrameMs": 100,
+    "framesOver50ms": 12,
+    "activeServices": [
+      "claude",
+      "codex",
+      "gemini",
+      "grok",
+      "meshy",
+      "heygen",
+      "elevenlabs",
+      "kimi",
+      "qwen"
+    ],
+    "maxVisibleAgents": 108,
+    "maxAnimations": 10,
+    "textEventsObserved": 287,
+    "reducedMotion": false,
+    "interrupted": false,
+    "runChanged": false
+  },
+  "limits": "Shared Linux headless Chromium. 10 seconds only, p95 50 ms and one 100 ms frame remain. This is not proof of a stutter-free Windows experience or a controlled speedup comparison."
+}

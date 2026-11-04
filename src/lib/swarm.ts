@@ -1,25 +1,38 @@
+import { createLiveEventBuffer } from '../../shared/live-event-buffer.mjs';
+import { useStore } from '../store/useStore';
 import { create } from 'zustand';
+import { presentRun } from './runPresentation';
 import { fetchAiServices, type AiServiceInfo } from './aiApi';
 
 /* ---------- typer ---------- */
 
 export interface SwarmSubagent {
+  serviceId?: string;
+  callId?: string;
+  parentSubId?: string;
   subId: string;
   name: string;
-  status: 'running' | 'done';
+  status: 'running' | 'done' | 'error';
   startedAt: number;
   finishedAt: number | null;
   text: string;
 }
 
 export interface SwarmJob {
+  media?: { state?: string; serviceId?: string; remoteId?: string; submittedAt?: number; progress?: number; artifacts?: import('./types').AiArtifact[] };
+  review?: { serviceId: string; commit: string; score: number; minimumScore: number; note: string; status: string; examinedFiles: string[]; findings: { severity: string; file: string; message: string }[] };
+  repairFor?: number;
+  readOnly?: boolean;
+  context?: string[];
+  contextDocuments?: { path: string; status: string; bytes?: number; sha256?: string; reason?: string }[];
+  actions?: { id: string; kind: string; label: string; status: 'running' | 'done' | 'error'; detail: string; at: number }[];
   id: string;
   title: string;
   serviceId: string | null;
   phase: string;
   dependsOn: number[];
   description: string;
-  status: 'queued' | 'running' | 'done' | 'error';
+  status: 'queued' | 'running' | 'done' | 'error' | 'blocked' | 'skipped' | 'cancelled' | 'interrupted';
   liveText: string;
   notes: string[];
   deltaCount: number;
@@ -27,7 +40,8 @@ export interface SwarmJob {
   startedAt: number | null;
   finishedAt: number | null;
   text: string;
-  artifacts: { kind: string; name: string; mime: string; url?: string }[];
+  textTruncated?: boolean;
+  artifacts: import('./types').AiArtifact[];
   error: string | null;
   subagents?: SwarmSubagent[];
   team?: boolean;
@@ -35,13 +49,37 @@ export interface SwarmJob {
   judgeNote?: string | null;
 }
 
+export interface ServiceCall { callId: string; serviceId: string; jobId: string | null; role: 'planning' | 'execution' | 'review' | 'media'; startedAt: number }
+
 export interface SwarmRun {
+  autonomy?: { policy: import('./types').AutonomyPolicy; providerCalls: number; executionMs: number; repairAttempts?: number; consecutiveFailures: number; blockedReason?: string };
+  contextStatus?: { status: 'current' | 'changed' | 'unavailable'; changes: string[]; expectedFingerprint?: string | null; currentFingerprint?: string | null };
+  recoveredAt?: number;
+  serviceCalls?: ServiceCall[];
+  repository?: { source: string; baseCommit: string; branch?: string; workDir?: string } | null;
+  eventsJournal?: boolean;
+  eventCount?: number;
+  eventsTruncated?: boolean;
+  contextManifest?: {
+    fingerprint?: string;
+    version: number; capturedAt: string; projectId: string; projectName: string; releaseGoal: string; scopeTaskIds: string[] | null;
+    documents: { kind: string; id: string; title: string; sha256: string; characters: number; version?: number | null; state?: string; updatedAt?: string | null }[];
+  };
+  projectPlan?: import('./types').ProjectPlan;
+  projectPlanError?: string;
+  heartbeatAt?: number;
+  results?: { jobId?: string; title: string; text: string; textTruncated?: boolean; artifacts?: import('./types').AiAttachment[] }[];
+  projectId?: string | null;
+  taskId?: string | null;
+  evidence?: { commit: string; changedFiles: string[]; diffStat: string };
+  verificationHistory?: { number: number; at: number; commit: string; status: string; checks: { name: string; status: string; exitCode: number | null; output: string }[] }[];
+  verification?: { status: string; checks: { name: string; status: string; exitCode: number | null; output: string }[] };
   runId: string;
   goal: string;
   mode?: string;
   startedAt: number;
   orchestratorId: string | null;
-  status: 'running' | 'done' | 'error';
+  status: 'running' | 'awaiting_approval' | 'done' | 'error' | 'partial' | 'blocked' | 'cancelled' | 'interrupted';
   jobs: SwarmJob[];
   notes: string[];
   instructions?: string[];
@@ -53,8 +91,15 @@ export interface SwarmApproval {
   jobs: SwarmJob[];
 }
 
+export interface NativePermission {
+  id: string; runId: string; projectId?: string; jobId?: string; serviceId: string;
+  cwd: string; toolName: string; input: Record<string, unknown>; reason: string; requestedAt: number; readOnly: boolean;
+}
+
 interface SwarmStore {
+  permissions: NativePermission[];
   connected: boolean;
+  processes: { pid: number; kind: string; runId?: string; startedAt?: number }[];
   run: SwarmRun | null;
   services: Record<string, AiServiceInfo> | null;
   approval: SwarmApproval | null;
@@ -123,12 +168,14 @@ export function requestNotifyPermission(): void {
 /* ---------- tilstand ---------- */
 
 export const useSwarm = create<SwarmStore>()((set, get) => ({
+  permissions: [],
   connected: false,
+  processes: [],
   run: null,
   services: null,
   approval: null,
   setConnected: (v) => set({ connected: v }),
-  setRun: (r) => set({ run: r }),
+  setRun: (r) => set({ run: r, approval: r?.status === 'awaiting_approval' ? { runId: r.runId, jobs: r.jobs } : null }),
   setApproval: (a) => set({ approval: a }),
   refreshServices: async () => {
     const s = await fetchAiServices();
@@ -145,9 +192,13 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
         set({
           run: {
             runId: String(evt.runId ?? ''),
+            projectId: evt.projectId as string | undefined,
+            taskId: evt.taskId as string | undefined,
             goal: String(evt.goal ?? ''),
             mode: String(evt.mode ?? 'standard'),
             startedAt: Date.parse(String(evt.startedAt ?? '')) || Date.now(),
+            serviceCalls: [],
+            heartbeatAt: Date.now(),
             orchestratorId: null,
             status: 'running',
             jobs: [],
@@ -156,6 +207,12 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
             finishedAt: null,
           },
         });
+        break;
+      case 'service_call_start':
+      case 'service_call_end':
+      case 'autonomy':
+      case 'context_status':
+        if (cur) set({ run: applyEventPure(cur, evt) });
         break;
       case 'orchestrator':
         if (cur) set({ run: { ...cur, orchestratorId: (evt.serviceId as string) ?? null } });
@@ -179,10 +236,18 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
         }));
         // Godkendelsespause: planen afventer brugerens godkendelse/redigering.
         if (evt.paused) {
-          set({ run: { ...cur, jobs: mapped }, approval: { runId: cur.runId, jobs: mapped } });
+          set({ run: { ...cur, status: 'awaiting_approval', jobs: mapped }, approval: { runId: cur.runId, jobs: mapped } });
         } else {
-          set({ run: { ...cur, jobs: mapped }, approval: null });
+          set({ run: { ...cur, status: 'running', jobs: mapped }, approval: null });
         }
+        break;
+      }
+      case 'job_added': {
+        if (cur) set({ run: presentRun({ ...cur, jobs: [...cur.jobs, { ...(evt.job as SwarmJob), status: 'queued' }] }) });
+        break;
+      }
+      case 'job_action': {
+        if (cur) set({ run: { ...cur, jobs: cur.jobs.map(j => j.id === evt.jobId ? { ...j, actions: [...(j.actions ?? []).filter(a => a.id !== (evt.action as NonNullable<SwarmJob['actions']>[number]).id).slice(-99), evt.action as NonNullable<SwarmJob['actions']>[number]] } : j) } });
         break;
       }
       case 'job_start': {
@@ -206,7 +271,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
               j.id === id
                 ? {
                     ...j,
-                    deltaCount: j.deltaCount + 1,
+                    deltaCount: j.deltaCount + (Number.isSafeInteger(evt.deltaCount) && Number(evt.deltaCount) > 0 ? Number(evt.deltaCount) : 1),
                     liveText: (j.liveText + String(evt.delta ?? '')).slice(-400),
                     lastDeltaAt: Date.now(),
                   }
@@ -228,7 +293,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
                     ...j,
                     subagents: [
                       ...(j.subagents ?? []).filter((s) => s.subId !== sid),
-                      { subId: sid, name: String(evt.name ?? 'Underagent'), status: 'running' as const, startedAt: Date.now(), finishedAt: null, text: '' },
+                      { subId: sid, serviceId: typeof evt.serviceId === 'string' ? evt.serviceId : undefined, callId: typeof evt.callId === 'string' ? evt.callId : undefined, parentSubId: typeof evt.parentSubId === 'string' ? evt.parentSubId : undefined, name: String(evt.name ?? 'Underagent'), status: 'running' as const, startedAt: Date.now(), finishedAt: null, text: '' },
                     ],
                   }
                 : j,
@@ -269,7 +334,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
                     ...j,
                     subagents: (j.subagents ?? []).map((s) =>
                       s.subId === sid
-                        ? { ...s, status: 'done' as const, text: String(evt.text ?? '').slice(0, 400), finishedAt: Date.now() }
+                        ? { ...s, status: (evt.error ? 'error' : 'done') as SwarmSubagent['status'], text: String(evt.text ?? '').slice(0, 400), finishedAt: Date.now() }
                         : s,
                     ),
                   }
@@ -319,7 +384,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
             ...cur,
             jobs: cur.jobs.map((j) =>
               j.id === id
-                ? { ...j, score: typeof evt.score === 'number' ? (evt.score as number) : null, judgeNote: String(evt.note ?? '') }
+                ? { ...j, score: typeof evt.score === 'number' ? (evt.score as number) : null, judgeNote: String(evt.note ?? ''), review: evt.review as SwarmJob['review'] }
                 : j,
             ),
           },
@@ -333,7 +398,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
           run: {
             ...cur,
             jobs: cur.jobs.map((j) =>
-              j.id === id ? { ...j, status: 'done' as const, text: '(sprunget over)', finishedAt: Date.now() } : j,
+              j.id === id ? { ...j, status: 'skipped' as const, text: '(sprunget over)', finishedAt: Date.now() } : j,
             ),
           },
         });
@@ -341,7 +406,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
       }
       case 'job_done': {
         if (!cur) break;
-        const r = evt.result as { jobId: string; title?: string; text: string; artifacts?: SwarmJob['artifacts'] } | undefined;
+        const r = evt.result as { jobId: string; title?: string; text: string; textTruncated?: boolean; artifacts?: SwarmJob['artifacts'] } | undefined;
         if (!r) break;
         maybeNotify('done', 'AI-job færdigt', r.title ?? cur.goal);
         set({
@@ -349,13 +414,20 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
             ...cur,
             jobs: cur.jobs.map((j) =>
               j.id === r.jobId
-                ? { ...j, status: 'done' as const, text: String(r.text ?? '').slice(0, 2000), artifacts: r.artifacts ?? [], finishedAt: Date.now() }
+                ? { ...j, status: 'done' as const, text: String(r.text ?? '').slice(0, 2000), textTruncated: Boolean(r.textTruncated || String(r.text ?? '').length > 2000), artifacts: r.artifacts ?? [], finishedAt: Date.now() }
                 : j,
             ),
           },
         });
         break;
       }
+      case 'job_media': {
+        if (!cur) break;
+        set({ run: { ...cur, jobs: cur.jobs.map(j => j.id === evt.jobId ? { ...j, media: evt.media as SwarmJob['media'] } : j) } });
+        break;
+      }
+      case 'job_blocked':
+      case 'job_cancelled':
       case 'job_error': {
         if (!cur) break;
         const id = String(evt.jobId ?? '');
@@ -365,12 +437,19 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
           run: {
             ...cur,
             jobs: cur.jobs.map((j) =>
-              j.id === id ? { ...j, status: 'error' as const, error: String(evt.error ?? ''), finishedAt: Date.now() } : j,
+              j.id === id ? { ...j, status: (evt.type === 'job_blocked' ? 'blocked' : evt.type === 'job_cancelled' ? 'cancelled' : 'error') as SwarmJob['status'], error: String(evt.error ?? ''), ...(evt.text ? { text: String(evt.text), textTruncated: Boolean(evt.textTruncated) } : {}), finishedAt: Date.now() } : j,
             ),
           },
         });
         break;
       }
+      case 'verification':
+        if (cur) set({ run: { ...cur, verification: evt.verification as SwarmRun['verification'], evidence: evt.evidence as SwarmRun['evidence'], verificationHistory: withVerificationAttempt(cur, evt) } });
+        break;
+      case 'run_finished':
+        if (cur) reconcileTask({ ...cur, status: evt.status as SwarmRun['status'] });
+        if (cur) set({ run: { ...cur, status: evt.status as SwarmRun['status'], finishedAt: Date.now() }, approval: null });
+        break;
       case 'done':
         if (cur) {
           maybeNotify('done', 'AI-kørsel færdig', cur.goal);
@@ -380,7 +459,7 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
       case 'error':
         if (cur && evt.runId) {
           maybeNotify('error', 'AI-kørsel slog fejl', String(evt.error ?? cur.goal));
-          set({ run: { ...cur, status: 'error', finishedAt: Date.now() } });
+          set({ run: { ...cur, status: (evt.status as SwarmRun['status']) ?? 'error', finishedAt: Date.now() }, approval: null });
         }
         break;
       default:
@@ -388,6 +467,20 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
     }
   },
 }));
+
+function reconcileTask(run: SwarmRun) {
+  if (run.status !== 'running' && run.status !== 'awaiting_approval') {
+    const store = useStore.getState();
+    for (const chat of store.aiChats) for (const msg of chat.messages) {
+      if (msg.runId !== run.runId || !run.finishedAt || msg.runFinishedAt === run.finishedAt) continue;
+      const delivered = (run.results ?? []).map(r => {
+        const text = run.projectPlan && r.text.includes('"orbitProjectPlan"') ? `${run.projectPlan.summary}\n\n**Første milepæl:** ${run.projectPlan.firstMilestone}\n\n${run.projectPlan.tasks.length} opgaveforslag er klar under **Gennemse projektplan** i Orbit Live.` : r.text;
+        return `### ${r.title}\n\n${text.slice(0, 6000)}${text.length > 6000 || r.textTruncated ? '\n\nUddrag — resten findes i den fulde leverance.' : ''}`;
+      }).join('\n\n');
+      store.updateAiMessage(chat.id, msg.id, { runFinishedAt: run.finishedAt, status: run.status === 'done' ? 'done' : 'error', text: `${delivered || msg.text}\n\n${run.status === 'done' ? 'Leveret til gennemgang.' : `Kørselsstatus: ${run.status}. Se Orbit Live for fejl og næste skridt.`}\n\n[Hent fuld leverance](http://127.0.0.1:4310/api/ai/runs/${run.runId}/export)`, artifacts: (run.results ?? []).flatMap(r => r.artifacts ?? []) });
+    }
+  }
+}
 
 /* ---------- WebSocket-forbindelse ---------- */
 
@@ -399,15 +492,16 @@ let started = false;
 
 async function syncState() {
   try {
-    const r = await fetch(`${API}/api/ai/swarm`);
+    const r = await fetch(`${API}/api/ai/swarm?view=live`);
     const j = await r.json();
-    if (j?.ok) useSwarm.getState().setRun(j.run ?? null);
+    if (j?.ok) { useSwarm.setState({ permissions: Array.isArray(j.permissions) ? j.permissions : [], processes: Array.isArray(j.processes) ? j.processes : [] }); useSwarm.getState().setRun(j.run ? presentRun(j.run) : null); if (j.run) reconcileTask(j.run); }
   } catch { /* companion offline */ }
 }
 
 export function connectSwarm(): void {
   if (started) return;
   started = true;
+  const liveEvents = createLiveEventBuffer(events => { for (const event of events) useSwarm.getState().apply(event); });
   const connect = () => {
     try {
       ws = new WebSocket(WS_URL);
@@ -424,11 +518,13 @@ export function connectSwarm(): void {
     ws.onmessage = (m) => {
       try {
         const obj = JSON.parse(String(m.data));
+        if (obj?.kind === 'ai' && ['permission_request', 'permission_resolved'].includes(obj.type)) void syncState();
         // Serveren sender AI-hændelser med kind:'ai' (obj.type er hændelsestypen).
-        if (obj?.kind === 'ai' || obj?.type === 'ai') useSwarm.getState().apply(obj);
+        if (obj?.kind === 'ai' || obj?.type === 'ai') liveEvents.push(obj);
       } catch { /* ignorer ikke-JSON */ }
     };
     ws.onclose = () => {
+      liveEvents.flush();
       useSwarm.getState().setConnected(false);
       scheduleReconnect();
     };
@@ -471,22 +567,37 @@ export interface SwarmEvent {
   [key: string]: unknown;
 }
 
+function withVerificationAttempt(run: SwarmRun, evt: Record<string, unknown>) {
+  const attempt = evt.attempt as NonNullable<SwarmRun['verificationHistory']>[number] | undefined;
+  return attempt ? [...(run.verificationHistory ?? []).filter(item => item.number !== attempt.number), attempt] : run.verificationHistory;
+}
+
 function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
   switch (evt.type) {
+    case 'autonomy':
+      return { ...run, autonomy: evt.autonomy as SwarmRun['autonomy'] };
+    case 'context_status':
+      return { ...run, contextStatus: evt.contextStatus as SwarmRun['contextStatus'] };
     case 'run_start':
       return {
         ...run,
         startedAt: Number(evt.at) || Date.parse(String(evt.startedAt ?? '')) || Date.now(),
         status: 'running',
+        serviceCalls: [],
         jobs: [],
         notes: [],
         finishedAt: null,
       };
+    case 'service_call_start':
+      return { ...run, serviceCalls: [...(run.serviceCalls ?? []).filter(call => call.callId !== (evt.call as ServiceCall).callId), evt.call as ServiceCall] };
+    case 'service_call_end':
+      return { ...run, serviceCalls: (run.serviceCalls ?? []).filter(call => call.callId !== evt.callId) };
     case 'orchestrator':
       return { ...run, orchestratorId: (evt.serviceId as string) ?? null };
     case 'plan':
       return {
         ...run,
+        status: evt.paused ? 'awaiting_approval' : 'running',
         jobs: ((evt.jobs as SwarmJob[] | undefined) ?? []).map((j) => ({
           ...j,
           status: 'queued' as const,
@@ -502,6 +613,12 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
           subagents: [],
         })),
       };
+    case 'job_added':
+      return presentRun({ ...run, jobs: [...run.jobs, { ...(evt.job as SwarmJob), status: 'queued' }] });
+    case 'job_action': {
+      const action = evt.action as NonNullable<SwarmJob['actions']>[number];
+      return { ...run, jobs: run.jobs.map(j => j.id === evt.jobId ? { ...j, actions: [...(j.actions ?? []).filter(a => a.id !== action.id).slice(-99), action] } : j) };
+    }
     case 'job_start': {
       const job = evt.job as { id: string } | undefined;
       return { ...run, jobs: run.jobs.map((j) => (j.id === job?.id ? { ...j, status: 'running' as const, startedAt: Number(evt.at) } : j)) };
@@ -523,7 +640,7 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
                 ...j,
                 subagents: [
                   ...(j.subagents ?? []).filter((x) => x.subId !== sid),
-                  { subId: sid, name: String(evt.name ?? 'Underagent'), status: 'running' as const, startedAt: Number(evt.at), finishedAt: null, text: '' },
+                  { subId: sid, serviceId: typeof evt.serviceId === 'string' ? evt.serviceId : undefined, callId: typeof evt.callId === 'string' ? evt.callId : undefined, parentSubId: typeof evt.parentSubId === 'string' ? evt.parentSubId : undefined, name: String(evt.name ?? 'Underagent'), status: 'running' as const, startedAt: Number(evt.at), finishedAt: null, text: '' },
                 ],
               }
             : j,
@@ -539,7 +656,7 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
             ? {
                 ...j,
                 subagents: (j.subagents ?? []).map((x) =>
-                  x.subId === sid ? { ...x, status: 'done' as const, text: String(evt.text ?? '').slice(0, 400), finishedAt: Number(evt.at) } : x,
+                  x.subId === sid ? { ...x, status: (evt.error ? 'error' : 'done') as SwarmSubagent['status'], text: String(evt.text ?? '').slice(0, 400), finishedAt: Number(evt.at) } : x,
                 ),
               }
             : j,
@@ -549,25 +666,29 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
     case 'job_skipped':
       return {
         ...run,
-        jobs: run.jobs.map((j) => (j.id === String(evt.jobId ?? '') ? { ...j, status: 'done' as const, text: '(sprunget over)', finishedAt: Number(evt.at) } : j)),
+        jobs: run.jobs.map((j) => (j.id === String(evt.jobId ?? '') ? { ...j, status: 'skipped' as const, text: '(sprunget over)', finishedAt: Number(evt.at) } : j)),
       };
     case 'job_done': {
-      const r = evt.result as { jobId: string; text: string; artifacts?: SwarmJob['artifacts'] } | undefined;
+      const r = evt.result as { jobId: string; text: string; textTruncated?: boolean; artifacts?: SwarmJob['artifacts'] } | undefined;
       if (!r) return run;
       return {
         ...run,
         jobs: run.jobs.map((j) =>
           j.id === r.jobId
-            ? { ...j, status: 'done' as const, text: String(r.text ?? '').slice(0, 2000), artifacts: r.artifacts ?? [], finishedAt: Number(evt.at) }
+            ? { ...j, status: 'done' as const, text: String(r.text ?? '').slice(0, 2000), textTruncated: Boolean(r.textTruncated || String(r.text ?? '').length > 2000), artifacts: r.artifacts ?? [], finishedAt: Number(evt.at) }
             : j,
         ),
       };
     }
+    case 'job_media':
+      return { ...run, jobs: run.jobs.map(j => j.id === evt.jobId ? { ...j, media: evt.media as SwarmJob['media'] } : j) };
+    case 'job_blocked':
+    case 'job_cancelled':
     case 'job_error':
       return {
         ...run,
         jobs: run.jobs.map((j) =>
-          j.id === String(evt.jobId ?? '') ? { ...j, status: 'error' as const, error: String(evt.error ?? ''), finishedAt: Number(evt.at) } : j,
+          j.id === String(evt.jobId ?? '') ? { ...j, status: (evt.type === 'job_blocked' ? 'blocked' : evt.type === 'job_cancelled' ? 'cancelled' : 'error') as SwarmJob['status'], error: String(evt.error ?? ''), ...(evt.text ? { text: String(evt.text), textTruncated: Boolean(evt.textTruncated) } : {}), finishedAt: Number(evt.at) } : j,
         ),
       };
     case 'job_judged':
@@ -575,14 +696,18 @@ function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
         ...run,
         jobs: run.jobs.map((j) =>
           j.id === String(evt.jobId ?? '')
-            ? { ...j, score: typeof evt.score === 'number' ? (evt.score as number) : null, judgeNote: String(evt.note ?? '') }
+            ? { ...j, score: typeof evt.score === 'number' ? (evt.score as number) : null, judgeNote: String(evt.note ?? ''), review: evt.review as SwarmJob['review'] }
             : j,
         ),
       };
+    case 'verification':
+      return { ...run, verification: evt.verification as SwarmRun['verification'], evidence: evt.evidence as SwarmRun['evidence'], verificationHistory: withVerificationAttempt(run, evt) };
     case 'done':
       return { ...run, status: 'done', finishedAt: Number(evt.at) };
+    case 'run_finished':
+      return { ...run, status: evt.status as SwarmRun['status'], finishedAt: Number(evt.at) };
     case 'error':
-      return { ...run, status: 'error', finishedAt: Number(evt.at) };
+      return { ...run, status: (evt.status as SwarmRun['status']) ?? 'error', finishedAt: Number(evt.at) };
     default:
       return run;
   }
@@ -597,7 +722,7 @@ export function replayEvents(base: SwarmRun, events: SwarmEvent[], upTo: number)
     run = applyEventPure(run, evt);
   }
   if (upTo >= (sorted[sorted.length - 1]?.at ?? Infinity) && run.status === 'running') {
-    run = { ...run, status: base.status === 'error' ? 'error' : 'done', finishedAt: sorted[sorted.length - 1]?.at ?? base.finishedAt };
+    run = { ...run, status: base.status, finishedAt: sorted[sorted.length - 1]?.at ?? base.finishedAt };
   }
   return run;
 }

@@ -1,0 +1,229 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, basename } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { createRunWorktree, inspectRepository, repositoryReadiness, runWorktreeArtifacts as collectRunArtifacts, snapshotRunArtifacts, runArtifactPath, verifyRepository, repositoryEvidence } from '../server/ai-repository.mjs';
+const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+const runWorktreeArtifacts = (root, runId, baseCommit, baseline) => collectRunArtifacts(root, runId, baseCommit, baseline,
+  { artifactsDir: mkdtempSync(join(tmpdir(), 'orbit-repo-artifact-store-')), jobId: 'test-job' });
+
+test('repository readiness reveals fixes on another branch without changing the checkout', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-readiness-'));
+  git(root, 'init', '-q'); writeFileSync(join(root, 'project.godot'), 'config_version=5');
+  git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'Base project');
+  const original = git(root, 'rev-parse', 'HEAD'), branch = git(root, 'branch', '--show-current');
+  git(root, 'checkout', '-qb', 'orbit/texture-repair'); writeFileSync(join(root, 'texture.txt'), 'fixed');
+  git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'Restore textures');
+  git(root, 'checkout', '-q', branch); writeFileSync(join(root, 'notes.txt'), 'Uncommitted user notes');
+  const report = await repositoryReadiness(root);
+  assert.equal(report.baseCommit, original); assert.equal(report.godotProject, true);
+  assert.equal(report.changedFileCount, 1); assert.match(report.changedFiles[0], /notes.txt/);
+  assert.equal(report.otherBranches[0].branch, 'orbit/texture-repair');
+  assert.equal(report.otherBranches[0].ahead, 1); assert.equal(report.otherBranches[0].behind, 0);
+  assert.equal(report.otherBranches[0].subject, 'Restore textures');
+  assert.equal(report.suggestedBranch, 'orbit/texture-repair');
+  assert.equal(report.recentCommits[0].subject, 'Base project'); assert.equal(report.stable, true);
+  assert.equal(git(root, 'rev-parse', 'HEAD'), original); assert.equal(readFileSync(join(root, 'notes.txt'), 'utf8'), 'Uncommitted user notes');
+});
+
+test('a selected descendant branch becomes the isolated starting commit without changing source', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-selected-branch-'));
+  git(root, 'init', '-q'); writeFileSync(join(root, 'base.txt'), 'base'); git(root, 'add', '.');
+  git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'base');
+  const sourceHead = git(root, 'rev-parse', 'HEAD'), sourceBranch = git(root, 'branch', '--show-current');
+  git(root, 'checkout', '-qb', 'orbit/route-fix'); writeFileSync(join(root, 'route.txt'), 'new route'); git(root, 'add', '.');
+  git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'route');
+  git(root, 'checkout', '-qb', 'orbit/texture-fix'); writeFileSync(join(root, 'texture.txt'), 'new texture'); git(root, 'add', '.');
+  git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'texture');
+  const selectedHead = git(root, 'rev-parse', 'HEAD'); git(root, 'checkout', '-q', sourceBranch);
+  assert.equal((await repositoryReadiness(root)).suggestedBranch, 'orbit/texture-fix');
+  const isolated = await createRunWorktree(root, `${root}-work`, 'branch-choice', undefined, 'orbit/texture-fix');
+  assert.equal(isolated.baseCommit, selectedHead); assert.equal(isolated.sourceCommit, sourceHead);
+  assert.equal(readFileSync(join(isolated.workDir, 'route.txt'), 'utf8'), 'new route');
+  assert.equal(readFileSync(join(isolated.workDir, 'texture.txt'), 'utf8'), 'new texture');
+  assert.equal(git(root, 'rev-parse', 'HEAD'), sourceHead);
+  assert.equal(git(root, 'branch', '--show-current'), sourceBranch);
+  await assert.rejects(createRunWorktree(root, `${root}-bad`, 'invalid-choice', undefined, 'other/unknown'), /findes ikke længere/);
+});
+
+test('repository does not suggest a branch when descendant fixes diverge', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-branch-choice-'));
+  git(root, 'init', '-q'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'base');
+  const sourceBranch = git(root, 'branch', '--show-current');
+  git(root, 'checkout', '-qb', 'orbit/route'); writeFileSync(join(root, 'route.txt'), 'route'); git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'route');
+  git(root, 'checkout', '-q', sourceBranch);
+  git(root, 'checkout', '-qb', 'orbit/art'); writeFileSync(join(root, 'art.txt'), 'art'); git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'art');
+  git(root, 'checkout', '-q', sourceBranch);
+  const report = await repositoryReadiness(root);
+  assert.equal(report.otherBranches.length, 2);
+  assert.equal(report.suggestedBranch, null);
+  // Two names for one tip must not eliminate that tip from the comparison and
+  // make the other, divergent tip look like the only possible continuation.
+  git(root, 'branch', 'orbit/route-alias', 'orbit/route');
+  const aliased = await repositoryReadiness(root);
+  assert.equal(aliased.otherBranches.length, 3);
+  assert.equal(aliased.suggestedBranch, null);
+});
+
+test('repository never recommends preserved failed attempts as the next branch', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-failed-branch-'));
+  git(root, 'init', '-q'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'base');
+  const sourceBranch = git(root, 'branch', '--show-current');
+  git(root, 'checkout', '-qb', 'orbit-attempt/run/job');
+  git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'rejected attempt');
+  git(root, 'checkout', '-q', sourceBranch);
+  const report = await repositoryReadiness(root);
+  assert.equal(report.otherBranches[0].branch, 'orbit-attempt/run/job');
+  assert.equal(report.suggestedBranch, null);
+  git(root, 'checkout', '-qb', 'orbit/accepted');
+  git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'accepted fix');
+  git(root, 'checkout', '-q', sourceBranch);
+  assert.equal((await repositoryReadiness(root)).suggestedBranch, 'orbit/accepted');
+});
+
+test('visual evidence lists real worktree captures and confines reads to image report paths', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-images-'));
+  git(root, 'init', '-q'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'base');
+  mkdirSync(join(root, 'reports', 'screenshots'), { recursive: true });
+  writeFileSync(join(root, 'reports', 'screenshots', 'before.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  writeFileSync(join(root, 'secret.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  const images = await runWorktreeArtifacts(root, 'run-1');
+  assert.deepEqual(images.map(image => image.name), ['reports/screenshots/before.png']);
+  assert.equal(runArtifactPath(root, images[0].name), join(root, 'reports', 'screenshots', 'before.png'));
+  assert.throws(() => runArtifactPath(root, '../reports/screenshots/before.png'));
+  assert.throws(() => runArtifactPath(root, 'secret.png'));
+});
+
+test('visual evidence excludes images inherited from the selected base commit', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-image-provenance-'));
+  git(root, 'init', '-q'); mkdirSync(join(root, 'reports', 'screenshots'), { recursive: true });
+  writeFileSync(join(root, 'reports', 'screenshots', 'old.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'existing visual');
+  const baseCommit = git(root, 'rev-parse', 'HEAD');
+  writeFileSync(join(root, 'reports', 'screenshots', 'after.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'new visual');
+  assert.deepEqual((await runWorktreeArtifacts(root, 'run-visual', baseCommit)).map(item => item.name), ['reports/screenshots/after.png']);
+});
+
+test('visual evidence includes new captures in ignored report directories', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-ignored-capture-'));
+  git(root, 'init', '-q'); writeFileSync(join(root, '.gitignore'), 'reports/\n');
+  git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'ignore generated reports');
+  const baseCommit = git(root, 'rev-parse', 'HEAD');
+  mkdirSync(join(root, 'reports', 'screenshots'), { recursive: true });
+  writeFileSync(join(root, 'reports', 'screenshots', 'actual.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  assert.deepEqual((await runWorktreeArtifacts(root, 'run-ignored', baseCommit)).map(item => item.name), ['reports/screenshots/actual.png']);
+});
+
+test('each job includes only its new or changed generated captures', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-job-captures-'));
+  git(root, 'init', '-q'); writeFileSync(join(root, '.gitignore'), 'reports/\n');
+  git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'base');
+  mkdirSync(join(root, 'reports'), { recursive: true });
+  mkdirSync(join(root, 'visual'), { recursive: true });
+  writeFileSync(join(root, 'reports', 'previous.png'), 'previous ignored capture');
+  writeFileSync(join(root, 'visual', 'previous.png'), 'previous untracked capture');
+  const baseCommit = git(root, 'rev-parse', 'HEAD');
+  const baseline = await snapshotRunArtifacts(root);
+  writeFileSync(join(root, 'code.txt'), 'unrelated code change');
+  git(root, 'add', 'code.txt'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'code only');
+  assert.deepEqual(await runWorktreeArtifacts(root, 'code-job', baseCommit, baseline), []);
+  const nextBase = git(root, 'rev-parse', 'HEAD'), nextBaseline = await snapshotRunArtifacts(root);
+  writeFileSync(join(root, 'reports', 'previous.png'), 'updated ignored capture with new contents');
+  writeFileSync(join(root, 'reports', 'new.png'), 'new ignored capture');
+  writeFileSync(join(root, 'visual', 'new.png'), 'new tracked capture');
+  git(root, 'add', 'visual/new.png'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'visual update');
+  assert.deepEqual((await runWorktreeArtifacts(root, 'visual-job', nextBase, nextBaseline)).map(item => item.name).sort(),
+    ['reports/new.png', 'reports/previous.png', 'visual/new.png']);
+});
+
+test('isolated worktree preserves source checkout and records actual checks and commit', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-repo-'));
+  git(root, 'init', '-q');
+  writeFileSync(join(root, 'game.txt'), 'original');
+  git(root, 'add', '.');
+  git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'base');
+  const source = await inspectRepository(root);
+  const workDir = join(root, '..', `${basename(root)}-work`);
+  const repo = await createRunWorktree(root, workDir, 'test');
+  writeFileSync(join(workDir, 'game.txt'), 'fixed');
+  assert.equal(readFileSync(join(root, 'game.txt'), 'utf8'), 'original');
+  assert.equal(git(root, 'rev-parse', 'HEAD'), source.baseCommit);
+  const checks = await verifyRepository(workDir, [
+    { name: 'actual assertion', command: process.execPath, args: ['-e', "if(require('fs').readFileSync('game.txt','utf8')!=='fixed') process.exit(1)"] },
+    { name: 'failure', command: process.execPath, args: ['-e', 'process.exit(7)'] },
+    { name: 'must not run', command: process.execPath, args: ['-e', "require('fs').writeFileSync('should-not-exist','bad')"] },
+  ]);
+  assert.deepEqual(checks.map(c => c.exitCode), [0, 7]);
+  assert.equal(existsSync(join(workDir, 'should-not-exist')), false);
+  git(workDir, 'add', '.'); git(workDir, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'fixed');
+  const evidence = await repositoryEvidence(workDir, repo.baseCommit);
+  assert.deepEqual(evidence.changedFiles, ['game.txt']);
+  assert.notEqual(evidence.commit, source.baseCommit);
+});
+
+test('uncommitted source changes are never silently omitted', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-dirty-'));
+  git(root, 'init', '-q'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'base');
+  writeFileSync(join(root, 'unsaved'), 'work');
+  await assert.rejects(createRunWorktree(root, join(root, 'work'), 'test'), /lokale ændringer/);
+});
+
+test('successive worktrees carry verified commits and reject divergent source changes', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-chain-')), source = join(root, 'source');
+  const { mkdirSync } = await import('node:fs'); mkdirSync(source);
+  git(source, 'init', '-q'); git(source, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'base');
+  const sourceHead = git(source, 'rev-parse', 'HEAD');
+  const first = await createRunWorktree(source, join(root, 'first'), 'first');
+  writeFileSync(join(first.workDir, 'first.txt'), 'First delivery'); git(first.workDir, 'add', '.');
+  git(first.workDir, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'first');
+  const firstCommit = git(first.workDir, 'rev-parse', 'HEAD');
+  const second = await createRunWorktree(source, join(root, 'second'), 'second', firstCommit);
+  assert.equal(readFileSync(join(second.workDir, 'first.txt'), 'utf8'), 'First delivery');
+  assert.equal(second.baseCommit, firstCommit); assert.equal(second.sourceCommit, sourceHead);
+  assert.equal(git(source, 'rev-parse', 'HEAD'), sourceHead); assert.equal(existsSync(join(source, 'first.txt')), false);
+  writeFileSync(join(source, 'separate.txt'), 'User work'); git(source, 'add', '.');
+  git(source, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'diverged');
+  await assert.rejects(createRunWorktree(source, join(root, 'third'), 'third', firstCommit), /forskellige ændringer/);
+  git(source, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'merge', '--no-edit', firstCommit);
+  const integrated = await createRunWorktree(source, join(root, 'integrated'), 'integrated', firstCommit);
+  assert.equal(readFileSync(join(integrated.workDir, 'separate.txt'), 'utf8'), 'User work');
+  assert.equal(readFileSync(join(integrated.workDir, 'first.txt'), 'utf8'), 'First delivery');
+  assert.equal(integrated.baseCommit, git(source, 'rev-parse', 'HEAD'));
+});
+
+test('check progress and process identity are observable before completion, cancellation stops children', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-check-cancel-')), marker = join(root, 'child-pulse');
+  const controller = new AbortController(), progress = [], processes = [];
+  const childScript = `const fs=require('fs'); process.on('SIGTERM',()=>{}); setInterval(()=>fs.writeFileSync(${JSON.stringify(marker)},String(Date.now())),20);`;
+  const parentScript = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(childScript)}],{stdio:'ignore'}); setInterval(()=>{},1000);`;
+  const pending = verifyRepository(root, [
+    { command: process.execPath, args: ['-e', 'console.log("first finished")'], name: 'first' },
+    { command: process.execPath, args: ['-e', parentScript], name: 'second' },
+    { command: process.execPath, args: ['-e', 'process.exit(99)'], name: 'never' },
+  ], controller.signal, { onProgress: value => progress.push(value), onProcess: value => processes.push(value) });
+  try {
+    for (let i = 0; i < 200 && !existsSync(marker); i++) await new Promise(resolve => setTimeout(resolve, 25));
+    assert.ok(existsSync(marker), 'child process started');
+    assert.deepEqual(progress.at(-1).map(item => item.status), ['passed', 'running']);
+    assert.ok(processes.some(item => item.checkName === 'second' && !item.finished && item.pid > 0));
+  } finally { controller.abort(); }
+  const results = await pending;
+  assert.deepEqual(results.map(item => item.status), ['passed', 'cancelled']);
+  assert.equal(results[1].exitCode, null);
+  assert.equal(processes.filter(item => !item.finished).length, processes.filter(item => item.finished).length);
+  const pulse = readFileSync(marker, 'utf8');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(readFileSync(marker, 'utf8'), pulse, 'child cannot keep writing after cancellation');
+});
+
+test('check timeout and output limits cannot look like successful exits', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-check-limit-'));
+  const timed = await verifyRepository(root, [{ command: process.execPath, args: ['-e', 'setInterval(()=>{},1000)'] }], undefined, { timeoutMs: 100 });
+  assert.equal(timed[0].status, 'failed'); assert.equal(timed[0].exitCode, null); assert.match(timed[0].output, /tidsgrænsen/);
+  const noisy = await verifyRepository(root, [{ command: process.execPath, args: ['-e', "process.stdout.write('x'.repeat(3*1024*1024));setInterval(()=>{},1000)"] }]);
+  assert.equal(noisy[0].status, 'failed'); assert.equal(noisy[0].exitCode, null); assert.match(noisy[0].output, /2 MB/);
+  assert.ok(noisy[0].output.length <= 20000);
+});

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Archive, ChevronRight, Crosshair, Moon, Plus, RotateCcw, Search, Sun, Trash2, X } from 'lucide-react';
+import { Archive, ChevronLeft, ChevronRight, Crosshair, Moon, Plus, RotateCcw, Search, Sun, Trash2, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { VIEWS } from '../lib/nav';
 import type { Project } from '../lib/types';
@@ -10,6 +10,7 @@ import { Avatar } from './common';
 import NotificationCenter from './NotificationCenter';
 import PresenceCursors from './PresenceCursors';
 import RouteTransition from './RouteTransition';
+import { PanelErrorBoundary } from './PanelErrorBoundary';
 import ThemePicker from './ThemePicker';
 import TvMode from './TvMode';
 import { PresentationToggle } from './PresentationMode';
@@ -44,6 +45,9 @@ export default function AppShell() {
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [tvMode, setTvMode] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
+  const [allTools, setAllTools] = useState(false);
+  const [navExpanded, setNavExpanded] = useState(() => { try { return localStorage.getItem('orbit-navigation-expanded') !== 'false'; } catch { return true; } });
+  const toggleNavigation = () => setNavExpanded(value => { try { localStorage.setItem('orbit-navigation-expanded', String(!value)); } catch { /* Preferences remain usable in this tab. */ } return !value; });
 
   // TV-tilstand: TvMode-komponenten dispatcher 'orbit:tv' – skjul app-chrome
   useEffect(() => {
@@ -74,15 +78,15 @@ export default function AppShell() {
   }, []);
 
   const me = users.find((u) => u.id === currentUserId);
-  const currentView = VIEWS.find((v) => location.pathname.startsWith(v.to));
+  const workspacePath = location.pathname.startsWith('/swarm') ? '/chat' : location.pathname;
+  const currentView = VIEWS.find((v) => workspacePath.startsWith(v.to));
   const activeProject = projects.find((p) => p.id === activeProjectId);
   const activeProjects = projects.filter((p) => !p.archived);
   const archivedProjects = projects.filter((p) => p.archived);
 
-  // Enkel tilstand: kun kernevisninger (+ integrationer nederst)
-  const visibleViews = simpleMode
-    ? VIEWS.filter((v) => ['/idag', '/tavle', '/noter', '/min', '/aktivitet', '/integrationer'].includes(v.to))
-    : VIEWS;
+  // Keep daily navigation small; all existing views remain discoverable.
+  const coreRoutes = ['/idag', '/chat', '/tavle', '/noter', '/integrationer'];
+  const visibleViews = allTools && !simpleMode ? VIEWS : VIEWS.filter(v => coreRoutes.includes(v.to) || location.pathname === v.to);
 
   // Enkel tilstand: projekter grupperes i Arbejde / Privat
   const workProjects = activeProjects.filter((p) => !p.privateZone);
@@ -109,17 +113,17 @@ export default function AppShell() {
           ? 'bg-zinc-200/70 font-medium text-zinc-900 dark:bg-white/[0.08] dark:text-white'
           : 'text-zinc-600 hover:bg-zinc-200/50 dark:text-zinc-300 dark:hover:bg-white/[0.05]',
       )}
-      onClick={() => setActiveProject(p.id)}
     >
       <span className={cn('h-2.5 w-2.5 shrink-0 rounded-sm', `bg-${p.color}-500`)} />
-      <span className="flex-1 truncate text-left">{p.name}</span>
+      <button type="button" onClick={() => setActiveProject(p.id)} aria-pressed={activeProjectId === p.id} className="min-w-0 flex-1 truncate text-left" aria-label={`Vælg projekt ${p.name}`}>{p.name}</button>
       <button
         onClick={(e) => {
           e.stopPropagation();
           updateProject(p.id, { archived: true });
         }}
         title={t('shell.archiveProject')}
-        className="hidden shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-amber-500 group-hover:grid dark:text-zinc-500 dark:hover:text-amber-400"
+        aria-label={`${t('shell.archiveProject')} ${p.name}`}
+        className="grid opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-amber-500 group-hover:grid dark:text-zinc-500 dark:hover:text-amber-400"
       >
         <Archive className="h-3.5 w-3.5" />
       </button>
@@ -151,11 +155,12 @@ export default function AppShell() {
       <nav
         className={cn(
           'flex w-14 shrink-0 flex-col items-center gap-1 border-r border-zinc-200/80 bg-white py-3 dark:border-white/[0.06] dark:bg-[#131417]',
+          navExpanded && 'xl:w-40 xl:items-stretch xl:px-2',
           tvMode && 'hidden',
         )}
       >
         <div
-          className="mb-3 grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-bold text-white shadow-glow"
+          className="mb-3 flex h-9 w-9 items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-sm font-bold text-white shadow-glow"
           title="Orbit"
         >
           O
@@ -168,16 +173,19 @@ export default function AppShell() {
             aria-label={t(view.labelKey)}
             className={({ isActive }) =>
               cn(
-                'grid h-10 w-10 place-items-center rounded-xl transition-all duration-150',
-                isActive
+                'flex h-10 w-10 items-center justify-center gap-2 rounded-xl transition-colors duration-150',
+                navExpanded && 'xl:w-full xl:justify-start xl:px-3',
+                isActive || (view.to === '/chat' && workspacePath === '/chat')
                   ? 'bg-indigo-500/15 text-indigo-500 dark:bg-indigo-400/15 dark:text-indigo-300'
                   : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/[0.06] dark:hover:text-zinc-100',
               )
             }
           >
-            <view.icon className="h-5 w-5" />
+            <view.icon className="h-5 w-5 shrink-0" /><span className={cn('hidden truncate text-xs font-medium', navExpanded && 'xl:inline')}>{t(view.labelKey)}</span>
           </NavLink>
         ))}
+        {!simpleMode && <button onClick={() => setAllTools(v => !v)} aria-expanded={allTools} title={allTools ? 'Vis færre værktøjer' : 'Alle værktøjer'} aria-label={allTools ? 'Vis færre værktøjer' : 'Alle værktøjer'} className={cn('flex h-10 w-10 shrink-0 items-center justify-center gap-2 rounded-xl text-zinc-500 hover:bg-indigo-500/10', navExpanded && 'xl:w-full xl:justify-start xl:px-3')}><ChevronRight className={cn('h-5 w-5 shrink-0', allTools && 'rotate-180')} /><span className={cn('hidden truncate text-xs', navExpanded && 'xl:inline')}>{allTools ? 'Færre værktøjer' : 'Alle værktøjer'}</span></button>}
+        <button type="button" onClick={toggleNavigation} aria-label={navExpanded ? 'Skjul menutekster' : 'Vis menutekster'} title={navExpanded ? 'Skjul menutekster' : 'Vis menutekster'} className="hidden xl:flex h-9 w-full items-center justify-center rounded-xl text-zinc-500 hover:bg-indigo-500/10">{navExpanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}</button>
         <div className="mt-auto flex flex-col items-center gap-2">
           <button
             onClick={toggleTheme}
@@ -193,8 +201,8 @@ export default function AppShell() {
       {/* Workspace-panel */}
       <aside
         className={cn(
-          'flex w-64 shrink-0 flex-col border-r border-zinc-200/80 bg-zinc-50/60 dark:border-white/[0.06] dark:bg-[#1a1b1f]/60',
-          tvMode && 'hidden',
+          'hidden md:flex w-64 shrink-0 flex-col border-r border-zinc-200/80 bg-zinc-50/60 dark:border-white/[0.06] dark:bg-[#1a1b1f]/60',
+          (tvMode || workspacePath.startsWith('/chat')) && '!hidden',
         )}
       >
         <div className="flex items-center gap-2.5 px-4 pb-2 pt-4">
@@ -202,7 +210,7 @@ export default function AppShell() {
             N
           </div>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-zinc-800 dark:text-zinc-100">Nordlys ApS</p>
+            <p className="truncate text-sm font-semibold text-zinc-800 dark:text-zinc-100">Orbit Workspace</p>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t('shell.workspace')}</p>
           </div>
         </div>
@@ -315,17 +323,17 @@ export default function AppShell() {
                         ? 'bg-zinc-200/70 text-zinc-900 dark:bg-white/[0.08] dark:text-white'
                         : 'text-zinc-500 hover:bg-zinc-200/50 dark:text-zinc-400 dark:hover:bg-white/[0.05]',
                     )}
-                    onClick={() => setActiveProject(p.id)}
                   >
                     <span className={cn('h-2.5 w-2.5 shrink-0 rounded-sm opacity-60', `bg-${p.color}-500`)} />
-                    <span className="flex-1 truncate text-left">{p.name}</span>
+                    <button type="button" onClick={() => setActiveProject(p.id)} aria-pressed={activeProjectId === p.id} className="min-w-0 flex-1 truncate text-left" aria-label={`Vælg projekt ${p.name}`}>{p.name}</button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         updateProject(p.id, { archived: false });
                       }}
                       title={t('shell.reactivate')}
-                      className="hidden shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-emerald-500 group-hover:grid dark:text-zinc-500 dark:hover:text-emerald-400"
+                      aria-label={`${t('shell.reactivate')} ${p.name}`}
+                      className="grid opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-emerald-500 group-hover:grid dark:text-zinc-500 dark:hover:text-emerald-400"
                     >
                       <RotateCcw className="h-3.5 w-3.5" />
                     </button>
@@ -337,7 +345,8 @@ export default function AppShell() {
                         }
                       }}
                       title={t('shell.deleteForever')}
-                      className="hidden shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-rose-500 group-hover:grid dark:text-zinc-500 dark:hover:text-rose-400"
+                      aria-label={`${t('shell.deleteForever')} ${p.name}`}
+                      className="grid opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-rose-500 group-hover:grid dark:text-zinc-500 dark:hover:text-rose-400"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -357,7 +366,7 @@ export default function AppShell() {
       <main className="flex min-w-0 flex-1 flex-col">
         <header
           className={cn(
-            'flex h-14 shrink-0 items-center gap-3 border-b border-zinc-200/80 bg-white/70 px-5 backdrop-blur dark:border-white/[0.06] dark:bg-[#17181c]/80',
+            'orbit-app-header flex h-14 shrink-0 items-center gap-3 border-b border-zinc-200/80 bg-white/70 px-5 backdrop-blur dark:border-white/[0.06] dark:bg-[#17181c]/80',
             tvMode && 'hidden',
           )}
         >
@@ -373,7 +382,8 @@ export default function AppShell() {
               </span>
             </>
           )}
-          <div className="ml-auto flex items-center gap-2">
+          <div className="orbit-header-actions ml-auto flex items-center gap-2">
+            <div className="orbit-header-secondary">
             <ThemePicker />
             <button
               onClick={() => setFocusMode((v) => !v)}
@@ -383,7 +393,9 @@ export default function AppShell() {
             >
               <Crosshair className="h-4 w-4" />
             </button>
+            </div>
             <NotificationCenter />
+            <div className="orbit-header-secondary">
             <PresentationToggle />
             <TvMode />
             <button
@@ -393,15 +405,13 @@ export default function AppShell() {
             >
               {lang === 'da' ? 'EN' : 'DA'}
             </button>
-            <button onClick={openPalette} className="btn-primary">
-              <Plus className="h-4 w-4" />
-              {t('shell.newTask')}
-            </button>
+            </div>
+            <button onClick={openPalette} className="btn-outline orbit-global-search" aria-label="Søg og åbn kommandoer (Ctrl+K)"><Search className="h-4 w-4" /><span>Søg og handlinger</span><kbd>Ctrl K</kbd></button>
           </div>
         </header>
         <div className={cn('min-h-0 flex-1 overflow-hidden', tvMode && 'p-6 lg:p-10')}>
           <RouteTransition>
-            <Outlet />
+            <PanelErrorBoundary label="Arbejdsfladen" resetKey={location.pathname}><Outlet /></PanelErrorBoundary>
           </RouteTransition>
         </div>
       </main>

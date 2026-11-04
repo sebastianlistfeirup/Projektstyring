@@ -1,0 +1,37 @@
+{
+  "ok": true,
+  "scenario": "serial execution, saved pause and same-worktree resume",
+  "sourceHashes": {
+    "ai-runtime.mjs": "91c7ca2945360a8812e9341a4b8c801786af851866499e7bb63befd9968d239a",
+    "ai-state.mjs": "c0c166d147bba2903071d551794798bd00cbb3bd6adb864bdd8eceb391c4b1b5",
+    "ai-services.mjs": "a57fcf65697301cd26d13f574598560b96cfc66b012fa2f595450c3df7d4e76f",
+    "ai-repository.mjs": "c389b6b749ec61bcce2351670b7fefc262101fba29d2957601ac3cd20361bf08",
+    "ai-check-process.mjs": "f6f115c27e37356227d6c9eb17e3e6f70aa9e4e2ae0c222fec443cc1d2939317"
+  },
+  "startedAt": "2026-10-30T12:26:23.897Z",
+  "durationMs": 3600564,
+  "samples": 719,
+  "maxParentRssBytes": 44675072,
+  "jobs": 6,
+  "secondsPerJob": 600,
+  "finalCommit": "0a9e9b7ca46564e2169e4017ac5feebc8eda6610",
+  "finalStatus": "done",
+  "checks": {
+    "status": "passed",
+    "checks": [
+      {
+        "command": "/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin/node",
+        "args": [
+          "-e",
+          "const fs=require('fs');for(let i=0;i<6;i++)if(fs.readFileSync('delivery-'+i+'.txt','utf8')!=='verified '+i+'\\n')process.exit(7);console.log('All deliveries verified');"
+        ],
+        "name": "Actual delivery files",
+        "startedAt": 1793366784408,
+        "finishedAt": 1793366784441,
+        "exitCode": 0,
+        "status": "passed",
+        "output": "All deliveries verified\n"
+      }
+    ]
+  }
+}

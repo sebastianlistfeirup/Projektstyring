@@ -3,16 +3,20 @@ import {
   DndContext,
   DragOverlay,
   PointerSensor,
+  KeyboardSensor,
   closestCorners,
+  rectIntersection,
   useDroppable,
   useSensor,
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
+  type CollisionDetection,
+  type KeyboardCoordinateGetter,
 } from '@dnd-kit/core';
-import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { CalendarClock, Check, ChevronDown, ChevronRight, Lock, MessageSquare, Plus, X } from 'lucide-react';
+import { CalendarClock, Check, ChevronDown, ChevronRight, GripVertical, Lock, MessageSquare, Plus, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { STATUS_META, PRIORITY_META } from '../lib/constants';
 import { useLang, t } from '../lib/i18n';
@@ -25,6 +29,33 @@ import Confetti from '../components/Confetti';
 const PRIORITY_CYCLE: Priority[] = ['none', 'low', 'medium', 'high', 'urgent'];
 
 const BOARD_COLUMNS: TaskStatus[] = ['todo', 'inprogress', 'inreview', 'done'];
+
+// A full-height empty column has distant bottom corners. Nearest corners alone
+// can therefore select a card in the previous column even while the moving
+// card is visibly inside the empty one. Prefer actual overlap for both sensors.
+const boardCollision: CollisionDetection = (args) => {
+  const intersections = rectIntersection(args);
+  return intersections.length ? intersections : closestCorners(args);
+};
+
+const boardKeyboardCoordinates: KeyboardCoordinateGetter = (event, args) => {
+  if (event.code !== 'ArrowLeft' && event.code !== 'ArrowRight') return sortableKeyboardCoordinates(event, args);
+  const { collisionRect, droppableContainers, droppableRects } = args.context;
+  if (!collisionRect) return;
+  event.preventDefault();
+  const columns = droppableContainers.getEnabled()
+    .filter(item => /^(col:|col-uge-)/.test(String(item.id)))
+    .flatMap(item => { const rect = droppableRects.get(item.id); return rect ? [rect] : []; })
+    .sort((a, b) => a.left - b.left);
+  const center = collisionRect.left + collisionRect.width / 2;
+  const current = columns.findIndex(rect => center >= rect.left && center <= rect.right);
+  if (current < 0) return;
+  const target = columns[current + (event.code === 'ArrowRight' ? 1 : -1)];
+  if (!target) return;
+  // Adjacent columns are explicit keyboard destinations. The generic getter
+  // otherwise sees the current column's padded edge as a move to the left.
+  return { x: target.left + 8, y: Math.max(target.top + 8, Math.min(collisionRect.top, target.bottom - collisionRect.height - 8)) };
+};
 
 const PRIORITY_STRIPE: Record<Priority, string> = {
   urgent: 'bg-rose-500',
@@ -67,7 +98,10 @@ export default function BoardView() {
   const [boardMode, setBoardMode] = useState<'status' | 'week'>('status');
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: boardKeyboardCoordinates }),
+  );
 
   const visible = useMemo(
     () =>
@@ -141,6 +175,7 @@ export default function BoardView() {
     if (!over) return;
     const taskId = String(active.id);
     const overId = String(over.id);
+    if (taskId === overId) return;
 
     if (boardMode === 'week') {
       const task = tasks.find((t) => t.id === taskId);
@@ -168,12 +203,21 @@ export default function BoardView() {
       const overTask = tasks.find((t) => t.id === overId);
       if (!overTask) return;
       targetStatus = overTask.status;
-      targetIndex = columnTasks(targetStatus)
-        .filter((t) => t.id !== taskId)
-        .findIndex((t) => t.id === overId);
+      // The target is its original index. Filtering the active task first
+      // made a one-step downward move resolve back to its existing position.
+      targetIndex = columnTasks(targetStatus).findIndex((t) => t.id === overId);
       if (targetIndex < 0) targetIndex = columnTasks(targetStatus).length;
     }
     reorderTask(taskId, targetStatus, targetIndex);
+  };
+
+  const destinationLabel = (id: string) => {
+    if (id.startsWith('col:')) return STATUS_META[id.slice(4) as TaskStatus]?.label;
+    if (id.startsWith('col-uge-')) return weekColumns.find(column => column.key === id.slice(8))?.label;
+    const task = tasks.find(item => item.id === id);
+    if (!task) return undefined;
+    const column = boardMode === 'week' ? weekColumns.find(item => item.key === weekBucket(task))?.label : STATUS_META[task.status].label;
+    return `${column}, ved ${task.title}`;
   };
 
   return (
@@ -185,6 +229,8 @@ export default function BoardView() {
           actions={
             <div className="flex items-center gap-0.5 rounded-full border border-zinc-200 bg-zinc-50 p-0.5 dark:border-white/10 dark:bg-white/[0.03]">
               <button
+                type="button"
+                aria-pressed={boardMode === 'status'}
                 onClick={() => setBoardMode('status')}
                 className={cn(
                   'rounded-full px-3 py-1 text-xs font-semibold transition-colors',
@@ -196,6 +242,8 @@ export default function BoardView() {
                 Status
               </button>
               <button
+                type="button"
+                aria-pressed={boardMode === 'week'}
                 onClick={() => setBoardMode('week')}
                 className={cn(
                   'rounded-full px-3 py-1 text-xs font-semibold transition-colors',
@@ -210,7 +258,20 @@ export default function BoardView() {
           }
         />
       </div>
-      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+      <p className="px-4 pb-3 text-xs text-zinc-500 dark:text-zinc-400 lg:px-6">Åbn en opgave på titlen. Brug flyttegrebet med musen eller mellemrum og piletaster; Escape annullerer.</p>
+      <DndContext sensors={sensors} collisionDetection={boardCollision} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setActiveTask(null)}
+        accessibility={{
+          screenReaderInstructions: { draggable: 'Tryk mellemrum eller Enter på flyttegrebet for at flytte opgaven. Brug piletaster til at vælge position og kolonne. Tryk mellemrum eller Enter for at placere den, eller Escape for at annullere.' },
+          announcements: {
+            onDragStart: ({ active }) => `Flytter ${tasks.find(task => task.id === active.id)?.title ?? 'opgave'}. Brug piletasterne.`,
+            onDragOver: ({ over }) => over ? `Valgt placering: ${destinationLabel(String(over.id)) ?? 'opgavens position'}.` : 'Ingen placering valgt.',
+            onDragEnd: ({ active }) => {
+              const task = useStore.getState().tasks.find(item => item.id === active.id);
+              return task ? `Flytning afsluttet. ${task.title} ligger i ${boardMode === 'week' ? weekColumns.find(column => column.key === weekBucket(task))?.label : STATUS_META[task.status].label}.` : 'Flytning afsluttet.';
+            },
+            onDragCancel: () => 'Flytningen er annulleret. Opgaven er ikke ændret.',
+          },
+        }}>
         <div className="flex flex-1 gap-4 overflow-x-auto px-4 pb-4 lg:px-6 lg:pb-6">
           {boardMode === 'status'
             ? BOARD_COLUMNS.map((status) => (
@@ -242,7 +303,7 @@ export default function BoardView() {
                 />
               ))}
         </div>
-        <DragOverlay>{activeTask && <TaskCard task={activeTask} dragging />}</DragOverlay>
+        <DragOverlay>{activeTask && <div aria-hidden="true" className="rounded-2xl border border-indigo-400 bg-white p-4 shadow-panel dark:bg-[#232429]"><p className="text-sm font-medium">{activeTask.title}</p><p className="mt-1 text-xs text-zinc-500">{STATUS_META[activeTask.status].label}</p></div>}</DragOverlay>
       </DndContext>
       <Confetti />
     </div>
@@ -281,7 +342,7 @@ function BoardColumn({
   useLang();
 
   return (
-    <section className="flex w-[300px] shrink-0 flex-col rounded-2xl border border-zinc-200/80 bg-zinc-50/80 dark:border-white/[0.05] dark:bg-white/[0.02]">
+    <section aria-label={`Kolonne: ${meta.label}`} className="flex w-[300px] shrink-0 flex-col rounded-2xl border border-zinc-200/80 bg-zinc-50/80 dark:border-white/[0.05] dark:bg-white/[0.02]">
       <header className="flex items-center gap-2 px-3.5 pb-2 pt-3">
         <span className={cn('h-2 w-2 rounded-full', meta.dot)} />
         <h2 className="text-[13px] font-semibold">{meta.label}</h2>
@@ -291,6 +352,7 @@ function BoardColumn({
         <button
           onClick={onStartCreate}
           title={t('board.addTask')}
+          aria-label={`Tilføj opgave i ${meta.label}`}
           className="ml-auto grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-200/80 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100"
         >
           <Plus className="h-4 w-4" />
@@ -370,7 +432,7 @@ function WeekColumn({
   const activeProjectId = useStore((s) => s.activeProjectId);
 
   return (
-    <section className="flex w-[300px] shrink-0 flex-col rounded-2xl border border-zinc-200/80 bg-zinc-50/80 dark:border-white/[0.05] dark:bg-white/[0.02]">
+    <section aria-label={`Kolonne: ${column.label}`} className="flex w-[300px] shrink-0 flex-col rounded-2xl border border-zinc-200/80 bg-zinc-50/80 dark:border-white/[0.05] dark:bg-white/[0.02]">
       <header className="flex items-center gap-2 px-3.5 pb-2 pt-3">
         <h2 className="text-[13px] font-semibold">{column.label}</h2>
         <span className="inline-flex min-w-[20px] items-center justify-center rounded-full bg-zinc-200/80 px-1.5 py-px text-center text-[11px] font-semibold tabular-nums text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
@@ -410,13 +472,11 @@ function WeekColumn({
 
 function TaskCard({
   task,
-  dragging = false,
   fresh = false,
   expanded = false,
   onToggleExpand,
 }: {
   task: Task;
-  dragging?: boolean;
   fresh?: boolean;
   expanded?: boolean;
   onToggleExpand?: (taskId: string) => void;
@@ -440,7 +500,7 @@ function TaskCard({
 
   const [subtaskDraft, setSubtaskDraft] = useState('');
 
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -475,14 +535,12 @@ function TaskCard({
     <article
       ref={setNodeRef}
       style={style}
-      {...attributes}
-      {...listeners}
+      aria-label={task.title}
       onClick={() => selectTask(task.id)}
       className={cn(
-        'card-luxe group relative cursor-grab select-none rounded-2xl border border-zinc-200/90 bg-white p-3 pl-4 shadow-card transition-all duration-150 hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-panel active:cursor-grabbing dark:border-white/[0.07] dark:bg-[#232429] dark:hover:border-white/[0.15]',
+        'card-luxe group relative cursor-pointer select-none rounded-2xl border border-zinc-200/90 bg-white p-3 pl-4 shadow-card transition-all duration-150 hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-panel dark:border-white/[0.07] dark:bg-[#232429] dark:hover:border-white/[0.15]',
         fresh && 'animate-fade-in',
         task.status === 'done' && 'celebrate-pulse',
-        (isDragging || dragging) && 'rotate-2 scale-[1.03] opacity-90 shadow-panel',
         isDragging && 'opacity-30',
       )}
     >
@@ -503,6 +561,12 @@ function TaskCard({
       )}
 
       <div className="flex items-start gap-1.5">
+        <button type="button" ref={setActivatorNodeRef} {...attributes} {...listeners}
+          aria-label={`Flyt opgave: ${task.title}`} title="Flyt opgave · mellemrum og piletaster"
+          onClick={event => event.stopPropagation()}
+          className="-ml-1 grid h-6 w-6 shrink-0 cursor-grab touch-none place-items-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-indigo-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 active:cursor-grabbing dark:hover:bg-white/10">
+          <GripVertical size={15} aria-hidden="true" />
+        </button>
         {task.subtasks.length > 0 && onToggleExpand && (
           <button
             onClick={(e) => {
@@ -510,6 +574,7 @@ function TaskCard({
               onToggleExpand(task.id);
             }}
             title={subtasksOpen ? 'Skjul underopgaver' : 'Vis underopgaver'}
+            aria-expanded={subtasksOpen}
             className="grid h-4 w-4 shrink-0 place-items-center rounded text-zinc-400 transition-colors hover:text-zinc-700 dark:hover:text-zinc-200"
           >
             {subtasksOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -520,10 +585,11 @@ function TaskCard({
             {task.emoji}
           </span>
         )}
-        <p className="flex-1 text-[13px] font-medium leading-snug text-zinc-800 dark:text-zinc-100">{task.title}</p>
+        <button type="button" aria-label={`Åbn opgave: ${task.title}`} onClick={event => { event.stopPropagation(); selectTask(task.id); }} className="min-w-0 flex-1 rounded text-left text-[13px] font-medium leading-snug text-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 dark:text-zinc-100">{task.title}</button>
       </div>
 
       <div className="mt-3 flex items-center gap-2.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+        {task.aiDelivery && <span className={cn('rounded px-1.5 py-0.5 text-[10px]', task.aiDelivery.status === 'done' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : ['running', 'awaiting_approval'].includes(task.aiDelivery.status) ? 'bg-indigo-500/10 text-indigo-500' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400')} title={`Orbit-kørsel ${task.aiDelivery.runId}`}>Orbit · {({ running: 'arbejder', awaiting_approval: 'afventer plan', done: 'leveret', error: 'fejlet', blocked: 'blokeret', partial: 'delvist leveret', cancelled: 'stoppet', interrupted: 'afbrudt' } as Record<string, string>)[task.aiDelivery.status] ?? task.aiDelivery.status}</span>}
         <span className="font-mono text-[10px] font-semibold text-zinc-400 dark:text-zinc-500">
           {taskRef(task, projects)}
         </span>
@@ -606,6 +672,8 @@ function TaskCard({
                   toggleSubtask(task.id, st.id);
                 }}
                 title={st.done ? 'Markér som ikke færdig' : 'Markér som færdig'}
+                aria-label={`${st.done ? 'Markér som ikke færdig' : 'Markér som færdig'}: ${st.title}`}
+                aria-pressed={st.done}
                 className={cn(
                   'grid h-4 w-4 shrink-0 place-items-center rounded-[5px] border transition-colors',
                   st.done

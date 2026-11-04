@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
-import { FileText, Gavel, NotebookPen, Plus, Trash2, Users } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { FileText, Gavel, NotebookPen, Plus, Users } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useLang, t } from '../lib/i18n';
 import { cn, formatDateShort } from '../lib/utils';
 import type { NoteEntry, NoteKind } from '../lib/types';
 import { EmptyState, ViewHeader } from '../components/common';
+import NoteEditor from '../components/NoteEditor';
 
 const KIND_META: Record<NoteKind, { labelKey: string; icon: typeof FileText; chip: string; iconClass: string }> = {
   note: {
@@ -27,7 +28,6 @@ const KIND_META: Record<NoteKind, { labelKey: string; icon: typeof FileText; chi
   },
 };
 
-const KINDS = Object.keys(KIND_META) as NoteKind[];
 
 export default function NotesView() {
   useLang();
@@ -36,12 +36,20 @@ export default function NotesView() {
   const users = useStore((s) => s.users);
   const activeProjectId = useStore((s) => s.activeProjectId);
   const addNote = useStore((s) => s.addNote);
-  const updateNote = useStore((s) => s.updateNote);
   const deleteNote = useStore((s) => s.deleteNote);
 
-  const [selId, setSelId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<{ title: string; body: string; kind: NoteKind }>({ title: '', body: '', kind: 'note' });
-  const [savedFlash, setSavedFlash] = useState(false);
+  const [selection, setSelection] = useState<Record<string, string | null>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('orbit-note-selection') ?? '{}');
+      return saved && typeof saved === 'object' && !Array.isArray(saved) ? Object.fromEntries(Object.entries(saved).filter(([, value]) => value === null || typeof value === 'string')) as Record<string, string | null> : {};
+    } catch { return {}; }
+  });
+  const selId = selection[activeProjectId ?? 'all'] ?? null;
+  const setSelId = (id: string | null) => {
+    const next = { ...selection, [activeProjectId ?? 'all']: id };
+    setSelection(next);
+    try { localStorage.setItem('orbit-note-selection', JSON.stringify(next)); } catch { /* Draft persistence has its own visible warning. */ }
+  };
 
   const visible = useMemo(
     () =>
@@ -52,12 +60,6 @@ export default function NotesView() {
   );
 
   const selected = visible.find((n) => n.id === selId) ?? null;
-
-  // Synkronisér draft når den valgte note skifter
-  useEffect(() => {
-    setDraft(selected ? { title: selected.title, body: selected.body, kind: selected.kind } : { title: '', body: '', kind: 'note' });
-    setSavedFlash(false);
-  }, [selId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const groups = useMemo(() => {
     if (activeProjectId) {
@@ -78,16 +80,10 @@ export default function NotesView() {
     if (created) setSelId(created.id);
   };
 
-  const onSave = () => {
-    if (!selected) return;
-    updateNote(selected.id, { title: draft.title, body: draft.body, kind: draft.kind });
-    setSavedFlash(true);
-    window.setTimeout(() => setSavedFlash(false), 2000);
-  };
-
   const onDelete = (note: NoteEntry) => {
     if (!window.confirm(t('notes.confirmDelete').replace('{title}', note.title))) return;
     deleteNote(note.id);
+    try { localStorage.removeItem(`orbit-note-draft:${note.projectId}:${note.id}`); } catch { /* Intentional deletion; no other drafts are affected. */ }
     if (selId === note.id) setSelId(null);
   };
 
@@ -179,63 +175,7 @@ export default function NotesView() {
 
             {/* Editor */}
             {selected ? (
-              <div className="glass-panel rounded-xl p-4 animate-fade-in">
-                <div className="flex flex-wrap items-center gap-2">
-                  {KINDS.map((kind) => {
-                    const meta = KIND_META[kind];
-                    const Icon = meta.icon;
-                    const active = draft.kind === kind;
-                    return (
-                      <button
-                        key={kind}
-                        onClick={() => setDraft((d) => ({ ...d, kind }))}
-                        className={cn(
-                          'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-all',
-                          active
-                            ? cn(meta.chip, 'border-transparent')
-                            : 'border-zinc-200 text-zinc-500 hover:border-zinc-300 dark:border-white/10 dark:text-zinc-400',
-                        )}
-                      >
-                        <Icon className="h-3.5 w-3.5" />
-                        {t(meta.labelKey)}
-                      </button>
-                    );
-                  })}
-                  <span className="flex-1" />
-                  <button
-                    onClick={() => onDelete(selected)}
-                    title={t('notes.deleteTitle')}
-                    className="btn-ghost px-2 py-1.5 text-xs text-rose-600 hover:bg-rose-500/10 dark:text-rose-400"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    {t('notes.deleteTitle')}
-                  </button>
-                </div>
-
-                <input
-                  value={draft.title}
-                  onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
-                  placeholder={t('notes.titlePlaceholder')}
-                  className="mt-3 w-full rounded-lg bg-transparent px-2 py-1.5 text-lg font-semibold outline-none transition-colors placeholder:text-zinc-400 hover:bg-zinc-100/60 focus:bg-zinc-100/60 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.04]"
-                />
-                <textarea
-                  value={draft.body}
-                  onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
-                  rows={14}
-                  placeholder={t('notes.bodyPlaceholder')}
-                  className="input mt-2 resize-y leading-relaxed"
-                />
-
-                <div className="mt-3 flex items-center gap-3">
-                  <button onClick={onSave} className="btn-primary px-3 py-1.5 text-xs">
-                    {t('notes.save')}
-                  </button>
-                  {savedFlash && <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">{t('notes.saved')}</span>}
-                  <span className="ml-auto text-[11px] text-zinc-400 dark:text-zinc-500">
-                    {formatDateShort(selected.createdAt)} · {users.find((u) => u.id === selected.authorId)?.name ?? '—'}
-                  </span>
-                </div>
-              </div>
+              <NoteEditor key={selected.id} note={selected} onDelete={onDelete} />
             ) : (
               <EmptyState
                 icon={<NotebookPen className="h-6 w-6" />}

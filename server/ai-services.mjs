@@ -1,12 +1,24 @@
+import { permissionBlock } from './ai-delivery-status.mjs';
+import { claudeControl } from './claude-control.mjs';
 // Orbit AI-motor — abonnement-first orkestrering.
 // Primære motorer: lokale CLI-værktøjer (Codex, Claude Code, Kimi Code, Gemini CLI, Ollama/Qwen).
-// API-baserede tjenester grupperes: 'sub-api' (dækket af abonnement: Meshy, ElevenLabs, HeyGen)
-// og 'paid-api' (betalt pr. brug — kræver eksplicit tilladelse i aiPrefs.allowPaidApis).
+// The historical kind names do not establish billing. Every external connection
+// requires a separately confirmed, included allowance with no extra charges.
 
+import { readProviderSse as readSse, readLines } from './ai-stream.mjs';
+import { hydrateAttachment } from './ai-documents.mjs';
+import { billingPolicy } from './ai-billing.mjs';
+import { agentEvents } from './ai-events.mjs';
+import { nativeCliOptions } from './ai-cli-options.mjs';
+import { serviceCapabilities } from './ai-capabilities.mjs';
+import { trackAiProcess } from './ai-processes.mjs';
+import { archiveArtifact, archivedArtifactPath } from './ai-artifacts.mjs';
+import { claimExternalSubmission, updateExternalSubmission } from './ai-durable-store.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { spawn, execFile, execFileSync } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, appendFileSync, chmodSync, statSync } from 'fs';
-import { dirname, join } from 'path';
-import { randomUUID } from 'crypto';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, chmodSync, statSync } from 'fs';
+import { basename, dirname, join } from 'path';
+import { createHash, randomUUID } from 'crypto';
 import { promisify } from 'util';
 
 const execFileP = promisify(execFile);
@@ -20,7 +32,8 @@ export const AI_SERVICES = [
   { id: 'kimi',       name: 'Kimi Code',      kind: 'cli',      cmd: 'kimi',   cliTemplate: '-p {prompt}',                        color: 'indigo',   strengths: ['kode', 'lang kontekst', 'dokumentation', 'orkestrering'] },
   { id: 'gemini',     name: 'Gemini CLI',     kind: 'cli',      cmd: 'gemini', cliTemplate: '-p {prompt}',                        color: 'sky',      strengths: ['multimodal', 'research', 'design-feedback'] },
   { id: 'qwen',       name: 'Qwen (lokal)',   kind: 'local',    baseUrl: 'http://127.0.0.1:11434', model: 'qwen2.5-coder:7b',     color: 'slate',    strengths: ['privat', 'hurtig kode', 'gratis'] },
-  { id: 'meshy',      name: 'Meshy',          kind: 'sub-api',  baseUrl: 'https://api.meshy.ai/v1',                            color: 'teal',     strengths: ['3D-modeller', 'teksturer'] },
+  { id: 'qwen-code',  name: 'Qwen Code',      kind: 'cli',      cmd: 'qwen', cliTemplate: '-p {prompt}', color: 'slate', strengths: ['kode', 'MCP', 'underagenter', 'test'] },
+  { id: 'meshy',      name: 'Meshy',          kind: 'sub-api',  baseUrl: 'https://api.meshy.ai/openapi/v2',                    color: 'teal',     strengths: ['3D-modeller', 'teksturer'] },
   { id: 'elevenlabs', name: 'ElevenLabs',     kind: 'sub-api',  baseUrl: 'https://api.elevenlabs.io/v1',                       color: 'rose',     strengths: ['stemmer', 'lyd', 'TTS'] },
   { id: 'heygen',     name: 'HeyGen',         kind: 'sub-api',  baseUrl: 'https://api.heygen.com/v2',                          color: 'violet',   strengths: ['avatar-video', 'præsentation'] },
   { id: 'deepseek',   name: 'DeepSeek Flash', kind: 'paid-api', baseUrl: 'https://api.deepseek.com/v1',  model: 'deepseek-chat', color: 'cyan',    strengths: ['hurtig kode', 'billig chat'] },
@@ -28,7 +41,7 @@ export const AI_SERVICES = [
   { id: 'anthropic',  name: 'Anthropic (API)',kind: 'paid-api', baseUrl: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-5', color: 'orange', strengths: ['skrivning', 'kode'] },
   { id: 'moonshot',   name: 'Moonshot (API)', kind: 'paid-api', baseUrl: 'https://api.moonshot.ai/v1',   model: 'kimi-k2',       color: 'blue',    strengths: ['lang kontekst'] },
   { id: 'xai',        name: 'xAI (API)',      kind: 'paid-api', baseUrl: 'https://api.x.ai/v1',          model: 'grok-3-mini',   color: 'orange',  strengths: ['hurtig chat'] },
-  { id: 'grok',       name: 'Grok',           kind: 'cli',      cmd: 'grok',   cliTemplate: '-p {prompt}',                               color: 'orange',   strengths: ['chat'] },
+  { id: 'grok',       name: 'Grok Build',     kind: 'cli',      cmd: 'grok',   cliTemplate: '-p {prompt}',                               color: 'orange',   strengths: ['kode', 'analyse'] },
 ];
 
 export const serviceById = (id) => AI_SERVICES.find((s) => s.id === id);
@@ -54,7 +67,7 @@ export function saveKeySecrets(secrets) {
     // Giv din bruger fuld kontrol og prøv igen, før vi melder fejl.
     if (process.platform !== 'win32') { console.warn('[orbit] ai-keys.json kunne ikke gemmes:', e.message); return false; }
     try {
-      execFileSync('icacls', acl(), { timeout: 5000 });
+      execFileSync('icacls', acl(), { windowsHide: true, timeout: 5000 });
       writeFileSync(p, json);
     } catch (e2) {
       console.warn('[orbit] ai-keys.json kunne ikke gemmes:', e2.message);
@@ -65,7 +78,7 @@ export function saveKeySecrets(secrets) {
   if (process.platform === 'win32') {
     // Afgræns filen, så kun din egen Windows-bruger kan åbne den.
     // F (fuld kontrol) — IKKE R, for så kan næste gemning ikke skrive til filen.
-    execFile('icacls', acl(), { timeout: 5000 }, () => {});
+    execFile('icacls', acl(), { windowsHide: true, timeout: 5000 }, () => {});
   }
   return true;
 }
@@ -83,7 +96,7 @@ export function aiCfg(cfg) {
   }
   return {
     providers,
-    prefs: { allowPaidApis: false, orchestrator: 'claude', selfHeal: true, ...(cfg.aiPrefs ?? {}) },
+    prefs: { orchestrator: 'claude', selfHeal: true, minimumReviewScore: 8, ...(cfg.aiPrefs ?? {}), allowPaidApis: false },
   };
 }
 
@@ -107,9 +120,23 @@ async function resolveCliCommand(cmd) {
   if (!cmd) return null;
   if (/[\\/]/.test(cmd) && existsSync(cmd)) return cmd;
   try {
-    const r = await execFileP(process.platform === 'win32' ? 'where' : 'which', [cmd], { timeout: 3000 });
+    // Packaged Companion has no console. Without windowsHide each periodic
+    // where.exe lookup can briefly open its own window on the user's desktop.
+    const r = await execFileP(process.platform === 'win32' ? 'where' : 'which', [cmd], { windowsHide: true, timeout: 3000 });
     return chooseCliCandidate(r.stdout);
   } catch { return null; }
+}
+
+export async function inspectCliInstallation(serviceId, cfg) {
+  const service = serviceById(serviceId), provider = aiCfg(cfg).providers[serviceId] ?? {};
+  if (service?.kind !== 'cli') throw new Error('Denne forbindelse bruger ikke en lokal CLI.');
+  const command = await resolveCliCommand(provider.cmd ?? service.cmd);
+  if (!command) throw new Error('Programmet blev ikke fundet. Installer leverandørens CLI eller angiv stien til programmet.');
+  const launch = cliSpawnSpec(command, ['--version']);
+  const result = await execFileP(launch.cmd, launch.args, { windowsHide: true, timeout: 5000, maxBuffer: 64000, env: cliChildEnv(process.env, { claude: serviceId === 'claude' }) });
+  const version = `${result.stdout}\n${result.stderr}`.trim().slice(0, 500);
+  if (!/\d+\.\d+/.test(version)) throw new Error('Programmet svarede, men versionen kunne ikke genkendes. Kontrollér at stien peger på den rigtige CLI.');
+  return { version, checkedAt: new Date().toISOString(), login: 'not_checked', note: 'Installation svarer. Login, modeladgang og resterende abonnementskvote er ikke kontrolleret.' };
 }
 
 let cliCache = { at: 0, signature: '', found: {} };
@@ -133,12 +160,12 @@ async function ollamaUp(baseUrl) {
 }
 
 // Hent listen af hentede modeller fra Ollama (tom liste ved fejl).
-async function ollamaModels(baseUrl) {
+async function ollamaInventory(baseUrl) {
   try {
     const r = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(1500) });
     if (!r.ok) return [];
     const data = await r.json();
-    return (data.models ?? []).map((m) => m.name).filter(Boolean);
+    return (data.models ?? []).filter(m => typeof m.name === 'string');
   } catch { return []; }
 }
 
@@ -151,13 +178,13 @@ function pickOllamaModel(models, wanted) {
 
 // Må tjenesten bruges nu? Cost-gate: paid-api kræver allowPaidApis.
 export async function serviceAvailability(cfg) {
-  const { providers, prefs } = aiCfg(cfg);
+  const { providers } = aiCfg(cfg);
   const clis = await detectClis(providers);
   const out = {};
   for (const s of AI_SERVICES) {
     const p = providers[s.id] ?? {};
     let available = false, reason = null;
-    let models = null, resolvedModel = null;
+    let models = null, resolvedModel = null, remoteModel = false;
     if (s.kind === 'cli') {
       let launchError = null;
       if (clis[s.id]) {
@@ -171,9 +198,11 @@ export async function serviceAvailability(cfg) {
     } else if (s.kind === 'local') {
       const baseUrl = p.baseUrl ?? s.baseUrl;
       const up = await ollamaUp(baseUrl);
-      models = up ? await ollamaModels(baseUrl) : [];
+      const inventory = up ? await ollamaInventory(baseUrl) : [];
+      models = inventory.map(m => m.name);
       const wanted = p.model ?? s.model;
       resolvedModel = pickOllamaModel(models, wanted);
+      remoteModel = Boolean(inventory.find(m => m.name === resolvedModel)?.remote_host);
       available = up && models.length > 0 && p.enabled !== false;
       if (!up) {
         reason = `Ollama kører ikke (${baseUrl}) – tjek at Docker-containeren er startet, og at port 11434 er mappet til værten`;
@@ -186,29 +215,36 @@ export async function serviceAvailability(cfg) {
       available = Boolean(p.apiKey) && p.enabled !== false;
       reason = p.apiKey ? null : 'API-nøgle mangler';
     } else if (s.kind === 'paid-api') {
-      available = Boolean(p.apiKey) && p.enabled !== false && prefs.allowPaidApis;
-      reason = !p.apiKey ? 'API-nøgle mangler' : !prefs.allowPaidApis ? 'Betalt API låst (tillad i indstillinger)' : (p.enabled === false ? 'Deaktiveret' : null);
+      available = Boolean(p.apiKey) && p.enabled !== false;
+      reason = !p.apiKey ? 'API-nøgle mangler' : (p.enabled === false ? 'Deaktiveret' : null);
     } else {
       reason = 'Klar til manuel tilslutning';
     }
+    if (s.id === 'heygen' && available && (!p.avatarId || !p.voiceId)) { available = false; reason = 'Angiv avatar-id og stemme-id fra din HeyGen-konto.'; }
+    const billing = billingPolicy(s, { ...p, model: resolvedModel ?? p.model, remoteModel });
+    if (!billing.allowed) { available = false; reason = billing.reason; }
     out[s.id] = {
+      installation: p.installation ?? null, cliTemplate: p.cliTemplate ?? null,
+      capabilities: serviceCapabilities(s),
+      customTemplate: Boolean(p.cliTemplate && p.cliTemplate !== s.cliTemplate),
+      billing,
+      avatarId: p.avatarId ?? null, voiceId: p.voiceId ?? null,
       id: s.id, name: s.name, kind: s.kind, color: s.color, strengths: s.strengths,
       available, reason, enabled: p.enabled !== false,
       hasKey: Boolean(p.apiKey), keyMask: mask(p.apiKey),
       model: resolvedModel ?? (p.model ?? s.model ?? null),
       models, cmd: p.cmd ?? s.cmd ?? null,
-      subscriptionCovered: s.kind === 'sub-api',
+      subscriptionCovered: billing.mode === 'included' && billing.allowed,
     };
   }
   return out;
 }
 
 export function assertUsable(svc, cfg) {
-  const { providers, prefs } = aiCfg(cfg);
+  const { providers } = aiCfg(cfg);
   const p = providers[svc.id] ?? {};
-  if (svc.kind === 'paid-api' && !prefs.allowPaidApis) {
-    throw new Error(`${svc.name} er betalt pr. brug og låst. Slå 'Tillad betalte API'er' til i AI-indstillinger for at bruge det.`);
-  }
+  const billing = billingPolicy(svc, p);
+  if (!billing.allowed) throw new Error(`${svc.name}: ${billing.reason}`);
   if ((svc.kind === 'sub-api' || svc.kind === 'paid-api') && !p.apiKey) {
     throw new Error(`${svc.name}: API-nøgle mangler. Indtast den i tilslutningspanelet.`);
   }
@@ -220,7 +256,9 @@ export function assertUsable(svc, cfg) {
 function contentToText(msg) {
   let t = msg.text ?? '';
   for (const a of msg.attachments ?? []) {
+    if (a.extractedText) t += `\n\nDokumentindhold fra ${a.name}:\n${a.extractedText}\n`;
     t += `\n\n[Vedhæftet ${a.kind === 'image' ? 'billede' : 'fil'}: ${a.name}${a.path ? ` — tilgængelig på disk: ${a.path}` : ''}]`;
+    if (a.kind === 'image') t += '\nUndersøg selve billedet via billedinput eller et billedlæseværktøj. Hvis billedet ikke kan læses, skal du sige det; gæt ikke ud fra filnavnet.';
   }
   return t;
 }
@@ -265,22 +303,6 @@ function toGeminiContents(messages) {
 }
 
 // ---- Provider-kald (alle streamer delta via onDelta) -----------------------
-async function readSse(res, onData) {
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop();
-    for (const line of lines) {
-      if (line.startsWith('data: ')) onData(line.slice(6));
-    }
-  }
-}
-
 async function chatOpenAiCompat({ baseUrl, apiKey, model, messages, onDelta, signal }) {
   const r = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST', signal,
@@ -327,19 +349,15 @@ async function chatOllama({ baseUrl, model, messages, onDelta, signal }) {
   const r = await fetch(`${baseUrl}/api/chat`, {
     method: 'POST', signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, messages: messages.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: contentToText(m) })), stream: true }),
+    body: JSON.stringify({ model, messages: messages.map(m => ({ role: ['assistant', 'system'].includes(m.role) ? m.role : 'user', content: contentToText(m), ...((m.attachments ?? []).some(a => a.kind === 'image') ? { images: m.attachments.filter(a => a.kind === 'image').map(a => a.dataUrl.split(',')[1]) } : {}) })), stream: true }),
   });
   if (!r.ok) throw new Error(`Ollama fejl ${r.status}`);
-  const reader = r.body.getReader();
-  const dec = new TextDecoder();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    for (const line of dec.decode(value, { stream: true }).split('\n')) {
-      if (!line.trim()) continue;
-      try { const j = JSON.parse(line); if (j.message?.content) onDelta(j.message.content); } catch { /* deltastreng */ }
-    }
-  }
+  await readLines(r, line => {
+    if (!line.trim()) return;
+    const data = JSON.parse(line);
+    if (data.error) throw new Error(String(data.error));
+    if (data.message?.content) onDelta(data.message.content);
+  });
 }
 
 // Npm's Windows-shims kan ikke startes direkte uden en shell. Find shim'ens
@@ -407,7 +425,7 @@ function windowsGitBash(env) {
     env.LOCALAPPDATA && join(env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'),
   ].filter(Boolean);
   try {
-    const output = execFileSync('where', ['git'], { encoding: 'utf8', timeout: 3000 });
+    const output = execFileSync('where', ['git'], { windowsHide: true, encoding: 'utf8', timeout: 3000 });
     for (const git of output.split(/\r?\n/).map((p) => p.trim()).filter(Boolean)) {
       candidates.push(join(dirname(git), 'bash.exe'), join(dirname(git), '..', 'bin', 'bash.exe'));
     }
@@ -492,146 +510,170 @@ export function cliAccessDirectories(messages, platform = process.platform) {
 
 // CLI: prompt som argument ud fra skabelon; stdout streames linjevis.
 // jsonl: stdout parses som Claude stream-json (én JSON pr. linje) → onEvent i stedet for rå delta.
-async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, jsonl, claude = false, extraArgs = [], signal }) {
+export function parseCliTemplate(template) {
+  const tokens = []; let token = '', quote = null, present = false;
+  for (const char of template) {
+    if (quote) { if (char === quote) quote = null; else token += char; present = true; }
+    else if (char === '"' || char === "'") { quote = char; present = true; }
+    else if (/\s/.test(char)) { if (present) { tokens.push(token); token = ''; present = false; } }
+    else { token += char; present = true; }
+  }
+  if (quote) throw new Error('CLI-skabelonen har et uafsluttet anførselstegn.');
+  if (present) tokens.push(token);
+  return tokens;
+}
+
+export function cliArguments(template, prompt, extraArgs = []) {
+  const tokens = parseCliTemplate(template || '-p {prompt}');
+  if (!tokens.includes('{prompt}')) throw new Error('CLI-skabelonen skal indeholde {prompt}.');
+  const parts = tokens.map(token => token === '{prompt}' ? prompt : token);
+  parts.splice(tokens[0] === 'exec' ? 1 : 0, 0, ...extraArgs);
+  return parts;
+}
+
+export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent, onProcess, onPermission, jsonl, claude = false, grok = false, extraArgs = [], signal }) {
+  signal?.throwIfAborted();
   const resolvedCmd = await resolveCliCommand(cmd);
   if (!resolvedCmd) throw new Error(`Kunne ikke starte '${cmd}': CLI'en blev ikke fundet`);
-  const tokens = (cliTemplate || '-p {prompt}').split(' ');
-  const parts = [];
-  let promptInserted = false;
-  for (const token of tokens) {
-    if (token === '{prompt}') {
-      // Indstillinger og mapper skal stå før prompten; array-elementer bevarer
-      // stier med mellemrum som nøjagtigt ét argument uden shell-evaluering.
-      parts.push(...extraArgs, prompt);
-      promptInserted = true;
-    } else parts.push(token);
-  }
-  if (!promptInserted) parts.push(...extraArgs);
+  const interactive = claude && jsonl && typeof onPermission === 'function';
+  const parts = interactive ? ['-p', ...extraArgs, '--input-format', 'stream-json', '--permission-prompt-tool', 'stdio'] : cliArguments(cliTemplate, prompt, extraArgs);
   const launch = cliSpawnSpec(resolvedCmd, parts);
   return new Promise((resolve, reject) => {
     const env = cliChildEnv({ ...process.env, NO_COLOR: '1' }, { claude });
-    const child = spawn(launch.cmd, launch.args, { cwd: cwd ?? process.cwd(), env });
-    // Prompten ligger allerede i argv. Luk stdin, så Claude ikke venter på input,
-    // og så headless CLI'er aldrig hænger på en åben datakanal.
-    try { child.stdin.end(); } catch { /* processen kan allerede være afsluttet */ }
-    const kill = () => { try { child.kill('SIGTERM'); } catch { /* */ } };
-    signal?.addEventListener('abort', kill);
-    const timer = setTimeout(kill, 15 * 60 * 1000);
-    let out = '';
-    let lineBuf = '';
-    const feed = (chunk) => {
-      if (jsonl) {
-        lineBuf += chunk;
-        const lines = lineBuf.split('\n');
-        lineBuf = lines.pop() ?? '';
-        for (const line of lines) {
-          const t = line.trim();
-          if (!t) continue;
-          try { onEvent?.(JSON.parse(t)); } catch { onDelta?.(`${line}\n`); }
-        }
-        return;
-      }
-      out += chunk;
-      onDelta(chunk);
+    for (const key of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'MOONSHOT_API_KEY', 'DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'KIMI_API_KEY', 'XAI_API_KEY', 'GROK_API_KEY', 'GROK_DEPLOYMENT_KEY']) delete env[key];
+    if (grok) { env.GROK_DISABLE_AUTOUPDATER = '1'; env.GROK_MEMORY = '0'; }
+    if (interactive) env.CLAUDE_CODE_SDK_READS_SESSION_STATE = '1';
+    const child = spawn(launch.cmd, launch.args, { windowsHide: true, cwd: cwd ?? process.cwd(), env, detached: process.platform !== 'win32' });
+    let permissionFailure;
+    let terminationTimer, windowsStop, callbackError, stopped = false, out = '', lineBuf = '', bytes = 0;
+    const kill = () => {
+      if (stopped) return;
+      stopped = true;
+      try { if (process.platform === 'win32') windowsStop = new Promise(done => execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }, () => done())); else process.kill(-child.pid, 'SIGTERM'); } catch { /* already stopped */ }
+      terminationTimer = setTimeout(() => { try { if (process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL'); else child.kill(); } catch { /* already stopped */ } }, 5000);
+      terminationTimer.unref();
     };
-    child.stdout.on('data', (d) => feed(d.toString()));
-    child.stderr.on('data', (d) => { const s = d.toString(); if (!s.startsWith('∆')) feed(s); });
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', kill);
-      reject(new Error(`Kunne ikke starte '${cmd}': ${e.message}`));
+    const call = fn => { try { fn(); } catch (e) { callbackError ??= e; kill(); } };
+    const control = interactive ? claudeControl({
+      prompt, signal, write: text => child.stdin.write(text), end: () => child.stdin.end(),
+      onFailure: error => { callbackError ??= error; kill(); },
+      onPermission: async (request, options) => {
+        let result;
+        try { result = await onPermission(request, options); }
+        catch { result = { behavior: 'deny', message: 'Orbit kunne ikke behandle tilladelsen. Handlingen er afvist.' }; }
+        if (result?.behavior !== 'allow') { permissionFailure = new Error(result?.message ?? 'Handlingen blev ikke godkendt i Orbit.'); permissionFailure.code = 'ORBIT_PERMISSION_BLOCKED'; }
+        return result;
+      },
+    }) : null;
+    if (control) child.stdin.on('error', error => { callbackError ??= error; kill(); });
+    const untrack = trackAiProcess(child.pid, { kind: 'agent', command: String(cmd).split(/[\\/]/).at(-1), stop: () => { callbackError ??= new Error('AI-processen stoppes, fordi Companion lukkes.'); kill(); } });
+    const line = text => {
+      if (!text.trim()) return;
+      let event;
+      try { event = JSON.parse(text); } catch { out += text + '\n'; return; }
+      if (control) { let consumed = false; call(() => { consumed = control.event(event); }); if (consumed) return; }
+      const denied = permissionBlock(event);
+      if (denied) { permissionFailure = new Error(denied); permissionFailure.code = 'ORBIT_PERMISSION_BLOCKED'; }
+      // Event-handler failures must not be misclassified as invalid JSON.
+      call(() => onEvent?.(event));
+    };
+    const timer = setTimeout(kill, 60 * 60 * 1000);
+    const clean = () => { clearTimeout(timer); clearTimeout(terminationTimer); signal?.removeEventListener('abort', kill); };
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+    child.stdout.on('data', chunk => {
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > 20 * 1024 * 1024) { callbackError ??= new Error('Agentens output overskred 20 MB. Del opgaven i mindre jobs.'); kill(); return; }
+      if (jsonl) {
+        lineBuf += chunk; const lines = lineBuf.split('\n'); lineBuf = lines.pop() ?? '';
+        for (const value of lines) line(value);
+      } else { out += chunk; call(() => onDelta?.(chunk)); }
     });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', kill);
-      if (signal?.aborted) reject(new Error('Afbrudt'));
+    child.stderr.on('data', chunk => { out = (out + chunk).slice(-20000); });
+    child.on('error', e => { untrack(); clean(); reject(new Error(`Kunne ikke starte '${cmd}': ${e.message}`)); });
+    child.on('close', async code => {
+      if (jsonl && lineBuf.trim()) line(lineBuf);
+      control?.close();
+      // Do not cancel escalation just because the parent exited: grandchildren
+      // with separate stdio may still be running in the same process group.
+      if (stopped && child.pid && process.platform !== 'win32') try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already stopped */ }
+      if (windowsStop) await windowsStop;
+      untrack();
+      if (child.pid) call(() => onProcess?.({ pid: child.pid, finished: true }));
+      clean();
+      if (callbackError) reject(callbackError);
+      else if (signal?.aborted) reject(new Error('Afbrudt'));
+      else if (stopped) reject(new Error('Jobbet nåede tidsgrænsen på 60 minutter.'));
+      else if (permissionFailure) reject(permissionFailure);
       else if (code === 0) resolve(out);
-      else {
-        const detail = out.trim().slice(-1200);
-        reject(new Error(`'${cmd}' afsluttede med kode ${code}${detail ? `: ${detail}` : ' uden output'}`));
-      }
+      else reject(new Error(`'${cmd}' afsluttede med kode ${code}${out.trim() ? `: ${out.trim().slice(-1200)}` : ' uden output'}`));
     });
+    signal?.addEventListener('abort', kill);
+    if (signal?.aborted) kill();
+    if (child.pid) call(() => onProcess?.({ pid: child.pid, startedAt: Date.now(), finished: false }));
+    if (control) call(() => control.start());
+    else try { child.stdin.end(); } catch { /* process may have exited */ }
   });
-}
-
-// Claude Code stream-json → tekst-delta + Task-underagent-hændelser.
-// Gør det muligt at vise Claude's egne subagenter som separate underlinjer i sværmen.
-function watchClaudeStreamJson({ onText, onSubagent }) {
-  const byTool = new Map(); // tool_use_id → subagent
-  return (ev) => {
-    if (!ev || typeof ev !== 'object') return;
-    if (ev.type === 'assistant' && Array.isArray(ev.message?.content)) {
-      for (const b of ev.message.content) {
-        if (b.type === 'text' && b.text) onText?.(b.text);
-        else if (b.type === 'tool_use' && b.name === 'Task') {
-          const desc = String(b.input?.description ?? b.input?.prompt ?? 'Underagent').slice(0, 180);
-          byTool.set(b.id, { subId: b.id });
-          onSubagent?.({ phase: 'start', subId: b.id, name: desc });
-        }
-      }
-    } else if (ev.type === 'user' && Array.isArray(ev.message?.content)) {
-      for (const b of ev.message.content) {
-        if (b.type === 'tool_result' && byTool.has(b.tool_use_id)) {
-          const txt = typeof b.content === 'string'
-            ? b.content
-            : Array.isArray(b.content) ? b.content.map((c) => c?.text ?? '').join('') : '';
-          onSubagent?.({ phase: 'done', subId: b.tool_use_id, text: String(txt).slice(0, 600) });
-          byTool.delete(b.tool_use_id);
-        }
-      }
-    }
-  };
 }
 
 // Samlet chat-dispatcher. Returnerer samlet tekst.
 // onSubagent: kun for CLI'er der streamer strukturerede events (Claude stream-json).
-export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubagent, signal, cwd, readOnly = false }) {
+export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubagent, onProcess, onAction, onPermission, signal, cwd, readOnly = false }) {
+  messages = (messages ?? []).map(m => ({ ...m, attachments: m.attachments?.map(a => hydrateAttachment(a, dirs)) }));
+  if (messages.some(message => message.attachments?.some(attachment => attachment.kind === 'image' && !attachment.path && !attachment.dataUrl))) throw new Error('Billedets indhold kunne ikke indlæses. Upload billedet igen.');
+  if (readOnly) messages = [{ role: 'system', text: 'Denne tur er kun til læsning og rådgivning. Du må læse relevant materiale, men ikke ændre filer, installere noget, sende beskeder eller udføre andre eksterne ændringer. Returnér dit resultat til samtalen.' }, ...messages];
   const svc = serviceById(serviceId);
   if (!svc) throw new Error(`Ukendt tjeneste: ${serviceId}`);
   assertUsable(svc, cfg);
+  if (['meshy', 'elevenlabs', 'heygen'].includes(serviceId)) throw new Error('Denne tjeneste producerer medier. Vælg Auto og beskriv den ønskede leverance.');
   const { providers } = aiCfg(cfg);
   const p = providers[serviceId] ?? {};
   let acc = '';
   const delta = (d) => { acc += d; onDelta?.(d, acc); };
   if (svc.kind === 'cli') {
-    const prompt = messages.map(contentToText).join('\n\n---\n\n');
+    let prompt = messages.map(contentToText).join('\n\n---\n\n');
+    const contextDir = join(dirs.runs ?? dirs.uploads ?? dirs.cwd, 'contexts');
+    let contextPath;
+    if (prompt.length > 6000) {
+      mkdirSync(contextDir, { recursive: true });
+      contextPath = join(contextDir, `${randomUUID()}.txt`);
+      writeFileSync(contextPath, prompt, { mode: 0o600 });
+      prompt = `Læs hele opgaven og alle gældende instruktioner i UTF-8-filen ${contextPath}. Filen indeholder den fulde samtale og projektkontekst. Følg opgavens fase og afgrænsning. Udfør ikke arbejde før du har læst filen.`;
+    }
     const template = p.cliTemplate ?? svc.cliTemplate;
     const useDefaultTemplate = template === svc.cliTemplate;
-    // Claude køres med stream-json så Task-underagenter kan spores som egne linjer.
-    // Brugerdefinerede skabeloner respekteres uden ekstra permissions eller mapper.
-    const useJson = serviceId === 'claude' && useDefaultTemplate;
-    const accessDirs = useDefaultTemplate && (serviceId === 'codex' || serviceId === 'claude')
-      ? cliAccessDirectories(messages) : [];
-    const extraArgs = [];
-    if (serviceId === 'codex' && useDefaultTemplate) {
-      // Orbit bruger ikke Codex' valgfrie app-/connector-integration. Slå den
-      // fra pr. kørsel, så dens eksterne MCP-opstart ikke forstyrrer lokale jobs.
-      extraArgs.push('--disable', 'apps');
-      // Orkestratorens planfase må læse projektet, men aldrig udføre ændringer.
-      extraArgs.push('--sandbox', readOnly ? 'read-only' : 'workspace-write');
-      for (const dir of accessDirs) extraArgs.push('--add-dir', dir);
-    } else if (serviceId === 'claude' && useDefaultTemplate) {
-      // Print-mode er ikke-interaktiv. Planfasen er læse-only; job må skrive.
-      extraArgs.push('--permission-mode', readOnly ? 'plan' : 'bypassPermissions');
-      if (accessDirs.length) extraArgs.push('--add-dir', ...accessDirs);
-    }
-    if (useJson) extraArgs.push('--output-format', 'stream-json', '--verbose');
+    // Preserve native MCP configuration. Custom templates own their arguments.
+    const accessDirs = useDefaultTemplate
+      ? cliAccessDirectories(cwd ? messages.map(m => ({ attachments: m.attachments })) : messages) : [];
+    if (useDefaultTemplate && contextPath) accessDirs.push(contextDir);
+    const imagePaths = [...new Set(messages.flatMap(message => (message.attachments ?? []).filter(attachment => attachment.kind === 'image' && attachment.path).map(attachment => attachment.path)))];
+    const native = useDefaultTemplate ? nativeCliOptions(serviceId, { readOnly, accessDirs, contextDir, model: p.model, imagePaths }) : { args: [], jsonl: false };
+    const callId = randomUUID().slice(0, 12);
     await chatCli({
       cmd: p.cmd ?? svc.cmd,
       cliTemplate: template,
-      extraArgs,
+      extraArgs: native.args,
       prompt,
       cwd: cwd ?? dirs.cwd,
-      jsonl: useJson,
+      jsonl: native.jsonl,
       claude: serviceId === 'claude',
+      grok: serviceId === 'grok',
       onDelta: delta,
-      onEvent: useJson ? watchClaudeStreamJson({ onText: delta, onSubagent }) : undefined,
+      onProcess,
+      onPermission: useDefaultTemplate ? onPermission : undefined,
+      onEvent: native.jsonl ? agentEvents(serviceId, { onText: delta, onSubagent: event => onSubagent?.({ ...event, subId: `${callId}:${event.subId}`, parentSubId: event.parentSubId ? `${callId}:${event.parentSubId}` : undefined }), onAction: action => onAction?.({ ...action, id: `${callId}:${action.id}` }) }) : undefined,
       signal,
     });
   } else if (svc.kind === 'local') {
     const baseUrl = p.baseUrl ?? svc.baseUrl;
-    const models = await ollamaModels(baseUrl);
-    await chatOllama({ baseUrl, model: pickOllamaModel(models, p.model ?? svc.model), messages, onDelta: delta, signal });
+    const inventory = await ollamaInventory(baseUrl);
+    const model = pickOllamaModel(inventory.map(m => m.name), p.model ?? svc.model);
+    const profileResponse = await fetch(`${baseUrl}/api/show`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000) });
+    if (!profileResponse.ok) throw new Error('Ollamas modelprofil kunne ikke kontrolleres før brug. Kontrollér modelnavn og Ollama-installation.');
+    const profile = await profileResponse.json();
+    const policy = billingPolicy(svc, { ...p, model, remoteModel: Boolean(profile.remote_host || profile.remote_model || inventory.find(m => m.name === model)?.remote_host) });
+    if (!policy.allowed) throw new Error(policy.reason);
+    if (messages.some(message => message.attachments?.some(attachment => attachment.kind === 'image')) && !profile.capabilities?.includes('vision')) throw new Error('Den valgte lokale model bekræfter ikke billedstøtte. Vælg en vision-model i Qwen/Ollama eller en anden billedkyndig tjeneste.');
+    await chatOllama({ baseUrl, model, messages, onDelta: delta, signal });
   } else {
     const args = { baseUrl: p.baseUrl ?? svc.baseUrl, apiKey: p.apiKey, model: p.model ?? svc.model, messages, onDelta: delta, signal };
     if (serviceId === 'anthropic') await chatAnthropic(args);
@@ -641,63 +683,140 @@ export async function runChat({ serviceId, messages, cfg, dirs, onDelta, onSubag
   return acc;
 }
 
+function requestSignal(signal) { return signal ? AbortSignal.any([signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000); }
+
 // ---- Medie-produktion (sub-api) ---------------------------------------------
-async function elevenTts({ text, cfg, dirs }) {
+const MESHY_TEXT_TO_3D = 'https://api.meshy.ai/openapi/v2/text-to-3d';
+
+async function mediaHttpError(provider, response, apiKey) {
+  const raw = await response.text();
+  let data;
+  try { data = JSON.parse(raw); } catch { /* Some gateways return plain text. */ }
+  const code = data?.detail?.code ?? data?.detail?.status;
+  if (provider === 'ElevenLabs' && code === 'invalid_api_key') {
+    return new Error(`ElevenLabs fejl ${response.status}: API-nøglen blev afvist. Indsæt selve den hemmelige API-nøgle i Orbit, ikke nøglens ID eller navn. Nye nøgler starter med sk_ og vises ved oprettelsen. Opret en ny nøgle i ElevenLabs, hvis du kun har ID'et, og gem den under ElevenLabs i Orbit.`);
+  }
+  // Never echo a credential even if a provider includes it in its error response.
+  const detail = (apiKey ? raw.split(apiKey).join('[skjult]') : raw).slice(0, 500);
+  return new Error(`${provider} fejl ${response.status}: ${detail}`);
+}
+
+async function elevenTts({ text, cfg, dirs, signal, onStatus }) {
   const { providers } = aiCfg(cfg);
   const p = providers.elevenlabs ?? {};
-  const voice = p.model ?? '21m00Tcm4TlvDq8ikWAM';
+  const voice = p.voiceId ?? p.model ?? '21m00Tcm4TlvDq8ikWAM';
+  onStatus?.('ElevenLabs: lyd genereres');
   const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}?output_format=mp3_44100_128`, {
-    method: 'POST',
+    method: 'POST', signal: requestSignal(signal),
     headers: { 'Content-Type': 'application/json', 'xi-api-key': p.apiKey },
-    body: JSON.stringify({ text: text.slice(0, 4500), model_id: 'eleven_multilingual_v2' }),
+    body: JSON.stringify({ text, model_id: 'eleven_multilingual_v2' }),
   });
-  if (!r.ok) throw new Error(`ElevenLabs fejl ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  if (!r.ok) throw await mediaHttpError('ElevenLabs', r, p.apiKey);
   const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.length > 64 * 1024 * 1024) throw new Error('ElevenLabs returnerede en lydfil over 64 MB. Hent den hos leverandøren.');
+  if (buf.subarray(0, 3).toString() !== 'ID3' && !(buf.length > 1 && buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0)) throw new Error('ElevenLabs returnerede ikke en gyldig MP3-fil.');
   const name = ` tale-${Date.now()}.mp3`;
   return saveArtifact(buf, name, dirs);
 }
 
-async function meshyTextTo3d({ prompt, cfg, dirs, onStatus }) {
+async function meshyTextTo3d({ prompt, cfg, dirs, onStatus, onPreview, signal, existingId, onSubmitted }) {
   const { providers } = aiCfg(cfg);
   const p = providers.meshy ?? {};
-  const r = await fetch('https://api.meshy.ai/v1/text-to-3d', {
-    method: 'POST',
+  let result = existingId;
+  if (!result) {
+  const r = await fetch(MESHY_TEXT_TO_3D, {
+    method: 'POST', signal: requestSignal(signal),
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${p.apiKey}` },
     body: JSON.stringify({ mode: 'preview', prompt, art_style: 'realistic' }),
   });
-  if (!r.ok) throw new Error(`Meshy fejl ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  const { result } = await r.json();
+  if (!r.ok) throw await mediaHttpError('Meshy', r, p.apiKey);
+  ({ result } = await r.json());
+  if (!result) throw new Error('Meshy returnerede ikke et job-id.');
+  onSubmitted(result);
+  }
+  let preview;
+  let previewUrl;
   for (let i = 0; i < 60; i++) {
-    await new Promise((r2) => setTimeout(r2, 5000));
-    const st = await (await fetch(`https://api.meshy.ai/v1/text-to-3d/${result}`, { headers: { Authorization: `Bearer ${p.apiKey}` } })).json();
-    onStatus?.(`Meshy: ${st.status}`);
-    if (st.status === 'SUCCEEDED') {
-      const glb = await (await fetch(st.model_urls.glb)).arrayBuffer();
-      return saveArtifact(Buffer.from(glb), ` model-${Date.now()}.glb`, dirs);
+    if (i > 0) await delay(5000, undefined, { signal });
+    const response = await fetch(`${MESHY_TEXT_TO_3D}/${encodeURIComponent(result)}`, { signal: requestSignal(signal), headers: { Authorization: `Bearer ${p.apiKey}` } });
+    if (!response.ok) throw await mediaHttpError('Meshy', response, p.apiKey);
+    const st = await response.json();
+    const progress = Number(st.progress);
+    onStatus?.(`Meshy: ${st.status}${Number.isFinite(progress) && progress >= 0 && progress <= 100 ? ` · ${Math.round(progress)}%` : ''}`);
+    if (st.thumbnail_url && st.thumbnail_url !== previewUrl) {
+      previewUrl = st.thumbnail_url;
+      try {
+        const image = await downloadMedia(previewUrl, signal, 16 * 1024 * 1024);
+        const format = image.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ? 'png'
+          : image.subarray(0, 3).equals(Buffer.from([255, 216, 255])) ? 'jpg'
+          : image.subarray(0, 4).toString() === 'RIFF' && image.subarray(8, 12).toString() === 'WEBP' ? 'webp' : null;
+        if (format) {
+          preview = saveArtifact(image, ` model-preview-${Date.now()}.${format}`, dirs);
+          await onPreview?.(preview);
+        }
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        // A missing optional preview must not discard a valid model job.
+      }
     }
-    if (st.status === 'FAILED') throw new Error('Meshy 3D-generering slog fejl');
+    if (st.status === 'SUCCEEDED') {
+      if (!st.model_urls?.glb) throw new Error('Meshy meldte færdig, men leverede ingen GLB-downloadadresse.');
+      const glb = await downloadMedia(st.model_urls.glb, signal);
+      if (glb.subarray(0, 4).toString() !== 'glTF') throw new Error('Meshy returnerede ikke en gyldig GLB-fil.');
+      return [saveArtifact(glb, ` model-${Date.now()}.glb`, dirs), ...(preview ? [preview] : [])];
+    }
+    if (['FAILED', 'CANCELED', 'CANCELLED', 'EXPIRED'].includes(st.status)) throw new Error(`Meshy 3D-generering stoppede (${st.status}). Kontrollér jobbet ${result} på din Meshy-konto før en ny bestilling.`);
+    if (!['PENDING', 'IN_PROGRESS'].includes(st.status)) throw new Error(`Meshy returnerede en ukendt jobstatus: ${String(st.status).slice(0, 80)}`);
   }
   throw new Error('Meshy: timeout efter 5 minutter');
 }
 
-async function heygenAvatar({ text, cfg, dirs, onStatus }) {
+async function heygenAvatar({ text, cfg, dirs, onStatus, signal, existingId, onSubmitted }) {
   const { providers } = aiCfg(cfg);
   const p = providers.heygen ?? {};
+  if (!p.avatarId || !p.voiceId) throw new Error('HeyGen kræver et valgt avatar-id og stemme-id fra din konto.');
+  let videoId = existingId;
+  if (!videoId) {
   const r = await fetch('https://api.heygen.com/v2/video/generate', {
-    method: 'POST',
+    method: 'POST', signal: requestSignal(signal),
     headers: { 'Content-Type': 'application/json', 'X-Api-Key': p.apiKey },
-    body: JSON.stringify({ video_inputs: [{ character: { type: 'avatar', avatar_id: p.avatarId ?? 'Kristin_public_3_20240108' }, voice: { type: 'text', input_text: text.slice(0, 1800), voice_id: p.voiceId ?? '2d5b0e6cf36f460aa60fa5876e7c0bc6' } }] }),
+    body: JSON.stringify({ video_inputs: [{ character: { type: 'avatar', avatar_id: p.avatarId }, voice: { type: 'text', input_text: text, voice_id: p.voiceId } }] }),
   });
-  if (!r.ok) throw new Error(`HeyGen fejl ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  if (!r.ok) throw await mediaHttpError('HeyGen', r, p.apiKey);
   const { data } = await r.json();
+  videoId = data?.video_id;
+  if (!videoId) throw new Error('HeyGen returnerede ikke et job-id.');
+  onSubmitted(videoId);
+  }
   for (let i = 0; i < 60; i++) {
-    await new Promise((r2) => setTimeout(r2, 6000));
-    const st = await (await fetch(`https://api.heygen.com/v1/video_status.get?video_id=${data.video_id}`, { headers: { 'X-Api-Key': p.apiKey } })).json();
+    if (i > 0) await delay(6000, undefined, { signal });
+    const response = await fetch(`https://api.heygen.com/v1/video_status.get?video_id=${encodeURIComponent(videoId)}`, { signal: requestSignal(signal), headers: { 'X-Api-Key': p.apiKey } });
+    if (!response.ok) throw await mediaHttpError('HeyGen', response, p.apiKey);
+    const st = await response.json();
     onStatus?.(`HeyGen: ${st.data?.status}`);
-    if (st.data?.status === 'completed') return { kind: 'link', name: 'heygen-video.mp4', url: st.data.video_url, mime: 'video/mp4' };
-    if (st.data?.status === 'failed') throw new Error('HeyGen-video slog fejl');
+    if (st.data?.status === 'completed') {
+      const video = await downloadMedia(st.data.video_url, signal);
+      if (video.subarray(4, 8).toString() !== 'ftyp') throw new Error('HeyGen returnerede ikke en gyldig MP4-fil.');
+      return saveArtifact(video, ` video-${Date.now()}.mp4`, dirs);
+    }
+    if (['failed', 'canceled', 'cancelled', 'expired'].includes(st.data?.status)) throw new Error(`HeyGen-video stoppede (${st.data.status}). Kontrollér jobbet ${videoId} før en ny bestilling.`);
+    if (!['pending', 'waiting', 'processing'].includes(st.data?.status)) throw new Error(`HeyGen returnerede en ukendt jobstatus: ${String(st.data?.status).slice(0, 80)}`);
   }
   throw new Error('HeyGen: timeout efter 6 minutter');
+}
+
+async function downloadMedia(url, signal, maxBytes = 256 * 1024 * 1024) {
+  if (new URL(url).protocol !== 'https:') throw new Error('Mediefilen skal hentes via HTTPS.');
+  const response = await fetch(url, { signal: requestSignal(signal) });
+  if (!response.ok || !response.body) throw new Error(`Mediefilen kunne ikke hentes (${response.status}).`);
+  const chunks = []; let size = 0;
+  for await (const chunk of response.body) {
+    size += chunk.length;
+    if (size > maxBytes) throw new Error('Mediefilen er for stor. Hent den hos leverandøren.');
+    chunks.push(Buffer.from(chunk));
+  }
+  if (!size) throw new Error('Leverandøren returnerede en tom fil.');
+  return Buffer.concat(chunks);
 }
 
 function saveArtifact(buf, name, dirs) {
@@ -711,18 +830,68 @@ function guessMime(n) {
   if (/\.mp3$/i.test(n)) return 'audio/mpeg';
   if (/\.glb$/i.test(n)) return 'model/gltf-binary';
   if (/\.png$/i.test(n)) return 'image/png';
+  if (/\.webp$/i.test(n)) return 'image/webp';
   if (/\.jpe?g$/i.test(n)) return 'image/jpeg';
   if (/\.mp4$/i.test(n)) return 'video/mp4';
   return 'application/octet-stream';
 }
-export async function produceMedia(job, text, cfg, dirs, emit) {
-  const p = (job.description + ' ' + text).toLowerCase();
-  try {
-    if (job.serviceId === 'elevenlabs') return [await elevenTts({ text: text || job.description, cfg, dirs })];
-    if (job.serviceId === 'meshy') return [await meshyTextTo3d({ prompt: job.description || text.slice(0, 500), cfg, dirs, onStatus: (s) => emit({ type: 'job_status', jobId: job.id, status: s }) })];
-    if (job.serviceId === 'heygen') return [await heygenAvatar({ text: text || job.description, cfg, dirs, onStatus: (s) => emit({ type: 'job_status', jobId: job.id, status: s }) })];
-  } catch (e) {
-    emit({ type: 'job_note', jobId: job.id, note: `Medieproduktion: ${e.message}` });
+export async function produceMedia(job, text, cfg, dirs, emit, signal, { runId, operationNamespace } = {}) {
+  assertUsable(serviceById(job.serviceId), cfg);
+  signal?.throwIfAborted();
+  const media = { ...(job.media ?? {}) };
+  let submissionKey;
+  if (operationNamespace && dirs.runs) {
+    submissionKey = createHash('sha256').update(JSON.stringify([operationNamespace, job.id, job.serviceId])).digest('hex');
+    const provider = aiCfg(cfg).providers[job.serviceId] ?? {};
+    // Only the digest is persisted; prompts and credentials never enter the ledger.
+    const requestHash = createHash('sha256').update(JSON.stringify({ version: 1, serviceId: job.serviceId, prompt: job.description ?? '', text: text ?? '', voiceId: provider.voiceId ?? null, avatarId: provider.avatarId ?? null, model: provider.model ?? null, account: provider.apiKey ?? null })).digest('hex');
+    const claim = claimExternalSubmission(dirs, { key: submissionKey, serviceId: job.serviceId, requestHash });
+    if (!claim.created) {
+      Object.assign(media, { state: claim.submission.state, remoteId: claim.submission.remoteId, submittedAt: claim.submission.submittedAt, artifacts: claim.submission.artifacts });
+    } else if (media.state === 'completed' || media.remoteId) {
+      updateExternalSubmission(dirs, submissionKey, { state: media.state === 'completed' ? 'completed' : 'processing', ...(media.remoteId ? { remoteId: media.remoteId } : {}), ...(media.artifacts?.length ? { artifacts: media.artifacts } : {}) });
+    }
   }
-  return [];
+  const checkpoint = patch => {
+    Object.assign(media, patch);
+    if (submissionKey && ['processing', 'completed'].includes(media.state)) updateExternalSubmission(dirs, submissionKey, { state: media.state, ...(media.remoteId ? { remoteId: media.remoteId } : {}), ...(media.artifacts?.length ? { artifacts: media.artifacts } : {}) });
+    emit({ type: 'job_media', jobId: job.id, media: { ...media } });
+  };
+  if (media.state === 'completed') {
+    try {
+      if (!Array.isArray(media.artifacts) || !media.artifacts.length) throw new Error('Leverancen mangler.');
+      for (const artifact of media.artifacts) {
+        const archived = artifact.url?.match(/^\/api\/ai\/runs\/([a-zA-Z0-9_-]+)\/artifacts\/([a-f0-9]{64})$/);
+        if (archived) {
+          const { metadata } = await archivedArtifactPath(dirs.artifacts, archived[1], archived[2]);
+          if (artifact.sha256 && artifact.sha256 !== metadata.sha256) throw new Error('Kontrolsummen er ændret.');
+        } else if (/^\/api\/ai\/file\/[^/]+$/.test(artifact.url ?? '')) {
+          const info = statSync(join(dirs.artifacts, basename(artifact.url)));
+          if (!info.isFile() || !info.size) throw new Error('Den tidligere fil mangler.');
+        } else throw new Error('Leverancens adresse kan ikke verificeres.');
+      }
+    } catch { throw new Error('Den afsluttede medieleverance kunne ikke verificeres i arkivet. Gendan filen eller kontrollér leverandørens eksisterende job; Orbit bestiller ikke igen.'); }
+    checkpoint({}); return media.artifacts;
+  }
+  if (media.state === 'submitting' && !media.remoteId) throw new Error('En tidligere mediebestilling kan være modtaget af leverandøren, men kvitteringen mangler. Kontrollér leverandørens historik før en ny bestilling. Orbit genbestiller ikke automatisk.');
+  if (!media.remoteId) checkpoint({ state: 'submitting', serviceId: job.serviceId, submittedAt: Date.now() });
+  const archive = artifact => runId ? archiveArtifact({ artifactsDir: dirs.artifacts, runId, jobId: job.id, filePath: join(dirs.artifacts, basename(artifact.url)), name: artifact.name, mime: artifact.mime, serviceId: job.serviceId, remoteId: media.remoteId ?? null }) : Promise.resolve(artifact);
+  const options = {
+    cfg, dirs, signal, existingId: media.remoteId,
+    onSubmitted: remoteId => checkpoint({ state: 'processing', remoteId }),
+    onStatus: status => emit({ type: 'job_status', jobId: job.id, status }),
+    onPreview: async preview => checkpoint({ artifacts: [await archive(preview)] }),
+  };
+  try {
+    let artifact;
+    if (job.serviceId === 'elevenlabs') artifact = await elevenTts({ text: text || job.description, ...options });
+    else if (job.serviceId === 'meshy') artifact = await meshyTextTo3d({ prompt: job.description || text, ...options });
+    else if (job.serviceId === 'heygen') artifact = await heygenAvatar({ text: text || job.description, ...options });
+    else throw new Error('Ukendt medietjeneste.');
+    const artifacts = await Promise.all((Array.isArray(artifact) ? artifact : [artifact]).map(archive));
+    checkpoint({ state: 'completed', artifacts });
+    return artifacts;
+  } catch (e) {
+    throw new Error(`Medieproduktion fejlede: ${e.message}`);
+  }
 }

@@ -65,11 +65,17 @@ export interface Task {
     adopsId?: number;
     gitProvider?: 'github' | 'gitlab';
     gitIssue?: number;
+    gitOwner?: string;
+    gitRepo?: string;
+    gitUrl?: string;
     jiraKey?: string;
     trelloId?: string;
     plannerId?: string;
     plannerEtag?: string;
   }; // eksterne systemer
+  aiDelivery?: { runId: string; status: string; verification: string; commit?: string; updatedAt: string };
+  aiProposal?: { runId: string; itemId: string; scope: 'version1' | 'later' };
+  aiWorkshopSource?: { jobId: string; importedAt: string };
   approval?: Approval | null; // kundegodkendelse via offentligt link
   emoji?: string; // lille visuel markør på kortet
   pinnedDay?: string | null; // fastgjort til "Min dag" (ISO-dato, ryddes automatisk)
@@ -245,7 +251,23 @@ export interface Sprint {
   endDate: string;
 }
 
+export interface AutonomyPolicy {
+  maxProviderCalls: number;
+  maxExecutionMinutes: number | null;
+  maxRepairAttempts: number;
+  maxConsecutiveFailures: number;
+}
+
 export interface Project {
+  autonomyPolicy?: AutonomyPolicy;
+  releaseGoal?: string;
+  scopeTaskIds?: string[];
+  scopeCapturedAt?: string;
+  repositoryPath?: string;
+  repositoryBaseRef?: string;
+  continueVerifiedWork?: boolean;
+  aiWorkspace?: { runId: string; source: string; sourceCommit: string; baseRef?: string | null; commit: string; branch: string; workDir: string; updatedAt: string; includedTaskIds: string[] };
+  verificationChecks?: { name: string; command: string; args: string[] }[];
   id: string;
   name: string;
   key: string; // fx "APP"
@@ -323,7 +345,28 @@ export interface AiJob {
 
 /* ---------- AI-chat (ChatGPT-lignende, drevet af companion) ---------- */
 
-export interface AiAttachment {
+export interface ArtifactMetadata {
+  artifactId?: string;
+  sha256?: string;
+  size?: number;
+  jobId?: string;
+  sourceCommit?: string | null;
+  createdAt?: string;
+  serviceId?: string | null;
+  remoteId?: string | null;
+}
+
+export interface AiArtifact extends ArtifactMetadata {
+  kind: string;
+  name: string;
+  mime: string;
+  url?: string;
+}
+
+export interface AiAttachment extends ArtifactMetadata {
+  id?: string;
+  extractedText?: string | null;
+  extractionError?: string | null;
   kind: 'image' | 'file';
   name: string;
   mime: string;
@@ -336,6 +379,8 @@ export interface AiAttachment {
 export type AiMessageStatus = 'streaming' | 'done' | 'error';
 
 export interface AiMessage {
+  runId?: string;
+  runFinishedAt?: number;
   id: string;
   role: 'user' | 'assistant' | 'system';
   text: string;
@@ -353,4 +398,13 @@ export interface AiChat {
   messages: AiMessage[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProjectPlan {
+  version: 1;
+  releaseGoal: string;
+  summary: string;
+  firstMilestone: string;
+  unknowns: string[];
+  tasks: { id: string; title: string; description: string; priority: string; scope: 'version1' | 'later'; acceptanceCriteria: string[]; verification: string[]; evidence: string[]; dependsOn: string[] }[];
 }

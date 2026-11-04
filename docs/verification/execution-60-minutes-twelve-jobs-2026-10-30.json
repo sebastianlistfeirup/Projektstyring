@@ -1,0 +1,41 @@
+{
+  "ok": true,
+  "scenario": "serial execution, saved pause and same-worktree resume",
+  "sourceHashes": {
+    "ai-runtime.mjs": "6c1faf039ed07445a6f4611afe05b7d1df2b763e5246a718ceadbe8ea6e7f53f",
+    "ai-state.mjs": "6ba772fd32b51a4d832dd15957bff04c6a51bf49465c5f6fbc86bfdfad314204",
+    "ai-services.mjs": "ddd3f256ce94f08e8e54efb0f0b56e51638c959f1d81fe112cff252580ce456f",
+    "ai-repository.mjs": "9884717e9f9663873c97ce41448236f25805c3fe5572076a3d5bfb61151b6384",
+    "ai-check-process.mjs": "1c8ab532b9a701fc6c88cb53b16be18af014c0846e1405ea99cca49f5c7c8a35",
+    "ai-history.mjs": "d395fa6164f4d13dd53002949127d1cb6d871962b687923124413e7d44da5bb5",
+    "ai-capabilities.mjs": "8a82b2c6a87ea285bd21898d9a5cc4559745c6320be0a9bda82dc84342584fd8",
+    "ai-processes.mjs": "588b56cc022a4289c6c87c237db9b6b5c955c3c3466b24e33bd723f3fe137cb1",
+    "shared/ai-plan.mjs": "bbdee78d1e270dafeccb2aaeab756ecf1eb450e755b0c6e4a5889014d02c5b4a"
+  },
+  "startedAt": "2026-10-30T13:08:39.381Z",
+  "durationMs": 3601031,
+  "samples": 719,
+  "maxParentRssBytes": 44937216,
+  "jobs": 12,
+  "secondsPerJob": 300,
+  "finalCommit": "7ecc0fe11da0005eb93f0e993651cebabbef605d",
+  "finalStatus": "done",
+  "checks": {
+    "status": "passed",
+    "checks": [
+      {
+        "command": "/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin/node",
+        "args": [
+          "-e",
+          "const fs=require('fs');for(let i=0;i<12;i++)if(fs.readFileSync('delivery-'+i+'.txt','utf8')!=='verified '+i+'\\n')process.exit(7);console.log('All deliveries verified');"
+        ],
+        "name": "Actual delivery files",
+        "startedAt": 1793369320311,
+        "finishedAt": 1793369320371,
+        "exitCode": 0,
+        "status": "passed",
+        "output": "All deliveries verified\n"
+      }
+    ]
+  }
+}

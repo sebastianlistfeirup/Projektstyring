@@ -1,0 +1,51 @@
+name: Orbit Windows release
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'server/**'
+      - 'src/**'
+      - 'public/**'
+      - 'scripts/desktop/**'
+      - 'scripts/build-desktop-release.mjs'
+      - 'package*.json'
+      - '.github/workflows/desktop-packaging.yml'
+  push:
+    branches: [codex/orbit-reliable-autonomy]
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run desktop:package
+      - name: Start complete packaged runtime without development server
+        shell: pwsh
+        run: |
+          & .\desktop-build\Orbit\runtime\node.exe .\desktop-build\Orbit\desktop\launch.mjs --smoke
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged Orbit failed its startup/shutdown probe.' }
+      - name: Parse packaged shortcut setup
+        shell: pwsh
+        run: |
+          foreach ($file in @('scripts/desktop/shortcuts.ps1', 'scripts/desktop/start-installed.ps1')) {
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$null, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count) { $parseErrors | Format-List; exit 1 }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Orbit-Windows-x64-${{ github.sha }}
+          path: desktop-build/Orbit/
+          include-hidden-files: true
+          retention-days: 14

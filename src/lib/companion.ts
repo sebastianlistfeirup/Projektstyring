@@ -222,6 +222,11 @@ export async function graphEvents(): Promise<{ ok: boolean; items?: GraphEvent[]
 
 // ---------------- Synkronisering ----------------
 export interface SyncSnapshotPayload {
+  workspaceEpoch?: string;
+  deletedEntities?: Record<string, Record<string, string>>;
+  workspaceVersions?: Record<string, string>;
+  schemaVersion?: number;
+  workspaceState?: Record<string, unknown>;
   tasks: unknown[];
   projects: unknown[];
   sprints: unknown[];
@@ -240,7 +245,7 @@ export async function syncPush(
   clientId: string,
   user: { id: string; name: string },
   snapshot: SyncSnapshotPayload,
-): Promise<{ ok: boolean; updatedAt?: string }> {
+): Promise<{ ok: boolean; updatedAt?: string; merged?: boolean; resetRequired?: boolean }> {
   try {
     return await post('/api/sync/push', { clientId, user, snapshot });
   } catch {
@@ -364,7 +369,7 @@ export async function listBackups(): Promise<{ ok: boolean; files?: BackupFile[]
 
 export async function restoreBackup(
   name: string,
-): Promise<{ ok: boolean; snapshot?: SyncSnapshotPayload; reason?: string }> {
+): Promise<{ ok: boolean; snapshot?: SyncSnapshotPayload; reason?: string; warning?: string }> {
   try {
     return await post('/api/backup/restore', { name });
   } catch {
@@ -538,9 +543,16 @@ export interface GitIssue {
   id: number;
   title: string;
   state: string;
+  description?: string;
+  url?: string;
+  labels?: string[];
+  owner: string;
+  repo: string;
+  provider: 'github' | 'gitlab';
 }
 
 export async function saveGitConfig(cfg: {
+  projectId?: string;
   provider?: 'github' | 'gitlab';
   token?: string;
   owner?: string;
@@ -553,18 +565,18 @@ export async function saveGitConfig(cfg: {
   }
 }
 
-export async function fetchGitIssues(): Promise<{ ok: boolean; items?: GitIssue[]; reason?: string }> {
+export async function fetchGitIssues(projectId?: string): Promise<{ ok: boolean; items?: GitIssue[]; reason?: string; truncated?: boolean }> {
   try {
-    const res = await fetch(`${BASE}/api/git/issues`, { headers: authHeaders(), signal: AbortSignal.timeout(20000) });
+    const res = await fetch(`${BASE}/api/git/issues?projectId=${encodeURIComponent(projectId ?? '')}`, { headers: authHeaders(), signal: AbortSignal.timeout(120000) });
     return (await res.json()) as { ok: boolean; items?: GitIssue[]; reason?: string };
   } catch {
     return { ok: false, reason: 'Companion-serveren svarer ikke' };
   }
 }
 
-export async function closeGitIssue(id: number): Promise<{ ok: boolean; reason?: string }> {
+export async function closeGitIssue(id: number, repository?: { projectId: string; provider?: string; owner?: string; repo?: string }): Promise<{ ok: boolean; reason?: string }> {
   try {
-    return await post('/api/git/close', { id });
+    return await post('/api/git/close', { id, ...repository });
   } catch {
     return { ok: false, reason: 'Companion-serveren svarer ikke' };
   }

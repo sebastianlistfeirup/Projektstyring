@@ -122,6 +122,8 @@ export function AnalysisPanel() {
                 <span className="opacity-60">{t('swarm.analysisAvg')}: <b>{fmtDur(analysis.avgJobMs)}</b></span>
                 <span className={analysis.errors > 0 ? 'text-rose-400' : 'text-emerald-400'}>{t('swarm.analysisErrors')}: <b>{analysis.errors}</b></span>
               </div>
+              <p className="text-xs opacity-65">Seneste {analysis.windowRuns ?? analysis.runs} af {analysis.totalAvailable ?? analysis.runs} gemte kørsler. Fejlprocenten gælder påbegyndte jobs; ventende og blokerede jobs tæller ikke som forsøg.</p>
+              {!!analysis.unreadable && <p className="text-xs text-amber-500">{analysis.unreadable} historikfiler kunne ikke læses.</p>}
               {analysis.services.slice(0, 6).map((s) => (
                 <div key={String(s.id)} className="flex items-center gap-2 text-[10.5px]">
                   <span className="flex-1 truncate">{s.name}</span>
@@ -282,6 +284,7 @@ export function RunActionsBar({ run, onToast }: { run: SwarmRun; onToast?: (msg:
   const [linkOpen, setLinkOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [resuming, setResuming] = useState(false);
+  const [instruction, setInstruction] = useState('');
   const linked = Object.entries(aiTaskLinks).find(([, v]) => v.runId === run.runId);
 
   const matches = useMemo(() => {
@@ -293,14 +296,22 @@ export function RunActionsBar({ run, onToast }: { run: SwarmRun; onToast?: (msg:
   }, [query, tasks, projects]);
 
   const unfinished = run.jobs.filter((j) => j.status !== 'done').length;
+  const resumable = (run.status !== 'awaiting_approval' || Boolean(run.recoveredAt)) && (unfinished > 0 || ['failed', 'interrupted', 'cancelled'].includes(run.verification?.status ?? ''));
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      {unfinished > 0 && (
+      {resumable && <details className="w-full text-xs mb-2">
+        <summary className="cursor-pointer font-medium">Beslutning før genoptagelse</summary>
+        <label className="block mt-2 space-y-2"><span>Præcisér, hvordan arbejdet skal fortsætte. Beskeden følger med til de resterende jobs.</span>
+          <textarea aria-label="Beslutning til genoptagelse" className="input w-full min-h-20" maxLength={100000} value={instruction} onChange={event => setInstruction(event.target.value)} placeholder="Din beslutning eller rettelse…" />
+        </label>
+        <p className="opacity-60 mt-2">Systemtilladelser ændres ikke af beskeden. Afklar eventuel manglende adgang, før du genoptager.</p>
+      </details>}
+      {resumable && (
         <button
           onClick={async () => {
             setResuming(true);
-            const r = await resumeRun(run.runId);
+            const r = await resumeRun(run.runId, instruction.trim() || undefined);
             setResuming(false);
             onToast?.(r.ok ? t('swarm.resumed') : (r.reason ?? t('swarm.resumeFailed')));
           }}
@@ -308,7 +319,7 @@ export function RunActionsBar({ run, onToast }: { run: SwarmRun; onToast?: (msg:
           className="rounded-lg border border-sky-400/40 text-sky-300 px-2 py-1 text-[10px] hover:bg-sky-400/10 transition disabled:opacity-40 flex items-center gap-1"
         >
           {resuming ? <Loader2 size={10} className="animate-spin" /> : <RotateCcw size={10} />}
-          {t('swarm.resumeRun')} ({unfinished})
+          {t('swarm.resumeRun')} {unfinished ? `(${unfinished})` : '· kontroller'}
         </button>
       )}
       <a
