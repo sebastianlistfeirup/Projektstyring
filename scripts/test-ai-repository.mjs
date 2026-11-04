@@ -21,6 +21,7 @@ test('repository readiness reveals fixes on another branch without changing the 
   assert.equal(report.otherBranches[0].branch, 'orbit/texture-repair');
   assert.equal(report.otherBranches[0].ahead, 1); assert.equal(report.otherBranches[0].behind, 0);
   assert.equal(report.otherBranches[0].subject, 'Restore textures');
+  assert.equal(report.suggestedBranch, 'orbit/texture-repair');
   assert.equal(report.recentCommits[0].subject, 'Base project'); assert.equal(report.stable, true);
   assert.equal(git(root, 'rev-parse', 'HEAD'), original); assert.equal(readFileSync(join(root, 'notes.txt'), 'utf8'), 'Uncommitted user notes');
 });
@@ -35,6 +36,7 @@ test('a selected descendant branch becomes the isolated starting commit without 
   git(root, 'checkout', '-qb', 'orbit/texture-fix'); writeFileSync(join(root, 'texture.txt'), 'new texture'); git(root, 'add', '.');
   git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'texture');
   const selectedHead = git(root, 'rev-parse', 'HEAD'); git(root, 'checkout', '-q', sourceBranch);
+  assert.equal((await repositoryReadiness(root)).suggestedBranch, 'orbit/texture-fix');
   const isolated = await createRunWorktree(root, `${root}-work`, 'branch-choice', undefined, 'orbit/texture-fix');
   assert.equal(isolated.baseCommit, selectedHead); assert.equal(isolated.sourceCommit, sourceHead);
   assert.equal(readFileSync(join(isolated.workDir, 'route.txt'), 'utf8'), 'new route');
@@ -42,6 +44,19 @@ test('a selected descendant branch becomes the isolated starting commit without 
   assert.equal(git(root, 'rev-parse', 'HEAD'), sourceHead);
   assert.equal(git(root, 'branch', '--show-current'), sourceBranch);
   await assert.rejects(createRunWorktree(root, `${root}-bad`, 'invalid-choice', undefined, 'other/unknown'), /findes ikke længere/);
+});
+
+test('repository does not suggest a branch when descendant fixes diverge', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-branch-choice-'));
+  git(root, 'init', '-q'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '--allow-empty', '-qm', 'base');
+  const sourceBranch = git(root, 'branch', '--show-current');
+  git(root, 'checkout', '-qb', 'orbit/route'); writeFileSync(join(root, 'route.txt'), 'route'); git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'route');
+  git(root, 'checkout', '-q', sourceBranch);
+  git(root, 'checkout', '-qb', 'orbit/art'); writeFileSync(join(root, 'art.txt'), 'art'); git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'art');
+  git(root, 'checkout', '-q', sourceBranch);
+  const report = await repositoryReadiness(root);
+  assert.equal(report.otherBranches.length, 2);
+  assert.equal(report.suggestedBranch, null);
 });
 
 test('visual evidence lists real worktree captures and confines reads to image report paths', async () => {
@@ -55,6 +70,27 @@ test('visual evidence lists real worktree captures and confines reads to image r
   assert.equal(runArtifactPath(root, images[0].name), join(root, 'reports', 'screenshots', 'before.png'));
   assert.throws(() => runArtifactPath(root, '../reports/screenshots/before.png'));
   assert.throws(() => runArtifactPath(root, 'secret.png'));
+});
+
+test('visual evidence excludes images inherited from the selected base commit', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-image-provenance-'));
+  git(root, 'init', '-q'); mkdirSync(join(root, 'reports', 'screenshots'), { recursive: true });
+  writeFileSync(join(root, 'reports', 'screenshots', 'old.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'existing visual');
+  const baseCommit = git(root, 'rev-parse', 'HEAD');
+  writeFileSync(join(root, 'reports', 'screenshots', 'after.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'new visual');
+  assert.deepEqual((await runWorktreeArtifacts(root, 'run-visual', baseCommit)).map(item => item.name), ['reports/screenshots/after.png']);
+});
+
+test('visual evidence includes new captures in ignored report directories', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-ignored-capture-'));
+  git(root, 'init', '-q'); writeFileSync(join(root, '.gitignore'), 'reports/\n');
+  git(root, 'add', '.'); git(root, '-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'ignore generated reports');
+  const baseCommit = git(root, 'rev-parse', 'HEAD');
+  mkdirSync(join(root, 'reports', 'screenshots'), { recursive: true });
+  writeFileSync(join(root, 'reports', 'screenshots', 'actual.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+  assert.deepEqual((await runWorktreeArtifacts(root, 'run-ignored', baseCommit)).map(item => item.name), ['reports/screenshots/actual.png']);
 });
 
 test('isolated worktree preserves source checkout and records actual checks and commit', async () => {

@@ -767,7 +767,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       }
       const commit = candidateCommit ?? await gitCommit(handle.runDir, job.title);
       doneText.set(job.id, text);
-      if (run.repository) artifacts = [...artifacts, ...await runWorktreeArtifacts(handle.runDir, runId)];
+      if (run.repository) artifacts = [...artifacts, ...await runWorktreeArtifacts(handle.runDir, runId, baseCommit)];
       const res = { jobId: job.id, title: job.title, serviceId: job.serviceId, phase: job.phase, text, artifacts, deliverable: fname, commit, verification: 'requires_review', score, judgeNote };
       results.push(res);
       track({ type: 'job_done', result: res });

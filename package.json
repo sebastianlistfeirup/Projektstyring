@@ -14,7 +14,7 @@
     "test:smoke": "node scripts/smoke-test.mjs",
     "test:imports": "tsx scripts/test-imports.ts",
     "test:ai": "node --test scripts/test-ai-*.mjs scripts/test-workspace-*.mjs",
-    "test:workspace": "tsx --test scripts/test-workspace.ts",
+    "test:workspace": "tsx --test scripts/test-workspace.ts scripts/test-next-step.ts",
     "test:browser": "playwright test",
     "test:cli": "node scripts/verify-ai-cli.mjs"
   },

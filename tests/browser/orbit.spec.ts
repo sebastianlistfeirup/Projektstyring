@@ -87,7 +87,7 @@ test('upload bible → work order → isolated code → reload → real test evi
   })).toBe(true);
   await page.reload();
   await expect(page.getByRole('region', { name: 'Orbit Live' }).getByText('Leveret til gennemgang', { exact: true })).toBeVisible();
-  await expect(page.getByText('Kontroller: Bestået', { exact: false })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Kørselsstatus' }).getByText('Kontroller: Bestået', { exact: false })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Chatpanel' }).locator('table').filter({ hasText: 'game.txt' })).toBeVisible();
   await page.getByRole('button', { name: 'Kun arbejdskort', exact: true }).click();
   await page.screenshot({ path: testInfo.outputPath('orbit-workspace-desktop.png') });
@@ -879,12 +879,19 @@ test('project can start isolated work from a selected descendant branch', async 
   const branchWork = mkdtempSync(join(tmpdir(), 'orbit-browser-existing-fix-'));
   execFileSync('git', ['worktree', 'add', '-qb', 'orbit/browser-prior-fix', branchWork, 'HEAD'], { cwd: source });
   writeFileSync(join(branchWork, 'existing-fix.txt'), 'already corrected');
+  mkdirSync(join(branchWork, 'reports', 'screenshots'), { recursive: true });
+  writeFileSync(join(branchWork, 'reports', 'screenshots', 'existing.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/rZkAAAAASUVORK5CYII=', 'base64'));
+  writeFileSync(join(branchWork, '.gitignore'), 'reports/screenshots/after.png\n');
   execFileSync('git', ['add', '.'], { cwd: branchWork });
   execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@local', 'commit', '-qm', 'Existing correction'], { cwd: branchWork });
   const selectedCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: branchWork, encoding: 'utf8' }).trim();
   const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' }).trim();
   await page.getByText('Repository og kvalitetskontroller', { exact: false }).first().click();
   await page.getByRole('button', { name: 'Vis projektets Git-grundlag' }).click();
+  const inspected = await (await request.post(`${base}/api/ai/repository/inspect`, { data: { path: source, details: true } })).json();
+  await expect(page.getByLabel('Grundlag for næste arbejdsordre')).toHaveValue(inspected.repository.suggestedBranch ?? '');
+  await page.getByLabel('Grundlag for næste arbejdsordre').selectOption('');
+  await expect(page.getByLabel('Grundlag for næste arbejdsordre')).toHaveValue('');
   await page.getByLabel('Grundlag for næste arbejdsordre').selectOption('orbit/browser-prior-fix');
   await page.getByRole('button', { name: 'Kontrollér og gem' }).click();
   await expect(page.getByText('Gemt. Orbit arbejder på en separat Git-gren', { exact: false })).toBeVisible();
@@ -904,6 +911,7 @@ test('project can start isolated work from a selected descendant branch', async 
   expect(readFileSync(join(run.workDir, 'existing-fix.txt'), 'utf8')).toBe('already corrected');
   const image = run.results.flatMap((result: { artifacts?: { name: string; url: string }[] }) => result.artifacts ?? []).find((artifact: { name: string }) => artifact.name === 'reports/screenshots/after.png');
   expect(image).toBeTruthy();
+  expect(run.results.flatMap((result: { artifacts?: { name: string }[] }) => result.artifacts ?? []).some((artifact: { name: string }) => artifact.name === 'reports/screenshots/existing.png')).toBe(false);
   expect((await request.get(`${base}${image.url}`)).ok()).toBe(true);
   await expect(page.getByRole('region', { name: 'Leverancer og medieproduktion' }).getByAltText('reports/screenshots/after.png')).toBeVisible();
   expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' }).trim()).toBe(sourceCommit);

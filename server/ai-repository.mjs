@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { cliSpawnSpec } from './ai-services.mjs';
 import { promisify } from 'node:util';
-import { realpathSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { runCheckProcess } from './ai-check-process.mjs';
 const exec = promisify(execFile);
@@ -17,8 +17,36 @@ export function runArtifactPath(workDir, name) {
   return file;
 }
 
-export async function runWorktreeArtifacts(workDir, runId) {
-  const paths = (await git(workDir, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])).split('\0').filter(Boolean);
+function reportFiles(workDir) {
+  const found = [];
+  let visited = 0;
+  const visit = (relativeDir, depth) => {
+    if (depth > 5 || visited >= 5000) return;
+    let entries;
+    try { entries = readdirSync(join(workDir, relativeDir), { withFileTypes: true }); }
+    catch { return; }
+    for (const entry of entries) {
+      if (++visited > 5000) break;
+      const name = `${relativeDir}/${entry.name}`;
+      if (entry.isDirectory()) visit(name, depth + 1);
+      else if (entry.isFile() && /\.(png|jpe?g|webp|glb|mp3|wav|mp4|webm)$/i.test(name)) found.push(name);
+    }
+  };
+  for (const name of ['reports', 'screenshots', 'visual', 'captures']) {
+    try { if (lstatSync(join(workDir, name)).isDirectory()) visit(name, 0); }
+    catch { /* This report directory does not exist. */ }
+  }
+  return found;
+}
+
+export async function runWorktreeArtifacts(workDir, runId, baseCommit) {
+  const [changed, untracked, trackedReports] = await Promise.all([
+    baseCommit ? git(workDir, ['diff', '--name-only', '--diff-filter=AM', '-z', baseCommit, 'HEAD']) : git(workDir, ['ls-files', '-z', '--cached']),
+    git(workDir, ['ls-files', '-z', '--others', '--exclude-standard']),
+    git(workDir, ['ls-files', '-z', '--cached', '--', 'reports', 'screenshots', 'visual', 'captures']),
+  ]);
+  const tracked = new Set(trackedReports.split('\0').filter(Boolean));
+  const paths = [...new Set([...changed.split('\0'), ...untracked.split('\0'), ...reportFiles(workDir).filter(name => !tracked.has(name))].filter(Boolean))];
   const files = paths.filter(name => /\.(png|jpe?g|webp|glb|mp3|wav|mp4|webm)$/i.test(name) && /(^|\/)(reports|screenshots|visual|captures)(\/|$)/i.test(name)).flatMap(name => {
     try {
       const path = runArtifactPath(workDir, name);
@@ -59,9 +87,28 @@ export async function repositoryReadiness(path) {
     const [behind, ahead] = counts.split(/\s+/).map(Number);
     return { ...item, ahead, behind, subject };
   }));
+  const descendants = branchDetails.filter(item => item.behind === 0 && item.ahead > 0);
+  let suggestedBranch = null;
+  // Suggest only an unambiguous latest tip; diverging fixes require an owner choice.
+  if (unmerged.length === branchDetails.length && descendants.length > 0 && descendants.length <= 10) {
+    const isAncestor = async (before, after) => {
+      try { await git(repo.source, ['merge-base', '--is-ancestor', before, after]); return true; }
+      catch (error) { if (error.code === 1) return false; throw error; }
+    };
+    const tips = [];
+    for (const item of descendants) {
+      let superseded = false;
+      for (const other of descendants) {
+        if (item === other) continue;
+        if (await isAncestor(item.commit, other.commit)) { superseded = true; break; }
+      }
+      if (!superseded) tips.push(item);
+    }
+    if (tips.length === 1) suggestedBranch = tips[0].branch;
+  }
   return { ...repo, checkedAt: new Date().toISOString(), changedFiles: changes.slice(0, 50), changedFileCount: changes.length,
     recentCommits: history.split('\n').filter(Boolean).map(line => { const [commit, ...subject] = line.split('\t'); return { commit, subject: subject.join('\t') }; }),
-    otherBranches: branchDetails, otherBranchCount: unmerged.length, godotProject: Boolean(tracked),
+    otherBranches: branchDetails, otherBranchCount: unmerged.length, suggestedBranch, godotProject: Boolean(tracked),
     stable: repo.baseCommit === await git(repo.source, ['rev-parse', 'HEAD']),
   };
 }

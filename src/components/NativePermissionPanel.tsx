@@ -33,7 +33,7 @@ function PermissionCard({ request }: { request: NativePermission }) {
 export default function NativePermissionPanel() {
   const permissions = useSwarm(s => s.permissions);
   if (!permissions.length) return null;
-  return <section aria-label="Afventer din beslutning" className="space-y-3">
+  return <section id="orbit-native-permissions" aria-label="Afventer din beslutning" className="space-y-3 scroll-mt-4">
     <h2 className="flex gap-2 items-center text-sm font-semibold"><ShieldQuestion size={17} />Agenten afventer dig · {permissions.length}</h2>
     {permissions.map(request => <PermissionCard key={request.id} request={request} />)}
   </section>;

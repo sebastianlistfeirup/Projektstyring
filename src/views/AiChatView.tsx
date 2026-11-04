@@ -416,6 +416,7 @@ export function AiChatView({ embedded = false }: { embedded?: boolean }) {
   const publishBible = useStore(s => s.publishBible);
   const [sendIssue, setSendIssue] = useState('');
   const [startingIdea, setStartingIdea] = useState('');
+  const [showStarterRepository, setShowStarterRepository] = useState(false);
   const starterDraft = useRef<string | null>(null);
 
   const [newProjectId, setNewProjectId] = useState<string>(() => useStore.getState().activeProjectId ?? projects[0]?.id ?? '');
@@ -451,6 +452,10 @@ export function AiChatView({ embedded = false }: { embedded?: boolean }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const desktopConnectionsRef = useRef<HTMLDetailsElement>(null);
+  const compactConnectionsRef = useRef<HTMLDetailsElement>(null);
+  const compactNavigationRef = useRef<HTMLDetailsElement>(null);
+  const repositorySettingsRef = useRef<HTMLDivElement>(null);
 
   const chat = aiChats.find((c) => c.id === chatId) ?? null;
   const chatProject = projects.find((p) => p.id === chat?.projectId) ?? null;
@@ -645,6 +650,28 @@ export function AiChatView({ embedded = false }: { embedded?: boolean }) {
   const availableCount = useMemo(() => (services ? Object.values(services).filter((s) => s.available).length : 0), [services]);
   const selectedProject = projects.find(p => p.id === newProjectId);
   const codingConnectionFound = Object.values(services ?? {}).some(s => s.available && s.capabilities?.repository);
+  const openConnections = () => {
+    setShowStarterRepository(false);
+    const desktop = !embedded && window.matchMedia('(min-width: 1024px)').matches;
+    if (!desktop && compactNavigationRef.current) compactNavigationRef.current.open = true;
+    const details = desktop ? desktopConnectionsRef.current : compactConnectionsRef.current;
+    if (!details) return;
+    details.open = true;
+    details.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    details.querySelector('summary')?.focus();
+  };
+  const openRepositorySettings = () => {
+    const details = repositorySettingsRef.current?.querySelector('details');
+    if (!details) return;
+    if (!details.open) details.querySelector('summary')?.click();
+    details.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    details.querySelector('summary')?.focus();
+  };
+  const toggleStarterRepository = () => {
+    if (compactConnectionsRef.current) compactConnectionsRef.current.open = false;
+    if (compactNavigationRef.current) compactNavigationRef.current.open = false;
+    setShowStarterRepository(open => !open);
+  };
   const beginConversation = (idea = '') => {
     const projectId = newProjectId || projects[0]?.id;
     if (!projectId) { setSendIssue('Opret et projekt først, så Orbit ved, hvor samtalen hører til.'); return; }
@@ -690,7 +717,7 @@ export function AiChatView({ embedded = false }: { embedded?: boolean }) {
           ))}
         </div>
         <div className="flex-1" />
-        <details className="rounded-xl border border-zinc-200 dark:border-white/10 p-3">
+        <details id="orbit-desktop-connections" ref={desktopConnectionsRef} className="rounded-xl border border-zinc-200 dark:border-white/10 p-3">
           <summary className="cursor-pointer text-xs font-medium">Forbindelser · {availableCount} klar</summary>
           <div className="mt-3"><ConnectionPanel services={services} prefs={prefs} onChanged={refresh} /></div>
         </details>
@@ -702,14 +729,14 @@ export function AiChatView({ embedded = false }: { embedded?: boolean }) {
           <select aria-label="Projekt til ny samtale" className="input min-w-0 flex-1 text-xs" value={newProjectId} onChange={e => setNewProjectId(e.target.value)}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
           <button className="btn-primary text-xs" onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); }}>{t('chat.newChat')}</button>
         </div>}
-        <details className={`${embedded ? "max-h-64 overflow-auto" : "lg:hidden"} rounded-xl border border-zinc-200 dark:border-white/10 p-3 text-xs`}>
+        <details id="orbit-compact-navigation" ref={compactNavigationRef} className={`${embedded ? "max-h-64 overflow-auto" : "lg:hidden"} rounded-xl border border-zinc-200 dark:border-white/10 p-3 text-xs`}>
           <summary className="cursor-pointer font-medium">Samtaler og forbindelser</summary>
           <div className="mt-3 space-y-3">
             <CreateProjectChat onCreate={(projectId, id) => { setNewProjectId(projectId); setChatId(id); }} />
             <label className="block">Projekt<select aria-label="Projekt til ny mobil-samtale" className="input w-full mt-1" value={newProjectId} onChange={e => setNewProjectId(e.target.value)}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
             <button className="btn-primary text-xs" onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); }}>{t('chat.newChat')}</button>
             <div className="max-h-48 overflow-auto">{aiChats.map(c => <button key={c.id} className="block w-full text-left rounded-lg p-2 hover:bg-indigo-500/10" onClick={() => { setChatId(c.id); }}>{c.title}</button>)}</div>
-            <details><summary className="cursor-pointer">Forbindelser · {availableCount} klar</summary><ConnectionPanel services={services} prefs={prefs} onChanged={refresh} /></details>
+            <details id="orbit-compact-connections" ref={compactConnectionsRef}><summary className="cursor-pointer">Forbindelser · {availableCount} klar</summary><ConnectionPanel services={services} prefs={prefs} onChanged={refresh} /></details>
           </div>
         </details>
         {companionOk === false && (
@@ -732,19 +759,24 @@ export function AiChatView({ embedded = false }: { embedded?: boolean }) {
                 <p><strong>Projekt:</strong> {selectedProject?.name ?? 'Vælg eller opret et projekt'}</p>
                 <p>{selectedProject?.repositoryPath ? 'Projektmappe valgt. Orbit kontrollerer den ved en kørsel.' : 'Projektmappe mangler endnu til kodearbejde.'}</p>
                 <p>{codingConnectionFound ? 'En coding-forbindelse er fundet; konto og levering skal stadig afprøves.' : 'Ingen coding-forbindelse er klar endnu. Tilslut en under Forbindelser.'}</p>
+                {selectedProject && (!selectedProject.repositoryPath || !codingConnectionFound) && <div className="flex flex-wrap gap-2 pt-2">
+                  {!codingConnectionFound && <button type="button" className="btn-ghost text-xs" onClick={openConnections}>Tilslut kodetjeneste</button>}
+                  {!selectedProject.repositoryPath && <button type="button" className="btn-ghost text-xs" aria-expanded={showStarterRepository} onClick={toggleStarterRepository}>Vælg projektmappe</button>}
+                </div>}
               </div>
+              {showStarterRepository && selectedProject && <div className="max-h-40 overflow-y-auto rounded-xl" aria-label="Tilknyt projektmappe"><ProjectExecutionSettings key={selectedProject.id} project={selectedProject} initiallyOpen /></div>}
               {!projects.length && <CreateProjectChat onCreate={(projectId, id) => { setNewProjectId(projectId); setChatId(id); }} />}
               <div className="space-y-2"><label htmlFor="orbit-starting-idea" className="text-sm font-medium">Dit mål</label><textarea id="orbit-starting-idea" value={startingIdea} onChange={event => setStartingIdea(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); beginConversation(startingIdea); } }} rows={3} className="input w-full resize-y text-sm" placeholder="Fx: Fortsæt arbejdet med byscenen og vis mig resultatet" /></div>
+              <div className="flex flex-wrap items-center gap-3"><button type="button" onClick={() => beginConversation(startingIdea)} className="btn-primary text-sm">Åbn samtale <ArrowUp size={15} /></button><button type="button" onClick={() => beginConversation()} className="btn-ghost text-xs"><Plus size={14} /> {t('chat.newChat')}</button></div>
               <div className="space-y-2"><p className="text-xs opacity-60">Eller begynd med et forslag</p><div className="flex flex-wrap gap-2">{['Undersøg seneste verificerede arbejde, og foreslå næste skridt.', 'Undersøg projektet og fortæl mig, hvad der blokerer.', 'Forbedr én synlig del mod de eksisterende referencer, og vis før og efter.'].map(idea => <button type="button" key={idea} className="btn-ghost text-xs text-left" onClick={() => setStartingIdea(idea)}>{idea}</button>)}</div></div>
               {sendIssue && <p role="alert" className="text-xs text-rose-400">{sendIssue}</p>}
-              <div className="flex flex-wrap items-center gap-3"><button type="button" onClick={() => beginConversation(startingIdea)} className="btn-primary text-sm">Åbn samtale <ArrowUp size={15} /></button><button type="button" onClick={() => beginConversation()} className="btn-ghost text-xs"><Plus size={14} /> {t('chat.newChat')}</button></div>
             </div>
           </div>
         ) : (
           <>
             {/* bibel-bar */}
             {chatProject && <ProjectScopePanel key={`scope-${chatProject.id}`} project={chatProject} />}
-            {chatProject && <ProjectExecutionSettings key={chatProject.id} project={chatProject} />}
+            {chatProject && <div ref={repositorySettingsRef}><ProjectExecutionSettings key={chatProject.id} project={chatProject} /></div>}
             <label className="flex items-center gap-2 text-xs">Arbejdsordre
               <select aria-label="Arbejdsordre" value={taskId} onChange={e => setTaskId(e.target.value)} className="input flex-1" disabled={running}>
                 <option value="">Samtale uden tilknyttet opgave</option>
@@ -801,7 +833,7 @@ export function AiChatView({ embedded = false }: { embedded?: boolean }) {
             <div className="orbit-chat-history flex-1 overflow-y-auto rounded-2xl border border-white/10 bg-black/5 dark:bg-black/20 p-4 space-y-4 min-h-[300px] max-h-[65vh]">
               {sendIssue && <p role="alert" className="text-rose-400 text-sm">{sendIssue}</p>}
               {chat.messages.length === 0 && (
-                <div className="h-full flex flex-col items-center justify-center text-center text-[12px] px-5 gap-4"><div><p className="text-base font-medium">Fortæl Orbit, hvad du vil opnå i {chatProject?.name ?? 'projektet'}</p><p className="opacity-60 mt-1">Skriv nedenfor. Orbit viser en plan og de kontroller, der faktisk bliver kørt.</p></div><div className="flex flex-wrap justify-center gap-2"><button className="btn-ghost text-xs" onClick={prepareTakeover}>Kortlæg eksisterende projekt</button><button className="btn-ghost text-xs" onClick={() => { setText('Undersøg og ret fejlen på det vedhæftede billede. Find årsagen i projektet, gennemfør den mindste nødvendige rettelse, og dokumentér en faktisk kontrol af det berørte forløb.'); textareaRef.current?.focus(); }}>Ret en fejl fra et billede</button><button className="btn-ghost text-xs" onClick={() => { fileInputRef.current?.click(); setBibleOpen(true); }}>Upload projektbibel</button></div>{!chatProject?.repositoryPath && <p className="opacity-55">Kodearbejde kræver en projektmappe under Repository og kvalitetskontroller.</p>}</div>
+                <div className="h-full flex flex-col items-center justify-center text-center text-[12px] px-5 gap-4"><div><p className="text-base font-medium">Fortæl Orbit, hvad du vil opnå i {chatProject?.name ?? 'projektet'}</p><p className="opacity-60 mt-1">Skriv nedenfor. Orbit viser en plan og de kontroller, der faktisk bliver kørt.</p></div><div className="flex flex-wrap justify-center gap-2"><button className="btn-ghost text-xs" onClick={prepareTakeover}>Kortlæg eksisterende projekt</button><button className="btn-ghost text-xs" onClick={() => { setText('Undersøg og ret fejlen på det vedhæftede billede. Find årsagen i projektet, gennemfør den mindste nødvendige rettelse, og dokumentér en faktisk kontrol af det berørte forløb.'); textareaRef.current?.focus(); }}>Ret en fejl fra et billede</button><button className="btn-ghost text-xs" onClick={() => { fileInputRef.current?.click(); setBibleOpen(true); }}>Upload projektbibel</button></div>{(!chatProject?.repositoryPath || !codingConnectionFound) && <div className="flex flex-wrap justify-center gap-2">{!codingConnectionFound && <button type="button" className="btn-ghost text-xs" onClick={openConnections}>Tilslut kodetjeneste</button>}{!chatProject?.repositoryPath && <button type="button" className="btn-ghost text-xs" onClick={openRepositorySettings}>Vælg projektmappe</button>}</div>}</div>
               )}
               {chat.messages.map((m) => (
                 <MessageBubble key={m.id} m={m} color={m.serviceId ? services?.[m.serviceId]?.color : undefined} />
