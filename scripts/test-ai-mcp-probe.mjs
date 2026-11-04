@@ -63,6 +63,28 @@ test('MCP timeout stops descendants and excessive output is bounded', async () =
   assert.equal(processMayBeWorking(Number(readFileSync(flood.pid, 'utf8'))), false);
 });
 
+test('MCP cleanup waits for a delayed descendant after its parent has closed', { skip: process.platform === 'win32' }, async t => {
+  const f = fixture('descendants'); let child, delayedKill, forced = false;
+  t.after(() => {
+    clearTimeout(delayedKill);
+    if (child?.pid) try { process.kill(-child.pid, 'SIGKILL'); } catch { /* The owned process group already stopped. */ }
+  });
+  await assert.rejects(probeStdioMcp(f.configuration, { timeoutMs: 1000, terminateProcess: async managedChild => {
+    child = managedChild;
+    // Close only the parent now. The fixture's descendant has ignored stdio
+    // and remains in the owned group until its delayed forced termination.
+    managedChild.kill('SIGTERM');
+    delayedKill = setTimeout(() => {
+      forced = true;
+      try { process.kill(-managedChild.pid, 'SIGKILL'); } catch { /* Already stopped. */ }
+    }, 250);
+  } }), /tidsgrænsen/);
+  assert.equal(forced, true);
+  assert.equal(processMayBeWorking(child.pid), false);
+  assert.equal(processMayBeWorking(Number(readFileSync(`${f.pid}.child`, 'utf8'))), false);
+  assert.equal(aiProcessSnapshot().some(item => item.pid === child.pid), false);
+});
+
 test('failed MCP cleanup retains a live process registration and a later stop retries it', async t => {
   const f = fixture('persistent'); let child, attempts = 0;
   t.after(() => child?.kill('SIGKILL'));

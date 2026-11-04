@@ -54,14 +54,19 @@ export async function probeStdioMcp(configuration, { signal, timeoutMs = 20000, 
     if (!isClosed || (child.pid && processMayBeWorking(child.pid))) return false;
     untrack(); return true;
   };
-  const closed = new Promise(resolve => child.once('close', () => { isClosed = true; releaseIfStopped(); resolve(); }));
+  child.once('close', () => { isClosed = true; releaseIfStopped(); });
   // A failed kill is not proof of termination. Keep a retryable registration
   // until the child really closes and its process/group is no longer working.
   const cleanup = () => {
     cleanupPromise ??= (async () => {
       try { child.stdin.end(); await terminateProcess(child); } catch { /* Verify actual closure below instead of trusting the kill command. */ }
-      await Promise.race([closed, delay(1000)]);
-      if (!releaseIfStopped()) throw new Error('MCP-processen kunne ikke stoppes. Den forbliver registreret, og opdatering skal vente på, at den er afsluttet.');
+      // Parent closure can precede the OS finishing SIGKILL of its descendants.
+      // Wait for both conditions; an already closed parent is not an idle group.
+      const deadline = performance.now() + 1000;
+      while (!releaseIfStopped()) {
+        if (performance.now() >= deadline) throw new Error('MCP-processen kunne ikke stoppes. Den forbliver registreret, og opdatering skal vente på, at den er afsluttet.');
+        await delay(20);
+      }
     })().finally(() => { cleanupPromise = null; });
     return cleanupPromise;
   };

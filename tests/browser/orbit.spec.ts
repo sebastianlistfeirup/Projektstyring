@@ -125,6 +125,15 @@ test('failed execution stays failed in chat and never marks task ready for revie
   const projectId = await setup(page);
   await page.getByLabel('Besked til Orbit', { exact: true }).fill('FAIL_MARKER: reproducer en fejl.');
   await page.getByLabel('Besked til Orbit', { exact: true }).press('Enter');
+  // Windows CI recorded 10.6s of worktree/planning before job_start, then the
+  // failed-attempt checkpoint completed after the original 15s UI deadline.
+  // Observe this fixture's execution milestone first; retain the same deadline
+  // and exact terminal-state assertions for the execution and UI that follow.
+  await expect.poll(async () => {
+    const run = (await (await request.get(`${base}/api/ai/swarm`)).json()).run;
+    return run?.projectId === projectId && run.goal.includes('FAIL_MARKER')
+      && run.jobs.some((job: { startedAt?: number }) => Boolean(job.startedAt));
+  }, { message: 'The failing fixture must start its own job after repository setup and planning' }).toBe(true);
   await expect(page.getByRole('region', { name: 'Orbit Live' }).getByText('Fejlet', { exact: true }).first()).toBeVisible();
   await expect.poll(async () => page.evaluate(async id => {
     // @ts-expect-error Vite browser module

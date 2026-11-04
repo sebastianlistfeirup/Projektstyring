@@ -1,15 +1,15 @@
 {
   "format": "orbit-reliability-sample",
   "version": 1,
-  "startedAt": "2026-11-04T03:13:42.477Z",
-  "finishedAt": "2026-11-04T03:13:53.947Z",
-  "elapsedMs": 11470,
+  "startedAt": "2026-11-04T03:28:37.991Z",
+  "finishedAt": "2026-11-04T03:28:57.215Z",
+  "elapsedMs": 19223,
   "status": "passed",
   "platform": "linux",
   "architecture": "x64",
   "nodeVersion": "v24.19.0",
   "sqliteVersion": "3.53.3",
-  "baselineCommit": "a472330ac6a2a0fa4d9b75bb8ce326be0e531980",
+  "baselineCommit": "ab4347bfcdcd79ea1785adb1e8ca81725a8f1f67",
   "workingTreeDirty": true,
   "testedSourceSha256": {
     "server/ai-account-checks.mjs": "e2a1c7ba381537881661d5c0e2433fd9e7e0c7d20764d7e1377339a367066766",
@@ -29,7 +29,7 @@
     "server/ai-history.mjs": "eb2ea9bc3b7e8fd19b1feee5df370cbd8b05fc9a3df338ca1047a2a7cd8dd63c",
     "server/ai-integration-evidence.mjs": "d70f105fa6c9ffb05e4498fdfbd8795c79872776c0f117d6f045457f8b003c4e",
     "server/ai-job-context.mjs": "93061d27bb385f912bce0a43ad705a597417c0d0a9081fa8c09aef381be14ee6",
-    "server/ai-mcp-probe.mjs": "b918cddeee3e966838f80e520ddef0972ba7b758557db4da1c0c1e43acc4b47e",
+    "server/ai-mcp-probe.mjs": "8e5de0ffff39dee7050ca5f9198a9fe90ecb8b700c778891f18c5e7862e8931d",
     "server/ai-permissions.mjs": "9dc49d8b62cc15eeb557c3cb0720b58760661d593e345bf19ab5d20c8f714bfd",
     "server/ai-processes.mjs": "50d880e1d6b5e17cd26d83190d1553b8509fdfc16eeefff188c3bd156cb4141c",
     "server/ai-queue.mjs": "df278393436dc44ae070b5b242e318037dea0f9c166e6fa77a95edd91210c40b",
@@ -67,7 +67,7 @@
       "providerPosts": 10,
       "duplicatePosts": 0,
       "restoredArchives": 10,
-      "elapsedMs": 3922,
+      "elapsedMs": 7281,
       "status": "passed"
     },
     {
@@ -78,7 +78,7 @@
       "providerPosts": 10,
       "duplicatePosts": 0,
       "restoredArchives": 10,
-      "elapsedMs": 3910,
+      "elapsedMs": 6824,
       "status": "passed"
     },
     {
@@ -89,7 +89,7 @@
       "providerPosts": 10,
       "duplicatePosts": 0,
       "explicitlyBlockedResumes": 10,
-      "elapsedMs": 3625,
+      "elapsedMs": 5097,
       "status": "passed"
     }
   ],
