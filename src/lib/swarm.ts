@@ -19,7 +19,7 @@ export interface SwarmSubagent {
 }
 
 export interface SwarmJob {
-  media?: { state?: string; serviceId?: string; remoteId?: string; submittedAt?: number; artifacts?: { kind: string; name: string; mime: string; url?: string }[] };
+  media?: { state?: string; serviceId?: string; remoteId?: string; submittedAt?: number; progress?: number; artifacts?: import('./types').AiArtifact[] };
   review?: { serviceId: string; commit: string; score: number; minimumScore: number; note: string; status: string; examinedFiles: string[]; findings: { severity: string; file: string; message: string }[] };
   repairFor?: number;
   readOnly?: boolean;
@@ -41,7 +41,7 @@ export interface SwarmJob {
   finishedAt: number | null;
   text: string;
   textTruncated?: boolean;
-  artifacts: { kind: string; name: string; mime: string; url?: string }[];
+  artifacts: import('./types').AiArtifact[];
   error: string | null;
   subagents?: SwarmSubagent[];
   team?: boolean;
@@ -52,6 +52,8 @@ export interface SwarmJob {
 export interface ServiceCall { callId: string; serviceId: string; jobId: string | null; role: 'planning' | 'execution' | 'review' | 'media'; startedAt: number }
 
 export interface SwarmRun {
+  autonomy?: { policy: import('./types').AutonomyPolicy; providerCalls: number; executionMs: number; repairAttempts?: number; consecutiveFailures: number; blockedReason?: string };
+  contextStatus?: { status: 'current' | 'changed' | 'unavailable'; changes: string[]; expectedFingerprint?: string | null; currentFingerprint?: string | null };
   recoveredAt?: number;
   serviceCalls?: ServiceCall[];
   repository?: { source: string; baseCommit: string; branch?: string; workDir?: string } | null;
@@ -59,6 +61,7 @@ export interface SwarmRun {
   eventCount?: number;
   eventsTruncated?: boolean;
   contextManifest?: {
+    fingerprint?: string;
     version: number; capturedAt: string; projectId: string; projectName: string; releaseGoal: string; scopeTaskIds: string[] | null;
     documents: { kind: string; id: string; title: string; sha256: string; characters: number; version?: number | null; state?: string; updatedAt?: string | null }[];
   };
@@ -207,6 +210,8 @@ export const useSwarm = create<SwarmStore>()((set, get) => ({
         break;
       case 'service_call_start':
       case 'service_call_end':
+      case 'autonomy':
+      case 'context_status':
         if (cur) set({ run: applyEventPure(cur, evt) });
         break;
       case 'orchestrator':
@@ -569,6 +574,10 @@ function withVerificationAttempt(run: SwarmRun, evt: Record<string, unknown>) {
 
 function applyEventPure(run: SwarmRun, evt: Record<string, unknown>): SwarmRun {
   switch (evt.type) {
+    case 'autonomy':
+      return { ...run, autonomy: evt.autonomy as SwarmRun['autonomy'] };
+    case 'context_status':
+      return { ...run, contextStatus: evt.contextStatus as SwarmRun['contextStatus'] };
     case 'run_start':
       return {
         ...run,

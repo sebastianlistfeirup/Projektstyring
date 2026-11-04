@@ -4,6 +4,7 @@ import type { Project } from '../lib/types';
 import { useStore } from '../store/useStore';
 import { pushNow } from '../lib/sync';
 import CodeChanges from './CodeChanges';
+import ProjectAutonomySettings from './ProjectAutonomySettings';
 
 type Check = { name: string; command: string; args: string[] };
 type RepositoryState = { source: string; branch: string; baseCommit: string; dirty: boolean; checkedAt: string; changedFiles: string[]; changedFileCount: number; recentCommits: { commit: string; subject: string }[]; otherBranches: { branch: string; commit: string; ahead: number; behind: number; subject: string }[]; otherBranchCount: number; suggestedBranch?: string; godotProject: boolean; stable: boolean };
@@ -88,5 +89,5 @@ export default function ProjectExecutionSettings({ project, initiallyOpen = fals
       {project.aiWorkspace?.source === project.repositoryPath && project.aiWorkspace && <div className="rounded-lg border border-emerald-400/20 p-3 space-y-1"><p className="font-medium">Verificeret AI-arbejdsgren · {project.aiWorkspace.includedTaskIds.length} arbejdsordrer</p><p className="font-mono break-all">{project.aiWorkspace.branch} · {project.aiWorkspace.commit.slice(0, 12)}</p><p className="opacity-60">Senest verificeret {new Date(project.aiWorkspace.updatedAt).toLocaleString('da-DK')}. Gennemgangen viser hele AI-grenen i forhold til kildens commit ved seneste kørselsstart.</p><CodeChanges key={project.aiWorkspace.runId} runId={project.aiWorkspace.runId} commit={project.aiWorkspace.commit} wholeBranch /></div>}
       <button type="button" disabled={busy} onClick={save} className="btn-primary text-xs">{busy ? 'Kontrollerer…' : 'Kontrollér og gem'}</button>
     </div>
-  </details>{feedback && <p role="status" className="text-xs opacity-75">{feedback}</p>}</>;
+  </details>{feedback && <p role="status" className="text-xs opacity-75">{feedback}</p>}<ProjectAutonomySettings key={project.id} project={project} /></>;
 }

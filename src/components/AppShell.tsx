@@ -10,6 +10,7 @@ import { Avatar } from './common';
 import NotificationCenter from './NotificationCenter';
 import PresenceCursors from './PresenceCursors';
 import RouteTransition from './RouteTransition';
+import { PanelErrorBoundary } from './PanelErrorBoundary';
 import ThemePicker from './ThemePicker';
 import TvMode from './TvMode';
 import { PresentationToggle } from './PresentationMode';
@@ -112,17 +113,17 @@ export default function AppShell() {
           ? 'bg-zinc-200/70 font-medium text-zinc-900 dark:bg-white/[0.08] dark:text-white'
           : 'text-zinc-600 hover:bg-zinc-200/50 dark:text-zinc-300 dark:hover:bg-white/[0.05]',
       )}
-      onClick={() => setActiveProject(p.id)}
     >
       <span className={cn('h-2.5 w-2.5 shrink-0 rounded-sm', `bg-${p.color}-500`)} />
-      <span className="flex-1 truncate text-left">{p.name}</span>
+      <button type="button" onClick={() => setActiveProject(p.id)} aria-pressed={activeProjectId === p.id} className="min-w-0 flex-1 truncate text-left" aria-label={`Vælg projekt ${p.name}`}>{p.name}</button>
       <button
         onClick={(e) => {
           e.stopPropagation();
           updateProject(p.id, { archived: true });
         }}
         title={t('shell.archiveProject')}
-        className="hidden shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-amber-500 group-hover:grid dark:text-zinc-500 dark:hover:text-amber-400"
+        aria-label={`${t('shell.archiveProject')} ${p.name}`}
+        className="grid opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-amber-500 group-hover:grid dark:text-zinc-500 dark:hover:text-amber-400"
       >
         <Archive className="h-3.5 w-3.5" />
       </button>
@@ -322,17 +323,17 @@ export default function AppShell() {
                         ? 'bg-zinc-200/70 text-zinc-900 dark:bg-white/[0.08] dark:text-white'
                         : 'text-zinc-500 hover:bg-zinc-200/50 dark:text-zinc-400 dark:hover:bg-white/[0.05]',
                     )}
-                    onClick={() => setActiveProject(p.id)}
                   >
                     <span className={cn('h-2.5 w-2.5 shrink-0 rounded-sm opacity-60', `bg-${p.color}-500`)} />
-                    <span className="flex-1 truncate text-left">{p.name}</span>
+                    <button type="button" onClick={() => setActiveProject(p.id)} aria-pressed={activeProjectId === p.id} className="min-w-0 flex-1 truncate text-left" aria-label={`Vælg projekt ${p.name}`}>{p.name}</button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         updateProject(p.id, { archived: false });
                       }}
                       title={t('shell.reactivate')}
-                      className="hidden shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-emerald-500 group-hover:grid dark:text-zinc-500 dark:hover:text-emerald-400"
+                      aria-label={`${t('shell.reactivate')} ${p.name}`}
+                      className="grid opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-emerald-500 group-hover:grid dark:text-zinc-500 dark:hover:text-emerald-400"
                     >
                       <RotateCcw className="h-3.5 w-3.5" />
                     </button>
@@ -344,7 +345,8 @@ export default function AppShell() {
                         }
                       }}
                       title={t('shell.deleteForever')}
-                      className="hidden shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-rose-500 group-hover:grid dark:text-zinc-500 dark:hover:text-rose-400"
+                      aria-label={`${t('shell.deleteForever')} ${p.name}`}
+                      className="grid opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 shrink-0 place-items-center rounded p-0.5 text-zinc-400 transition-colors hover:text-rose-500 group-hover:grid dark:text-zinc-500 dark:hover:text-rose-400"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -364,7 +366,7 @@ export default function AppShell() {
       <main className="flex min-w-0 flex-1 flex-col">
         <header
           className={cn(
-            'flex h-14 shrink-0 items-center gap-3 border-b border-zinc-200/80 bg-white/70 px-5 backdrop-blur dark:border-white/[0.06] dark:bg-[#17181c]/80',
+            'orbit-app-header flex h-14 shrink-0 items-center gap-3 border-b border-zinc-200/80 bg-white/70 px-5 backdrop-blur dark:border-white/[0.06] dark:bg-[#17181c]/80',
             tvMode && 'hidden',
           )}
         >
@@ -380,7 +382,8 @@ export default function AppShell() {
               </span>
             </>
           )}
-          <div className="ml-auto flex items-center gap-2">
+          <div className="orbit-header-actions ml-auto flex items-center gap-2">
+            <div className="orbit-header-secondary">
             <ThemePicker />
             <button
               onClick={() => setFocusMode((v) => !v)}
@@ -390,7 +393,9 @@ export default function AppShell() {
             >
               <Crosshair className="h-4 w-4" />
             </button>
+            </div>
             <NotificationCenter />
+            <div className="orbit-header-secondary">
             <PresentationToggle />
             <TvMode />
             <button
@@ -400,15 +405,13 @@ export default function AppShell() {
             >
               {lang === 'da' ? 'EN' : 'DA'}
             </button>
-            <button onClick={openPalette} className="btn-primary">
-              <Plus className="h-4 w-4" />
-              {t('shell.newTask')}
-            </button>
+            </div>
+            <button onClick={openPalette} className="btn-outline orbit-global-search" aria-label="Søg og åbn kommandoer (Ctrl+K)"><Search className="h-4 w-4" /><span>Søg og handlinger</span><kbd>Ctrl K</kbd></button>
           </div>
         </header>
         <div className={cn('min-h-0 flex-1 overflow-hidden', tvMode && 'p-6 lg:p-10')}>
           <RouteTransition>
-            <Outlet />
+            <PanelErrorBoundary label="Arbejdsfladen" resetKey={location.pathname}><Outlet /></PanelErrorBoundary>
           </RouteTransition>
         </div>
       </main>

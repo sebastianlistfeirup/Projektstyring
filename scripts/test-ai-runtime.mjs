@@ -8,6 +8,7 @@ import { executeRun, activeRuns, swarmState, projectMemoryDirs } from '../server
 import { validatePlan, readRun, saveRun, recoverRuns } from '../server/ai-state.mjs';
 import { billingPolicy } from '../server/ai-billing.mjs';
 import { produceMedia, setSecretsDir } from '../server/ai-services.mjs';
+import { captureProjectContext } from '../server/project-context.mjs';
 
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async () => { throw new Error('Network disabled by test'); };
@@ -24,6 +25,105 @@ function fixture() {
 }
 const job = (id, description, dependsOn = []) => ({ id, title: id, description, dependsOn, serviceId: 'codex', phase: 'test' });
 const start = (dirs, extra = {}) => executeRun({ runId: 'test', goal: 'Test goal', bible: 'FULL_BIBLE', cfg, dirs, emit() {}, ...extra });
+
+test('runtime stops at the persisted service-call limit and preserves completed work on resume', async () => {
+  const dirs = fixture(), events = [];
+  await start(dirs, { autonomy: { maxProviderCalls: 1 }, predefinedJobs: [job('a', 'First'), job('b', 'Second', [0])], emit: event => events.push(event) });
+  const run = readRun(dirs, 'test');
+  assert.equal(run.status, 'blocked');
+  assert.deepEqual(run.jobs.map(j => j.status), ['done', 'blocked']);
+  assert.equal(run.autonomy.providerCalls, 1);
+  assert.equal(events.filter(event => event.type === 'service_call_start').length, 1);
+  await start(dirs, { runId: 'budget-resume', previousRun: run, resumeDir: run.workDir, predefinedJobs: run.jobs });
+  const resumed = readRun(dirs, 'budget-resume');
+  assert.equal(resumed.status, 'blocked');
+  assert.equal(resumed.results.length, 1);
+  assert.equal(resumed.autonomy.providerCalls, 1);
+  assert.equal(resumed.events.some(event => event.type === 'service_call_start'), false);
+});
+
+test('a changed decision after planning blocks approval from executing outdated work', async () => {
+  const dirs = fixture(), events = [], project = { id: 'p' };
+  let bible = 'Original';
+  const context = () => captureProjectContext(project, null, { bibles: { p: bible } }).contextManifest;
+  await start(dirs, { contextManifest: context(), getCurrentContext: context, pauseAfterPlan: true, predefinedJobs: [job('a', 'First')], emit(event) {
+    events.push(event);
+    if (event.type === 'plan' && event.paused) queueMicrotask(() => {
+      bible = 'Changed while awaiting approval';
+      activeRuns.get('test').resolveApproval([job('a', 'First')]);
+    });
+  } });
+  const run = readRun(dirs, 'test');
+  assert.equal(run.status, 'blocked');
+  assert.equal(run.contextStatus.status, 'changed');
+  assert.equal(events.some(event => event.type === 'service_call_start'), false);
+  assert.match(run.error, /Projektgrundlaget kræver gennemgang/);
+});
+
+test('repeated independent failures stop new jobs at the configured limit', async () => {
+  const dirs = fixture(), events = [];
+  await start(dirs, { autonomy: { maxConsecutiveFailures: 2 }, predefinedJobs: [job('a', 'FAIL_MARKER'), job('b', 'FAIL_MARKER'), job('c', 'Must not run')], emit: event => events.push(event) });
+  const run = readRun(dirs, 'test');
+  assert.equal(run.status, 'blocked');
+  assert.deepEqual(run.jobs.map(j => j.status), ['error', 'error', 'blocked']);
+  assert.match(run.autonomy.blockedReason, /2 jobs/);
+  assert.equal(events.filter(event => event.type === 'service_call_start').length, 2);
+});
+
+test('authentication failure is not repeated by self-healing', async () => {
+  const dirs = fixture(), agent = join(dirs.cwd, 'login.mjs'), events = [];
+  writeFileSync(agent, "console.error('Please login: quota exhausted');process.exit(1)");
+  await start(dirs, { cfg: { ...cfg, aiPrefs: { ...cfg.aiPrefs, selfHeal: true }, aiProviders: { codex: { ...cfg.aiProviders.codex, cliTemplate: `"${agent}" {prompt}` } } }, predefinedJobs: [job('a', 'Work')], emit: event => events.push(event) });
+  assert.equal(events.filter(event => event.type === 'service_call_start').length, 1);
+  assert.equal(events.some(event => event.type === 'job_healing'), false);
+});
+
+test('zero correction budget prevents local retry even when self-healing is enabled', async () => {
+  const dirs = fixture(), events = [];
+  await start(dirs, { autonomy: { maxRepairAttempts: 0 }, cfg: { ...cfg, aiPrefs: { ...cfg.aiPrefs, selfHeal: true } }, predefinedJobs: [job('a', 'FAIL_MARKER')], emit: event => events.push(event) });
+  assert.equal(events.filter(event => event.type === 'service_call_start').length, 1);
+  assert.equal(readRun(dirs, 'test').autonomy.repairAttempts, 0);
+});
+
+test('failed writer is not blindly rerun but a read-only attempt may use one correction', async () => {
+  for (const readOnly of [false, true]) {
+    const dirs = fixture(), events = [];
+    await start(dirs, { cfg: { ...cfg, aiPrefs: { ...cfg.aiPrefs, selfHeal: true } }, predefinedJobs: [{ ...job('a', 'FAIL_MARKER'), readOnly }], emit: event => events.push(event) });
+    assert.equal(events.filter(event => event.type === 'service_call_start').length, readOnly ? 2 : 1);
+    assert.equal(readRun(dirs, 'test').autonomy.repairAttempts, readOnly ? 1 : 0);
+  }
+});
+
+test('execution time limit interrupts an active provider without reporting user cancellation', async () => {
+  const dirs = fixture(), agent = join(dirs.cwd, 'slow.mjs');
+  writeFileSync(agent, 'setInterval(()=>{},1000)');
+  await start(dirs, { autonomy: { maxExecutionMinutes: 1 }, cfg: { ...cfg, aiProviders: { codex: { ...cfg.aiProviders.codex, cliTemplate: `"${agent}" {prompt}` } } }, predefinedJobs: [job('a', 'Work')], emit(event) {
+    if (event.type === 'service_call_start') activeRuns.get('test').run.autonomy.executionMs = 59999;
+  } });
+  const run = readRun(dirs, 'test');
+  assert.equal(run.status, 'blocked');
+  assert.match(run.autonomy.blockedReason, /1 minutters/);
+  assert.equal(run.jobs[0].status, 'blocked');
+  assert.deepEqual(run.processes, []);
+});
+
+test('awaiting plan approval does not consume execution time', async () => {
+  const dirs = fixture();
+  let beforeWait, afterWait;
+  await start(dirs, { pauseAfterPlan: true, autonomy: { maxExecutionMinutes: 1 }, predefinedJobs: [job('a', 'Work')], emit(event) {
+    if (event.type === 'plan' && event.paused) {
+      beforeWait = activeRuns.get('test').run.autonomy.executionMs;
+      setTimeout(() => {
+        afterWait = activeRuns.get('test').run.autonomy.executionMs;
+        activeRuns.get('test').resolveApproval([job('a', 'Work')]);
+      }, 1100);
+    }
+  } });
+  const run = readRun(dirs, 'test');
+  assert.equal(run.status, 'done');
+  assert.equal(beforeWait, afterWait);
+  assert.ok(run.autonomy.executionMs > 0);
+});
 
 test('failure blocks dependants but independent work continues; run is partial', async () => {
   const dirs = fixture(), events = [];

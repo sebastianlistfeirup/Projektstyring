@@ -10,6 +10,8 @@ import { serviceCapabilities, assertJobCapability } from './ai-capabilities.mjs'
 import { loadJobContext } from './ai-job-context.mjs';
 import { validateAttachmentList } from './ai-documents.mjs';
 import { minimumReviewScore, validateReview } from './ai-review.mjs';
+import { normalizeAutonomyPolicy, autonomyLimit, retryableLocalFailure } from './ai-autonomy.mjs';
+import { compareProjectContext } from './project-context.mjs';
 const execFileAsync = promisify(execFile);
 import { existsSync, mkdirSync, writeFileSync, readFileSync, appendFileSync } from 'fs';
 import { join } from 'path';
@@ -20,6 +22,7 @@ import { AI_SERVICES, serviceById, serviceAvailability, runChat, produceMedia, a
 // A job can spend time in Git, checks or another provider's review. Only an
 // outstanding provider call establishes service activity; job status does not.
 async function serviceCall(track, info, execute) {
+  await track?.beforeServiceCall?.();
   const call = { callId: randomUUID(), ...info, startedAt: Date.now() };
   track?.({ type: 'service_call_start', call });
   try { return await execute(call.callId); }
@@ -478,7 +481,7 @@ async function runTeamJob({ job, handle, goal, bible, attachments, cfg, dirs, av
   if (orchestratorId) {
     try {
       subJobs = (await planWithLLM({ orchestratorId, goal: `${goal} — DELMÅL: ${subGoal}`, bible, attachments, cfg, dirs, availability, extra: 'Lav 2-4 SMÅ jobs til netop dette delmål.', signal: handle.abort.signal, track, jobId: job.id })).slice(0, 4);
-    } catch { subJobs = null; }
+    } catch (error) { if (handle.blocked) throw error; subJobs = null; }
   }
   if (!subJobs || !subJobs.length) {
     subJobs = [
@@ -527,14 +530,19 @@ async function runTeamJob({ job, handle, goal, bible, attachments, cfg, dirs, av
 }
 
 // ---- Hovedkørsel --------------------------------------------------------------
-export async function executeRun({ runId, goal, bible, attachments = [], predefinedJobs, cfg, dirs, emit, mode = 'standard', pauseAfterPlan = false, resumeDir = null, previousRun = null, projectId = null, taskId = null, repository = null, checks = [], contextManifest = null, continuationTaskIds = [] }) {
+export async function executeRun({ runId, goal, bible, attachments = [], predefinedJobs, cfg, dirs, emit, mode = 'standard', pauseAfterPlan = false, resumeDir = null, previousRun = null, projectId = null, taskId = null, repository = null, checks = [], contextManifest = null, continuationTaskIds = [], getCurrentContext = null, autonomy = null }) {
   attachments = validateAttachmentList(attachments);
+  const { prefs } = aiCfg(cfg);
+  const policy = normalizeAutonomyPolicy(previousRun?.autonomy?.policy ?? autonomy ?? {}, prefs);
   dirs = projectMemoryDirs(dirs, projectId);
   const run = {
     runId, goal, projectId, taskId, repository, checks,
+    executionOwnerPid: process.pid,
     continuationFromCommit: previousRun?.continuationFromCommit ?? repository?.startCommit ?? null,
     continuationTaskIds: [...(previousRun?.continuationTaskIds ?? continuationTaskIds)],
     contextManifest: previousRun?.contextManifest ?? contextManifest,
+    contextStatus: null,
+    autonomy: { policy, providerCalls: previousRun?.autonomy?.providerCalls ?? 0, executionMs: previousRun?.autonomy?.executionMs ?? 0, repairAttempts: previousRun?.autonomy?.repairAttempts ?? previousRun?.verificationRepairs ?? 0, consecutiveFailures: 0 },
     verification: { status: 'not_run', checks: [] },
     verificationHistory: [...(previousRun?.verificationHistory ?? [])],
     verificationRepairs: previousRun?.verificationRepairs ?? 0,
@@ -562,9 +570,21 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
   activeRuns.set(runId, handle);
   swarmState.active = run;
   // Public activity is append-only; frequent live snapshots are bounded.
-  const checkpoints = new Set(['permission_request', 'permission_resolved', 'service_call_start', 'service_call_end', 'run_start', 'plan', 'job_added', 'job_start', 'job_done', 'job_error', 'job_cancelled', 'job_blocked', 'job_skipped', 'job_process', 'job_judged', 'verification', 'run_finished', 'done', 'error']);
+  const checkpoints = new Set(['permission_request', 'permission_resolved', 'service_call_start', 'service_call_end', 'run_start', 'plan', 'job_added', 'job_start', 'job_done', 'job_error', 'job_cancelled', 'job_blocked', 'job_skipped', 'job_process', 'job_judged', 'job_media', 'job_healing', 'autonomy', 'context_status', 'verification', 'run_finished', 'done', 'error']);
   let lastSnapshotAt = 0;
+  const waitingPermissions = new Set();
+  let lastTick = Date.now(), executionClockActive = true;
+  const accountExecutionTime = () => {
+    const now = Date.now();
+    if (executionClockActive) run.autonomy.executionMs += Math.max(0, now - lastTick);
+    lastTick = now;
+    executionClockActive = run.status === 'running' && waitingPermissions.size === 0 && !handle.blocked && !handle.cancelled;
+  };
   const track = (obj) => {
+    accountExecutionTime();
+    if (obj.type === 'permission_request') waitingPermissions.add(obj.permissionId ?? obj.id);
+    if (obj.type === 'permission_resolved') waitingPermissions.delete(obj.requestId ?? obj.permissionId ?? obj.id);
+    executionClockActive = run.status === 'running' && waitingPermissions.size === 0 && !handle.blocked && !handle.cancelled;
     const transient = ['job_delta', 'delta', 'subagent_delta'].includes(obj.type);
     if (!transient) appendRunEvent(dirs, run, { at: Date.now(), ...obj });
     else if (run.events.at(-1)?.type !== 'job_delta') appendRunEvent(dirs, run, { at: Date.now(), type: 'job_delta', jobId: obj.jobId });
@@ -576,13 +596,57 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
   handle.track = track;
   track.requestPermission = (request, context) => nativePermissions.request(request, { ...context, runId, projectId, onEvent: track });
   handle.persist = () => saveRun(dirs, run);
+  const block = (reason, code = 'ORBIT_AUTONOMY_BLOCKED') => {
+    handle.blocked = reason;
+    run.autonomy.blockedReason = reason;
+    track({ type: 'autonomy', autonomy: run.autonomy });
+    return Object.assign(new Error(reason), { code });
+  };
+  const assertContext = async () => {
+    if (!getCurrentContext || !run.contextManifest) return;
+    let current = null;
+    try { current = await getCurrentContext(); } catch { /* Unavailable context must not be treated as current. */ }
+    const status = compareProjectContext(run.contextManifest, current);
+    const changed = JSON.stringify(status) !== JSON.stringify(run.contextStatus);
+    run.contextStatus = status;
+    if (changed) track({ type: 'context_status', contextStatus: status });
+    if (status.status !== 'current') throw block(`Projektgrundlaget kræver gennemgang: ${status.changes.join(' ')} Start en ny plan ud fra det gældende grundlag.`, 'ORBIT_CONTEXT_CHANGED');
+  };
+  const assertLimits = () => {
+    accountExecutionTime();
+    const reason = autonomyLimit(run.autonomy);
+    if (reason) throw block(reason);
+  };
+  track.beforeServiceCall = async () => {
+    await assertContext();
+    accountExecutionTime();
+    const reason = autonomyLimit(run.autonomy, { providerCall: true });
+    if (reason) throw block(reason);
+    handle.abort.signal.throwIfAborted();
+    run.autonomy.providerCalls += 1;
+    track({ type: 'autonomy', autonomy: run.autonomy });
+  };
+  const budgetClock = setInterval(() => {
+    accountExecutionTime();
+    if (run.status !== 'running' || waitingPermissions.size || handle.blocked || handle.cancelled) return;
+    if (policy.maxExecutionMinutes !== null && run.autonomy.executionMs >= policy.maxExecutionMinutes * 60000) {
+      try { block(autonomyLimit(run.autonomy)); }
+      catch { handle.cancelled = true; }
+      finally { handle.abort.abort(); handle.resolveApproval?.([]); }
+    }
+  }, 1000);
+  budgetClock.unref();
   const heartbeat = setInterval(() => {
     run.heartbeatAt = Date.now();
-    try { saveRunHeartbeat(dirs, run); } catch { handle.cancelled = true; handle.abort.abort(); handle.resolveApproval?.([]); }
+    accountExecutionTime();
+    try { saveRunHeartbeat(dirs, run); if (policy.maxExecutionMinutes !== null) saveRun(dirs, run); } catch { handle.cancelled = true; handle.abort.abort(); handle.resolveApproval?.([]); }
   }, 10000);
   heartbeat.unref();
   try {
   track({ type: 'run_start', runId, goal, projectId, taskId, startedAt: new Date().toISOString() });
+  track({ type: 'autonomy', autonomy: run.autonomy });
+  await assertContext();
+  assertLimits();
   handle.abort.signal.throwIfAborted();
   if (repository && !previousRun) run.repository = await createRunWorktree(repository.source, handle.runDir, runId, repository.startCommit, repository.startRef);
   handle.abort.signal.throwIfAborted();
@@ -611,7 +675,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
   } else if (orchestratorId) {
     try { jobs = await planWithLLM({ orchestratorId, goal, bible, attachments: run.attachments, cfg, dirs: { ...dirs, cwd: handle.runDir }, availability, signal: handle.abort.signal, track,
       extra: run.repository?.startRef ? `Arbejdsgrenen starter fra den valgte lokale gren ${run.repository.startRef} på commit ${run.repository.baseCommit}. Undersøg de rettelser, som allerede indgår der, før du planlægger nye.` : undefined }); }
-    catch (e) { track({ type: 'job_note', jobId: null, note: `Orkestrator-plan fejlede (${e.message}) — bruger regelbaseret plan.` }); jobs = planByRules({ goal, availability }); }
+    catch (e) { if (handle.blocked) throw e; track({ type: 'job_note', jobId: null, note: `Orkestrator-plan fejlede (${e.message}) — bruger regelbaseret plan.` }); jobs = planByRules({ goal, availability }); }
   } else {
     jobs = planByRules({ goal, availability });
   }
@@ -636,14 +700,14 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     track({ type: 'job_note', jobId: null, note: `Plan godkendt — ${jobs.length} jobs kører nu.` });
   }
   if (handle.cancelled) throw new Error('Kørslen er aflyst af brugeren.');
+  await assertContext();
+  assertLimits();
   run.status = 'running';
   track({ type: 'plan', jobs });
   const results = run.results;
   const doneText = new Map(results.map(r => [r.jobId, r.text]));
   for (const result of results) updateSwarm(run, { type: 'job_done', result });
   saveRun(dirs, run);
-  const { prefs } = aiCfg(cfg);
-
   const runJob = async (job) => {
     if (handle.skip.has(job.id)) {
       track({ type: 'job_skipped', jobId: job.id });
@@ -651,6 +715,11 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       return;
     }
     if (handle.cancelled) return;
+    if (handle.blocked || autonomyLimit(run.autonomy)) {
+      const reason = handle.blocked ?? block(autonomyLimit(run.autonomy)).message;
+      track({ type: 'job_blocked', jobId: job.id, error: reason });
+      return;
+    }
     track({ type: 'job_start', job });
     recordUsage(run, job.serviceId);
 
@@ -699,14 +768,17 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       let artifacts = [];
       if (isMedia) {
         text = job.description || job.title;
-        artifacts = await serviceCall(track, { serviceId: job.serviceId, jobId: job.id, role: 'media' }, () => produceMedia(job, text, cfg, dirs, track, handle.abort.signal));
+        artifacts = await serviceCall(track, { serviceId: job.serviceId, jobId: job.id, role: 'media' }, () => produceMedia(job, text, cfg, dirs, track, handle.abort.signal, { runId, operationNamespace: run.auditDir }));
         if (!artifacts.length) throw new Error('Mediejobbet leverede ingen fil.');
       } else try {
         text = await attempt([]);
       } catch (e1) {
-        // Selvhealing kan ikke rette en manglende/ugyldig CLI-sti; undgå et spildt genforsøg.
-        const startupFailure = /ENOENT|Kunne ikke starte|Windows-shim/i.test(String(e1.message));
-        if (prefs.selfHeal && e1.code !== 'ORBIT_PERMISSION_BLOCKED' && !startupFailure && !handle.skip.has(job.id) && !handle.cancelled) {
+        // A failed writer may already have performed native/external actions.
+        // Only read-only attempts may repeat here. Writers are repaired solely
+        // from a recorded commit and a definite failed verification below.
+        if (prefs.selfHeal && job.readOnly === true && run.autonomy.repairAttempts < policy.maxRepairAttempts && !job.team && retryableLocalFailure(e1) && !handle.skip.has(job.id) && !handle.cancelled && !handle.blocked) {
+          run.autonomy.repairAttempts += 1;
+          track({ type: 'autonomy', autonomy: run.autonomy });
           track({ type: 'job_healing', jobId: job.id, attempt: 2, error: String(e1.message).slice(0, 300) });
           track({ type: 'job_note', jobId: job.id, note: 'Forsøger igen med fejlkontekst (selvhealing).' });
           text = await attempt([{ role: 'user', text: `Dit første forsøg slog fejl med: "${e1.message}". Ret årsagen og leverér resultatet.` }]);
@@ -714,6 +786,8 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
           throw e1;
         }
       }
+      await assertContext();
+      assertLimits();
       if (!isMedia) {
         const blocked = deliveryBlock(text);
         if (blocked) {
@@ -768,9 +842,10 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       }
       const commit = candidateCommit ?? await gitCommit(handle.runDir, job.title);
       doneText.set(job.id, text);
-      if (run.repository) artifacts = [...artifacts, ...await runWorktreeArtifacts(handle.runDir, runId, baseCommit, artifactBaseline)];
+      if (run.repository) artifacts = [...artifacts, ...await runWorktreeArtifacts(handle.runDir, runId, baseCommit, artifactBaseline, { artifactsDir: dirs.artifacts, jobId: job.id, sourceCommit: commit })];
       const res = { jobId: job.id, title: job.title, serviceId: job.serviceId, phase: job.phase, text, artifacts, deliverable: fname, commit, verification: 'requires_review', score, judgeNote };
       results.push(res);
+      run.autonomy.consecutiveFailures = 0;
       track({ type: 'job_done', result: res });
     } catch (e) {
       // Preserve the failed attempt on a separate branch before restoring this
@@ -787,7 +862,8 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
         track({ type: 'job_note', jobId: job.id, note: `Kørslen standses, fordi arbejdsområdet ikke kunne sikres: ${checkpointError.message}` });
       }
       const partialText = e.partialText ?? (e.code === 'ORBIT_PERMISSION_BLOCKED' ? run.jobs.find(j => j.id === job.id)?.liveText : '');
-      track({ type: handle.cancelled ? 'job_cancelled' : ['ORBIT_PERMISSION_BLOCKED', 'ORBIT_DELIVERY_BLOCKED'].includes(e.code) ? 'job_blocked' : 'job_error', jobId: job.id, error: e.message,
+      run.autonomy.consecutiveFailures += 1;
+      track({ type: handle.cancelled ? 'job_cancelled' : handle.blocked || ['ORBIT_PERMISSION_BLOCKED', 'ORBIT_DELIVERY_BLOCKED'].includes(e.code) ? 'job_blocked' : 'job_error', jobId: job.id, error: handle.blocked ?? e.message,
         ...(partialText ? { text: partialText.slice(0, 2000), textTruncated: partialText.length > 2000 } : {}),
       });
       if (partialText) {
@@ -804,9 +880,11 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
     transition: (jobId, status, error) => track({ type: `job_${status}`, jobId, error }),
   });
   let outcome = runOutcome(run.jobs, handle.cancelled);
-  if (outcome === 'done' && run.repository) {
+  if (outcome === 'done' && run.repository && !handle.blocked) {
     const analysisOnly = jobs.every(j => j.readOnly === true);
     while (true) {
+      await assertContext();
+      assertLimits();
       track({ type: 'job_note', note: 'Kontrollerer den samlede repository-leverance.' });
       run.evidence = await repositoryEvidence(handle.runDir, run.repository.baseCommit);
       const attemptNumber = run.verificationHistory.length + 1, attemptAt = Date.now();
@@ -833,11 +911,13 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       const failedCheck = checkResults.find(check => check.status === 'failed');
       // One bounded repair of an actual test failure. Missing programs, altered
       // tracked files, cancellation and ambiguous infrastructure errors stop.
-      const canRepair = prefs.selfHeal && !analysisOnly && run.verificationRepairs < 1 && jobs.length < 100 &&
+      const canRepair = prefs.selfHeal && !analysisOnly && run.autonomy.repairAttempts < policy.maxRepairAttempts && jobs.length < 100 && !autonomyLimit(run.autonomy) &&
         failedCheck?.exitCode !== null && failedCheck?.exitCode !== undefined && !run.evidence.trackedChangesAfterChecks && !handle.cancelled;
       const coder = canRepair ? [...jobs].reverse().find(job => job.readOnly !== true && availability[job.serviceId]?.available && serviceCapabilities(serviceById(job.serviceId) ?? {}).repository)?.serviceId : null;
       if (!coder) break;
       run.verificationRepairs += 1;
+      run.autonomy.repairAttempts += 1;
+      track({ type: 'autonomy', autonomy: run.autonomy });
       const repair = {
         id: `repair-${randomUUID().slice(0, 8)}`, title: `Ret dokumenteret testfejl (forsøg ${run.verificationRepairs})`,
         serviceId: coder, phase: 'produktion', dependsOn: jobs.map((_, index) => index), repairFor: attemptRecord.number,
@@ -845,13 +925,14 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       };
       jobs.push(repair);
       track({ type: 'job_added', job: repair });
-      track({ type: 'job_note', note: 'En faktisk kontrol fejlede. Orbit forsøger én afgrænset rettelse og gentager derefter kontrollerne.' });
+      track({ type: 'job_note', note: `En faktisk kontrol fejlede. Orbit forsøger afgrænset rettelse ${run.autonomy.repairAttempts} af højst ${policy.maxRepairAttempts} og gentager derefter kontrollerne.` });
       await runJob(repair);
       if (run.jobs.find(job => job.id === repair.id)?.status !== 'done' || handle.cancelled) break;
       outcome = 'done';
     }
   }
-  run.status = handle.cancelled ? 'cancelled' : outcome;
+  run.status = handle.cancelled ? 'cancelled' : handle.blocked ? 'blocked' : outcome;
+  if (handle.blocked) run.error = handle.blocked;
   if (run.status === 'done') {
     const proposalText = [...run.results].reverse().find(r => r.text?.includes('"orbitProjectPlan"'))?.text;
     if (proposalText) {
@@ -872,13 +953,14 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       if (last) run.verificationHistory[run.verificationHistory.length - 1] = { ...last, ...run.verification };
       track({ type: 'verification', verification: run.verification, evidence: run.evidence, attempt: run.verificationHistory.at(-1) });
     }
-    run.status = handle.cancelled ? 'cancelled' : 'error';
-    run.error = e.message;
+    run.status = handle.cancelled ? 'cancelled' : handle.blocked ? 'blocked' : 'error';
+    run.error = handle.blocked ?? e.message;
     run.finishedAt = Date.now();
     track({ type: 'run_finished', status: run.status });
     track({ type: 'error', status: run.status, error: e.message });
   } finally {
     clearInterval(heartbeat);
+    clearInterval(budgetClock);
     activeRuns.delete(runId);
     if (swarmState.active === run) {
       swarmState.last = run;

@@ -36,7 +36,8 @@ test('history paginates and filters compact summaries without leaking full docum
 
 test('history invalidates stale or corrupt indexes and orders mixed old/new timestamps by time', () => {
   const dirs = { runs: mkdtempSync(join(tmpdir(), 'orbit-history-refresh-')) };
-  saveRun(dirs, { runId: 'a', goal: 'Before', status: 'running', startedAt: 1000 });
+  writeFileSync(join(dirs.runs, 'a.json'), JSON.stringify({ runId: 'a', goal: 'Before', status: 'running', startedAt: 1000 }));
+  assert.equal(readRunSummary(dirs, 'a').goal, 'Before'); // Legacy run has no SQLite snapshot yet.
   writeFileSync(join(dirs.runs, 'a.json'), JSON.stringify({ runId: 'a', goal: 'After a legacy update', status: 'done', finishedAt: 1200 }));
   assert.equal(readRunSummary(dirs, 'a').goal, 'After a legacy update');
   writeFileSync(join(dirs.runs, 'a.summary'), 'broken'); assert.equal(readRunSummary(dirs, 'a').status, 'done');

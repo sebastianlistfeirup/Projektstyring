@@ -39,6 +39,13 @@ jobs:
           name: performance-${{ matrix.os }}
           path: test-results/**/*performance.json
           if-no-files-found: ignore
+      - name: Save interface review images
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: interface-${{ matrix.os }}
+          path: test-results/**/*.png
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

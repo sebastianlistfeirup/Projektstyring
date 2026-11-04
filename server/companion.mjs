@@ -4,6 +4,10 @@
 // Køres med: node server/companion.mjs   (port 4310)
 import express from 'express';
 import { localAiAccess } from './local-access.mjs';
+import { registerDesktopRuntime, trustedDesktopRequest } from './desktop-runtime.mjs';
+import { pauseRestoredQueue } from './ai-queue.mjs';
+import { captureExternalSubmissionLedger, mergeExternalSubmissionLedger } from './ai-durable-store.mjs';
+import { recoverRuns } from './ai-state.mjs';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { execFile } from 'node:child_process';
@@ -388,6 +392,11 @@ async function graphSendMail(subject, textBody) {
 // ---------------- HTTP + WS ----------------
 const app = express();
 app.use(express.json({ limit: '48mb' }));
+const desktopRelease = registerDesktopRuntime(app, {
+  shutdown,
+  prepareShutdown: () => app.locals.prepareAiShutdown(),
+  isBusy: () => Boolean(activeRuns.size || aiProcessSnapshot().length || app.locals.orphanProcesses?.().length || app.locals.mcpChecksActive || swarmState.active?.status === 'awaiting_approval'),
+});
 app.use((req, res, next) => {
   if (app.locals.aiStopping && req.method !== 'GET' && req.path !== '/api/ai/prepare-shutdown') return res.status(503).json({ ok: false, reason: 'Companion er ved at lukke.' });
   next();
@@ -405,7 +414,7 @@ app.use('/api/backup', localAiAccess);
 app.use('/api/config', localAiAccess);
 
 const server = createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({ server, path: '/ws', verifyClient: info => !desktopRelease || trustedDesktopRequest(info.req) });
 
 function broadcastPresence() {
   broadcast({ type: 'presence', online: [...presence.values()] });
@@ -443,7 +452,7 @@ setInterval(() => {
 }, 30000);
 
 app.get('/api/ping', (_req, res) => {
-  res.json({ ok: true, name: 'Orbit Companion', version: '1.1.0', time: new Date().toISOString() });
+  res.json({ ok: true, name: 'Orbit Companion', version: desktopRelease?.version ?? '1.4.0', ...(desktopRelease ? { releaseId: desktopRelease.releaseId, runtimeId: desktopRelease.runtimeId } : {}), time: new Date().toISOString() });
 });
 
 app.get('/api/status', (_req, res) => {
@@ -815,23 +824,25 @@ app.get('/api/backup/list', (_req, res) => {
 
 app.post('/api/backup/restore', (req, res) => {
   const { name } = req.body ?? {};
-  if (activeRuns.size || aiProcessSnapshot().length || app.locals.orphanProcesses?.().length) return res.status(409).json({ ok: false, reason: 'Stop aktive AI-kørsler og samtaler før gendannelse.' });
+  if (activeRuns.size || aiProcessSnapshot().length || app.locals.orphanProcesses?.().length || app.locals.mcpChecksActive) return res.status(409).json({ ok: false, reason: 'Stop aktive AI-kørsler, samtaler og forbindelsesprøver før gendannelse.' });
   if (!name || !/^[\w.-]+\.json$/.test(String(name))) {
     return res.status(400).json({ ok: false, reason: 'Ugyldigt backup-navn' });
   }
   try {
     const data = JSON.parse(readFileSync(join(BACKUP_DIR, String(name)), 'utf8'));
+    const durableDirs = { runs: join(APP_DIR, 'ai-runs') };
+    const submissionLedger = captureExternalSubmissionLedger(durableDirs);
     if (app.locals.orbitQueue && !app.locals.orbitQueue.storageError) app.locals.orbitQueue.pause('Gendannelse af backup er i gang.');
     if (lastSnapshot) writeAtomicJson(join(BACKUP_DIR, `before-restore-${Date.now()}.json`), createWorkspaceBackup(lastSnapshot.snapshot, APP_DIR, ATTACH_DIR));
     let restoredRecord;
     restoreWorkspaceBackup(data, APP_DIR, ATTACH_DIR, { commitSnapshot: restored => {
+      // Restoring files cannot undo an already submitted external operation.
+      mergeExternalSubmissionLedger(durableDirs, submissionLedger);
+      recoverRuns(durableDirs, { force: true });
       // Persist the restored queue's pause before committing the workspace.
       // Even a crash/failure in the subsequent reload cannot replay old intent.
       const queuePath = join(APP_DIR, 'ai-runs', 'ai-queue.json');
-      if (existsSync(queuePath)) {
-        const restoredQueue = JSON.parse(readFileSync(queuePath, 'utf8'));
-        writeAtomicJson(queuePath, { ...restoredQueue, paused: true, reason: 'Backup er gendannet. Gennemgå køen før den fortsættes.', updatedAt: Date.now() });
-      }
+      pauseRestoredQueue(queuePath, 'Backup er gendannet. Gennemgå køen før den fortsættes.');
       restoredRecord = { snapshot: { ...restored, workspaceEpoch: randomUUID() }, from: 'backup', updatedAt: new Date().toISOString() };
       writeAtomicJson(SNAPSHOT_PATH, restoredRecord);
     } });
@@ -1712,19 +1723,20 @@ async function shutdown() {
   server.close();
   for (const client of wss.clients) client.close(1001, 'Companion stopper');
   const deadline = Date.now() + 20000;
-  while ((activeRuns.size || aiProcessSnapshot().length) && Date.now() < deadline) await delay(100);
-  const remaining = activeRuns.size || aiProcessSnapshot().length || app.locals.orphanProcesses?.().length;
+  while ((activeRuns.size || aiProcessSnapshot().length || app.locals.mcpChecksActive) && Date.now() < deadline) await delay(100);
+  const remaining = activeRuns.size || aiProcessSnapshot().length || app.locals.orphanProcesses?.().length || app.locals.mcpChecksActive;
   if (remaining) console.error('Companion stoppes med uafsluttet arbejde. Kontrollér gendannede kørsler ved næste start.');
   process.exit(remaining ? 1 : 0);
 }
 process.once('SIGTERM', () => { void shutdown(); });
 process.once('SIGINT', () => { void shutdown(); });
 
-server.listen(PORT, '0.0.0.0', () => {
+const HOST = desktopRelease ? '127.0.0.1' : process.env.ORBIT_HOST || '0.0.0.0';
+server.listen(PORT, HOST, () => {
   startTelegram();
   console.log(`Orbit Companion kører på http://127.0.0.1:${server.address().port}`);
   // LAN-adresser, så app'en også kan nås fra telefonen på samme Wi-Fi.
-  for (const addrs of Object.values(networkInterfaces())) {
+  for (const addrs of HOST === '0.0.0.0' ? Object.values(networkInterfaces()) : []) {
     for (const a of addrs ?? []) {
       if (a.family === 'IPv4' && !a.internal) {
         console.log(`  Telefon (samme Wi-Fi): http://${a.address}:${PORT}`);

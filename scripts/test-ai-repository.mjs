@@ -4,8 +4,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createRunWorktree, inspectRepository, repositoryReadiness, runWorktreeArtifacts, snapshotRunArtifacts, runArtifactPath, verifyRepository, repositoryEvidence } from '../server/ai-repository.mjs';
+import { createRunWorktree, inspectRepository, repositoryReadiness, runWorktreeArtifacts as collectRunArtifacts, snapshotRunArtifacts, runArtifactPath, verifyRepository, repositoryEvidence } from '../server/ai-repository.mjs';
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+const runWorktreeArtifacts = (root, runId, baseCommit, baseline) => collectRunArtifacts(root, runId, baseCommit, baseline,
+  { artifactsDir: mkdtempSync(join(tmpdir(), 'orbit-repo-artifact-store-')), jobId: 'test-job' });
 
 test('repository readiness reveals fixes on another branch without changing the checkout', async () => {
   const root = mkdtempSync(join(tmpdir(), 'orbit-readiness-'));

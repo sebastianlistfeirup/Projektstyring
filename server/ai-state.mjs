@@ -1,7 +1,9 @@
 import { mkdirSync, writeFileSync, readFileSync, statSync, readdirSync, openSync, fsyncSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeAtomicJson } from './atomic-json.mjs';
-import { saveRunSummary } from './ai-history.mjs';
+import { saveRunSummary, summarizeRun } from './ai-history.mjs';
+import { durableStorePath, readDurableDocument, visitDurableDocuments, saveDurableRun } from './ai-durable-store.mjs';
+import { processMayBeWorking } from './ai-processes.mjs';
 import { AI_PHASES, normalizePhase } from '../shared/ai-plan.mjs';
 
 export const TERMINAL = new Set(['done', 'error', 'partial', 'cancelled', 'blocked', 'interrupted']);
@@ -78,7 +80,11 @@ export function runPath(dirs, runId) {
 
 export function saveRun(dirs, run) {
   mkdirSync(dirs.runs, { recursive: true });
-  writeAtomicJson(runPath(dirs, run.runId), { ...run, schemaVersion: 2 });
+  const path = runPath(dirs, run.runId), saved = { ...run, schemaVersion: 2 };
+  // Snapshot and compact history commit together. JSON is retained for portable
+  // exports and previous versions; a crash before its write cannot lose state.
+  saveDurableRun(dirs, saved, summarizeRun(saved));
+  writeAtomicJson(path, saved);
   try { saveRunSummary(dirs, run); } catch { /* Derived index; full run is saved. */ }
 }
 
@@ -109,7 +115,8 @@ export function saveRunHeartbeat(dirs, run) {
 }
 
 export function readRun(dirs, runId) {
-  const run = JSON.parse(readFileSync(runPath(dirs, runId), 'utf8'));
+  const path = runPath(dirs, runId);
+  const run = readDurableDocument(durableStorePath(dirs), `run:${runId}`)?.value ?? JSON.parse(readFileSync(path, 'utf8'));
   try {
     const pulse = JSON.parse(readFileSync(join(dirs.runs, `${runId}.pulse`), 'utf8'));
     if (pulse.runId === runId && Number.isFinite(pulse.heartbeatAt) && pulse.heartbeatAt > (run.heartbeatAt ?? 0)) run.heartbeatAt = pulse.heartbeatAt;
@@ -136,13 +143,24 @@ export function withRunEvents(dirs, run) {
 
 // A process cannot prove that an interrupted external action never happened.
 // Keep evidence and require a deliberate resume; never silently replay actions.
-export function recoverRuns(dirs) {
+export function recoverRuns(dirs, { force = false } = {}) {
   const recovered = [];
+  // Repair projections before readers/exporters inspect filenames. DB-only
+  // snapshots can occur when the process stopped immediately after COMMIT.
+  visitDurableDocuments(durableStorePath(dirs), 'run:', record => {
+    const run = record.value;
+    writeAtomicJson(runPath(dirs, run.runId), run);
+    try { saveRunSummary(dirs, run); } catch { /* Derived cache only. */ }
+  });
   for (const file of readdirSync(dirs.runs).filter(f => f.endsWith('.json'))) {
     let run;
     try { run = readRun(dirs, file.slice(0, -5)); } catch { console.warn(`Kunne ikke læse kørselsfil: ${file}`); continue; }
     if (!run.runId) continue;
     if (['running', 'planning', 'awaiting_approval'].includes(run.status)) {
+      // A second Companion may inspect the same workspace before it discovers
+      // that the HTTP port is occupied. Never rewrite the first one's live run.
+      // A guarded explicit backup restore can force recovery of old PID values.
+      if (!force && run.executionOwnerPid && processMayBeWorking(run.executionOwnerPid)) continue;
       if (run.status !== 'awaiting_approval') run.status = 'interrupted';
       run.jobs = (run.jobs ?? []).map(j => j.status === 'running' ? { ...j, status: 'interrupted', error: 'Companion blev genstartet. Kontrollér eventuelle eksterne handlinger før genoptagelse.' } : j);
       if (run.verification?.status === 'running') {

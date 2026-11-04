@@ -1,8 +1,11 @@
+import RunControls from '../components/RunControls';
+import RunAutonomyPanel from '../components/RunAutonomyPanel';
 import ProjectPlanReview from '../components/ProjectPlanReview';
 import NativePermissionPanel from '../components/NativePermissionPanel';
 import VisualResultGallery from '../components/VisualResultGallery';
 import { runLabels, verificationLabels } from '../lib/runPresentation';
 import { nextStepForRun } from '../lib/nextStep';
+import { runFreshness } from '../lib/runFreshness';
 import OrbitPerformanceProbe from '../components/OrbitPerformanceProbe';
 import ServiceConstellation from '../components/ServiceConstellation';
 import { AI_PHASES, normalizePhase, removePlanJob } from '../../shared/ai-plan.mjs';
@@ -29,13 +32,9 @@ import {
   Play,
   Radio,
   Save,
-  Send,
   SkipForward,
   Sparkles,
-  Square,
   Trash2,
-  Volume2,
-  VolumeX,
   Webhook,
   Zap,
 } from 'lucide-react';
@@ -46,8 +45,6 @@ import {
   useSwarm,
   serviceColor,
   serviceName,
-  toggleSwarmSound,
-  swarmSoundOn,
   replayEvents,
   type SwarmEvent,
   type SwarmJob,
@@ -64,7 +61,6 @@ import {
   fireOrchestrate,
   saveTemplate,
   saveTrigger,
-  sendRunMessage,
   skipRunJob,
   suggestTemplate,
   type CostSummary,
@@ -342,57 +338,6 @@ function JobCard({ j, services, runActive, onSkip }: { j: SwarmJob; services: Re
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-/* ================= besked til orkestratoren + aflys (idé 14) ================= */
-
-function RunControls({ run }: { run: SwarmRun }) {
-  const [msg, setMsg] = useState('');
-  const [sound, setSound] = useState(swarmSoundOn());
-  const send = async () => {
-    const text = msg.trim();
-    if (!text) return;
-    setMsg('');
-    await sendRunMessage(run.runId, text);
-  };
-  return (
-    <div className="rounded-2xl border border-indigo-400/25 bg-indigo-500/[0.06] p-3">
-      <div className="flex flex-col sm:flex-row gap-2">
-        <input
-          value={msg}
-          onChange={(e) => setMsg(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && void send()}
-          placeholder={t('swarm.messagePlaceholder')}
-          className="flex-1 rounded-xl bg-black/20 dark:bg-black/30 border border-white/10 px-3 py-2 text-[12px] outline-none focus:border-indigo-400/50 transition"
-        />
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setSound(toggleSwarmSound())}
-            title={t('swarm.soundToggle')}
-            className="rounded-xl border border-white/10 p-2 opacity-70 hover:opacity-100 transition"
-          >
-            {sound ? <Volume2 size={14} /> : <VolumeX size={14} />}
-          </button>
-          <button onClick={() => void send()} disabled={!msg.trim()} className="btn-primary rounded-xl px-3 py-2 text-[11px] flex items-center gap-1.5 disabled:opacity-40">
-            <Send size={12} /> {t('swarm.sendMessage')}
-          </button>
-          <button
-            onClick={() => { if (window.confirm(t('swarm.confirmCancel'))) void cancelRun(run.runId); }}
-            className="rounded-xl border border-rose-400/30 text-rose-300 px-3 py-2 text-[11px] flex items-center gap-1.5 hover:bg-rose-400/10 transition"
-          >
-            <Square size={12} /> {t('swarm.cancelRun')}
-          </button>
-        </div>
-      </div>
-      {(run.instructions?.length ?? 0) > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {run.instructions!.map((ins, i) => (
-            <span key={i} className="text-[9.5px] px-2 py-0.5 rounded-full bg-indigo-400/15 border border-indigo-400/30 text-indigo-200 truncate max-w-[260px]">{ins}</span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -817,8 +762,9 @@ export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolea
   const shown = replay ? replayEvents(replay.base, replay.events, replay.cursor) : (archived ?? run);
   const permissions = useSwarm(s => s.permissions);
   const active = !archived && !replay && shown?.status === 'running';
+  const staleStatus = !archived && !replay && runFreshness(shown, connected, now) !== 'current';
   const awaitingPermission = active && permissions.some(p => p.runId === shown?.runId);
-  const nextStep = shown && !replay ? nextStepForRun(shown, { approval: Boolean(approval?.runId === shown.runId), permission: Boolean(awaitingPermission) }) : null;
+  const nextStep = shown && !replay ? nextStepForRun(shown, { approval: Boolean(approval?.runId === shown.runId), permission: Boolean(awaitingPermission), connected: archived ? true : connected, now }) : null;
   const liveServices = active && Boolean(shown?.heartbeatAt && now - shown.heartbeatAt <= 35_000);
   const focusedJob = shown?.jobs.find(job => orbSelection?.runId === shown.runId && job.id === orbSelection.jobId) ?? shown?.jobs.find(job => job.status === 'running') ?? shown?.jobs[0];
   const selectedRunId = shown?.runId;
@@ -861,7 +807,7 @@ export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolea
     if (!archived || archivedEvents.length < 2) return;
     const events = archivedEvents;
     // Evidence from the end must not appear before its event in the replay.
-    const base = { ...archived, jobs: [], evidence: undefined, verification: undefined, verificationHistory: [], results: [], projectPlan: undefined, projectPlanError: undefined, heartbeatAt: undefined, serviceCalls: [], finishedAt: null };
+    const base = { ...archived, jobs: [], evidence: undefined, verification: undefined, verificationHistory: [], results: [], projectPlan: undefined, projectPlanError: undefined, heartbeatAt: undefined, serviceCalls: [], autonomy: undefined, contextStatus: undefined, finishedAt: null };
     setReplay({ base, events, t0: events[0].at, t1: events.at(-1)!.at, cursor: events[0].at, playing: false, speed: 8 });
   };
 
@@ -873,9 +819,9 @@ export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolea
       <div className="flex flex-wrap items-center gap-3">
         <div>
           <h1 className="text-lg font-bold flex items-center gap-2">
-            <Radio size={18} className={active ? 'text-emerald-400 animate-pulse' : 'opacity-50'} />
+            <Radio size={18} className={active && !staleStatus ? 'text-emerald-400 animate-pulse' : 'opacity-50'} />
             {t('swarm.title')}
-            {active && (
+            {active && !staleStatus && (
               <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-400/15 border border-emerald-400/40 text-emerald-300">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" /> {t('swarm.live')}
               </span>
@@ -952,14 +898,14 @@ export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolea
           <div role="region" aria-label="Kørselsstatus" className="rounded-2xl border border-white/10 glass-panel p-3.5 space-y-2.5">
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[12px]">
               <span className="font-semibold text-sm w-full break-words" title={shown.goal}>{shown.goal}</span>
-              <span className="font-semibold">{awaitingPermission ? 'Afventer din beslutning' : shown.status === 'done' ? 'Leveret til gennemgang' : runLabels[shown.status] ?? shown.status}</span>
+              <span className="font-semibold">{staleStatus ? 'Afventer bekræftet status' : awaitingPermission ? 'Afventer din beslutning' : shown.status === 'done' ? 'Leveret til gennemgang' : runLabels[shown.status] ?? shown.status}</span>
               <span className="opacity-70">Kontroller: {verificationLabels[shown.verification?.status ?? 'not_run'] ?? shown.verification?.status}</span>
               {modeKey && (
                 <span className="text-[9px] px-1.5 py-0.5 rounded-full border border-violet-400/40 text-violet-300">{t(modeKey)}</span>
               )}
               <span className="flex items-center gap-1.5 opacity-70"><Clock size={12} /> {t('swarm.elapsed')}: <b>{fmtDur(elapsed)}</b></span>
               <span className="flex items-center gap-1.5 opacity-70"><Cpu size={12} /> {t('swarm.orchestrator')}: <b>{serviceName(services, shown.orchestratorId)}</b></span>
-              {eta !== null && remaining > 0 && !replay && (
+              {eta !== null && remaining > 0 && !replay && !staleStatus && (
                 <span className="flex items-center gap-1.5 text-amber-300"><Zap size={12} /> {t('swarm.eta')}: <b>{fmtDur(eta)}</b> <span className="opacity-50 text-[10px]">({t('swarm.etaHint')})</span></span>
               )}
               <span className="flex-1" />
@@ -1013,6 +959,8 @@ export function AiSwarmView({ embedded = false, projectId }: { embedded?: boolea
             )}
             </details>
           </div>
+
+          <RunAutonomyPanel run={shown} />
 
           {/* dommer-panel for race/debate/vote */}
           {shown && <JudgePanel run={shown} services={services} />}

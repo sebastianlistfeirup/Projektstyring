@@ -1,236 +1,149 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { CornerDownLeft, FilePlus2, Languages, Moon, RefreshCcw, Search } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { ArrowRight, CornerDownLeft, FilePlus2, Folder, MessageSquare, Search, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
+import { useSwarm } from '../lib/swarm';
 import { VIEWS } from '../lib/nav';
 import { useI18n, useLang, t } from '../lib/i18n';
 import { cn, taskRef } from '../lib/utils';
 import { StatusBadge } from './common';
+import { wrapDialogFocus } from '../lib/dialogFocus';
 
-interface Row {
-  id: string;
-  group: 'handling' | 'navigation' | 'opgave';
-  label: string;
-  hint?: string;
-  run: () => void;
-}
+type Group = 'handling' | 'projekt' | 'samtale' | 'leverance' | 'opgave' | 'navigation';
+interface Row { id: string; group: Group; label: string; hint?: string; run: () => void }
+const groups: Group[] = ['handling', 'projekt', 'samtale', 'leverance', 'opgave', 'navigation'];
+const groupNames: Record<Group, string> = { handling: 'Handlinger', projekt: 'Projekter', samtale: 'Samtaler', leverance: 'Leverancer i seneste kørsel', opgave: 'Opgaver', navigation: 'Visninger' };
+const matches = (query: string, ...values: (string | undefined)[]) => !query || values.some(value => value?.toLocaleLowerCase().includes(query));
 
 export default function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
   const navigate = useNavigate();
-
-  const tasks = useStore((s) => s.tasks);
-  const projects = useStore((s) => s.projects);
-  const activeProjectId = useStore((s) => s.activeProjectId);
-  const selectTask = useStore((s) => s.selectTask);
-  const setActiveProject = useStore((s) => s.setActiveProject);
-  const addTask = useStore((s) => s.addTask);
-  const toggleTheme = useStore((s) => s.toggleTheme);
-  const resetWorkspace = useStore((s) => s.resetWorkspace);
-  const toggleLang = useI18n((s) => s.toggleLang);
-
-  // Abonnér på sprog, så rækker og labels re-render'er ved skift
+  const location = useLocation();
+  const tasks = useStore(s => s.tasks);
+  const projects = useStore(s => s.projects);
+  const chats = useStore(s => s.aiChats);
+  const activeProjectId = useStore(s => s.activeProjectId);
+  const selectTask = useStore(s => s.selectTask);
+  const setActiveProject = useStore(s => s.setActiveProject);
+  const addTask = useStore(s => s.addTask);
+  const addChat = useStore(s => s.addAiChat);
+  const toggleTheme = useStore(s => s.toggleTheme);
+  const resetWorkspace = useStore(s => s.resetWorkspace);
+  const toggleLang = useI18n(s => s.toggleLang);
+  const run = useSwarm(s => s.run);
   const lang = useLang();
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        setOpen((v) => !v);
-      }
-      if (e.key === 'Escape') setOpen(false);
-    };
-    const onOpen = () => setOpen(true);
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('orbit:open-palette', onOpen);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('orbit:open-palette', onOpen);
-    };
+  const show = useCallback(() => {
+    returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setQuery(''); setIndex(0); setOpen(true);
   }, []);
-
+  const close = useCallback((restore = true) => {
+    setOpen(false);
+    if (restore) requestAnimationFrame(() => returnFocus.current?.isConnected && returnFocus.current.focus());
+  }, []);
   useEffect(() => {
-    if (open) {
-      setQuery('');
-      setIndex(0);
-      requestAnimationFrame(() => inputRef.current?.focus());
-    }
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        if (dialogRef.current?.open) close(); else show();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('orbit:open-palette', show);
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('orbit:open-palette', show); };
+  }, [show, close]);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (open && dialog && !dialog.open) { dialog.showModal(); inputRef.current?.focus(); }
+    if (!open && dialog?.open) dialog.close();
   }, [open]);
 
-  const rows = useMemo<Row[]>(() => {
-    const q = query.trim().toLowerCase();
+  const rows = useMemo(() => {
+    const queryText = query.trim(), q = queryText.toLocaleLowerCase(lang === 'da' ? 'da-DK' : 'en-US');
     const list: Row[] = [];
+    const action = (id: string, label: string, keywords: string, execute: () => void, hint?: string) => {
+      if (matches(q, label, keywords)) list.push({ id, group: 'handling', label, hint, run: execute });
+    };
+    const openWorkspace = (section?: string) => {
+      const current = new URLSearchParams(location.pathname === '/chat' ? location.search : '');
+      if (section) current.set('workspace', section);
+      navigate(`/chat${current.size ? `?${current}` : ''}`);
+    };
+    const openRun = (section = 'result') => {
+      if (!run?.projectId) { openWorkspace(section); return; }
+      setActiveProject(run.projectId);
+      const chat = chats.find(chat => chat.projectId === run.projectId) ?? addChat({ projectId: run.projectId, title: projects.find(project => project.id === run.projectId)?.name ?? 'Arbejdsresultat' });
+      navigate(`/chat?chat=${encodeURIComponent(chat.id)}&workspace=${section}`);
+    };
+    action('workspace', 'Åbn samtale og arbejdsrum', 'orbit chat live', () => openWorkspace());
+    action('connections', 'Åbn AI-forbindelser', 'konto login tjenester integration codex claude meshy elevenlabs', () => openWorkspace('connections'));
+    if (run) action('result', 'Se seneste kørsel og muligheder for genoptagelse', 'resultat resume genoptag fortsæt status fejl', openRun, 'Åbner status; starter ikke arbejde');
+    if (run?.status === 'running') action('live', 'Følg det igangværende arbejde', 'agent live arbejde', () => openWorkspace('live'));
+    action('theme', t('palette.theme'), 'theme farve mørk lys', toggleTheme);
+    action('lang', t('palette.language'), 'language dansk english', toggleLang);
 
-    if (q) {
-      const targetProject = projects.find((p) => p.id === (activeProjectId ?? projects[0]?.id));
-      list.push({
-        id: 'create',
-        group: 'handling',
-        label: `${t('palette.createTask')} "${query.trim()}"${targetProject ? ` ${t('palette.in')} ${targetProject.name}` : ''}`,
-        hint: 'Enter',
-        run: () => {
-          const projectId = activeProjectId ?? projects[0]?.id;
-          if (!projectId) return;
-          const task = addTask({ title: query.trim(), projectId });
-          setActiveProject(projectId);
-          selectTask(task.id);
-        },
-      });
-      const matches = tasks
-        .filter((t) => t.title.toLowerCase().includes(q))
-        .slice(0, 8)
-        .map<Row>((t) => ({
-          id: t.id,
-          group: 'opgave',
-          label: t.title,
-          hint: taskRef(t, projects),
-          run: () => {
-            setActiveProject(t.projectId);
-            selectTask(t.id);
-          },
-        }));
-      list.push(...matches);
+    for (const project of projects.filter(project => !project.archived && matches(q, project.name)).slice(0, 8)) {
+      list.push({ id: `project:${project.id}`, group: 'projekt', label: project.name, hint: project.id === activeProjectId ? 'Aktuelt projekt' : 'Åbn projekt', run: () => {
+        setActiveProject(project.id);
+        const chat = chats.filter(chat => chat.projectId === project.id).toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? addChat({ projectId: project.id, title: project.name });
+        navigate(`/chat?chat=${encodeURIComponent(chat.id)}`);
+      } });
     }
+    for (const chat of chats.filter(chat => matches(q, chat.title)).toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 8)) {
+      list.push({ id: `chat:${chat.id}`, group: 'samtale', label: chat.title, hint: projects.find(project => project.id === chat.projectId)?.name ?? 'Uden projekt', run: () => { setActiveProject(chat.projectId); navigate(`/chat?chat=${encodeURIComponent(chat.id)}`); } });
+    }
+    const artifacts = [...(run?.jobs ?? []).flatMap(job => job.artifacts ?? []), ...(run?.results ?? []).flatMap(result => result.artifacts ?? [])];
+    const seenArtifacts = new Set<string>();
+    for (const artifact of artifacts) {
+      if (!q || !matches(q, artifact.name) || seenArtifacts.has(artifact.name)) continue;
+      seenArtifacts.add(artifact.name);
+      list.push({ id: `artifact:${artifact.name}`, group: 'leverance', label: artifact.name, hint: 'Åbn kørslens mediegennemgang', run: () => openRun('visual') });
+      if (seenArtifacts.size >= 8) break;
+    }
+    if (q) {
+      for (const task of tasks.filter(task => matches(q, task.title, taskRef(task, projects))).slice(0, 8)) list.push({ id: task.id, group: 'opgave', label: task.title, hint: taskRef(task, projects), run: () => { setActiveProject(task.projectId); selectTask(task.id); } });
+      const target = projects.find(project => project.id === activeProjectId) ?? projects.find(project => !project.archived);
+      if (target) list.push({ id: 'create', group: 'opgave', label: `${t('palette.createTask')} “${queryText}”`, hint: target.name, run: () => { const task = addTask({ title: queryText, projectId: target.id }); setActiveProject(target.id); selectTask(task.id); } });
+      if (matches(q, t('palette.reset'), 'nulstil workspace')) list.push({ id: 'reset', group: 'handling', label: t('palette.reset'), hint: t('palette.resetHint'), run: () => { if (window.confirm('Nulstil arbejdsområdet? Dine lokale projekter og samtaler bliver erstattet.')) resetWorkspace(); } });
+    }
+    for (const view of VIEWS.filter(view => matches(q, view.label, t(view.labelKey), ...view.keywords))) list.push({ id: `nav:${view.to}`, group: 'navigation', label: `${t('palette.goto')} ${t(view.labelKey)}`, run: () => navigate(view.to) });
+    return groups.flatMap(group => list.filter(row => row.group === group));
+  }, [query, tasks, projects, chats, activeProjectId, addTask, addChat, selectTask, setActiveProject, navigate, location.pathname, location.search, toggleTheme, resetWorkspace, toggleLang, run, lang]);
+  const selected = Math.min(index, Math.max(rows.length - 1, 0));
+  useEffect(() => { if (open) document.getElementById(`orbit-command-${selected}`)?.scrollIntoView({ block: 'nearest' }); }, [selected, open, query]);
+  const runRow = (row: Row) => { close(false); row.run(); };
 
-    VIEWS.filter(
-      (v) =>
-        !q ||
-        v.label.toLowerCase().includes(q) ||
-        t(v.labelKey).toLowerCase().includes(q) ||
-        v.keywords.some((k) => k.includes(q)),
-    ).forEach((v) =>
-      list.push({
-        id: `nav-${v.to}`,
-        group: 'navigation',
-        label: `${t('palette.goto')} ${t(v.labelKey)}`,
-        run: () => navigate(v.to),
-      }),
-    );
-
-    list.push(
-      {
-        id: 'theme',
-        group: 'handling',
-        label: t('palette.theme'),
-        run: toggleTheme,
-      },
-      {
-        id: 'lang',
-        group: 'handling',
-        label: t('palette.language'),
-        run: toggleLang,
-      },
-      {
-        id: 'reset',
-        group: 'handling',
-        label: t('palette.reset'),
-        hint: t('palette.resetHint'),
-        run: () => resetWorkspace(),
-      },
-    );
-    return list;
-  }, [query, tasks, projects, activeProjectId, addTask, selectTask, setActiveProject, navigate, toggleTheme, resetWorkspace, toggleLang, lang]);
-
-  useEffect(() => setIndex(0), [rows.length]);
-
-  const runRow = useCallback(
-    (row: Row) => {
-      row.run();
-      setOpen(false);
-    },
-    [setOpen],
-  );
-
-  if (!open) return null;
-
-  const groups: Row['group'][] = ['handling', 'navigation', 'opgave'];
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-950/40 pt-[14vh] backdrop-blur-sm animate-fade-in"
-      onMouseDown={() => setOpen(false)}
-    >
-      <div
-        className="w-full max-w-xl overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-panel animate-scale-in dark:border-white/10 dark:bg-[#1e1f24]"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-3 border-b border-zinc-200 px-4 dark:border-white/[0.06]">
-          <Search className="h-4 w-4 shrink-0 text-zinc-400" />
-          <input
-            ref={inputRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                setIndex((i) => Math.min(i + 1, rows.length - 1));
-              } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                setIndex((i) => Math.max(i - 1, 0));
-              } else if (e.key === 'Enter' && rows[index]) {
-                runRow(rows[index]);
-              }
-            }}
-            placeholder={t('palette.placeholder')}
-            className="w-full bg-transparent py-3.5 text-sm outline-none placeholder:text-zinc-400"
-          />
-          <kbd className="rounded border border-zinc-200 bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 dark:border-white/10 dark:bg-white/5 dark:text-zinc-400">
-            Esc
-          </kbd>
-        </div>
-
-        <div className="max-h-[46vh] overflow-y-auto p-2">
-          {rows.length === 0 && (
-            <p className="px-3 py-6 text-center text-sm text-zinc-500">
-              {t('palette.noResults')} "{query}"
-            </p>
-          )}
-          {groups.map((g) => {
-            const groupRows = rows.filter((r) => r.group === g);
-            if (groupRows.length === 0) return null;
-            return (
-              <div key={g}>
-                <p className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                  {g === 'handling' ? t('palette.actions') : g === 'navigation' ? t('palette.navigation') : t('palette.tasks')}
-                </p>
-                {groupRows.map((row) => {
-                  const idx = rows.indexOf(row);
-                  const task = row.group === 'opgave' ? tasks.find((t) => t.id === row.id) : null;
-                  return (
-                    <button
-                      key={row.id}
-                      onMouseEnter={() => setIndex(idx)}
-                      onClick={() => runRow(row)}
-                      className={cn(
-                        'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm',
-                        idx === index ? 'bg-indigo-500/10 text-indigo-700 dark:bg-indigo-400/10 dark:text-indigo-200' : 'text-zinc-700 dark:text-zinc-200',
-                      )}
-                    >
-                      {row.group === 'handling' &&
-                        (row.id === 'create' ? (
-                          <FilePlus2 className="h-4 w-4 shrink-0 text-indigo-500" />
-                        ) : row.id === 'theme' ? (
-                          <Moon className="h-4 w-4 shrink-0 text-zinc-400" />
-                        ) : row.id === 'lang' ? (
-                          <Languages className="h-4 w-4 shrink-0 text-zinc-400" />
-                        ) : (
-                          <RefreshCcw className="h-4 w-4 shrink-0 text-zinc-400" />
-                        ))}
-                      {task && <StatusBadge status={task.status} className="shrink-0" />}
-                      <span className="min-w-0 flex-1 truncate">{row.label}</span>
-                      {task && <span className="text-[11px] text-zinc-400">{row.hint}</span>}
-                      {row.id === 'create' && <CornerDownLeft className="h-3.5 w-3.5 shrink-0 text-zinc-400" />}
-                    </button>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
+  return <dialog ref={dialogRef} onKeyDown={wrapDialogFocus} aria-labelledby="orbit-command-title" className="orbit-command-dialog" onCancel={event => { event.preventDefault(); close(); }} onClick={event => { if (event.target === event.currentTarget) close(); }}>
+    <div className="orbit-command-surface">
+      <h2 id="orbit-command-title" className="sr-only">Søg og handlinger</h2>
+      <div className="orbit-command-input"><Search size={18} aria-hidden="true" /><input ref={inputRef} role="combobox" aria-label="Søg i Orbit" aria-autocomplete="list" aria-expanded={open} aria-controls="orbit-command-results" aria-activedescendant={rows[selected] ? `orbit-command-${selected}` : undefined} value={query} onChange={event => { setQuery(event.target.value); setIndex(0); }} placeholder="Søg projekter, samtaler, opgaver og handlinger…" onKeyDown={event => {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setIndex(current => Math.max(0, Math.min(current + (event.key === 'ArrowDown' ? 1 : -1), rows.length - 1))); }
+        if (event.key === 'Enter' && rows[selected]) { event.preventDefault(); runRow(rows[selected]); }
+      }} /><button type="button" aria-label="Luk søgning" className="btn-ghost" onClick={() => close()}><X size={16} /></button></div>
+      <div id="orbit-command-results" role="listbox" aria-label="Søgeresultater" className="orbit-command-results">
+        {rows.length === 0 && <p className="orbit-command-empty">Ingen resultater for “{query}”. Prøv et projekt, en samtale eller en handling.</p>}
+        {groups.map(group => {
+          const groupRows = rows.filter(row => row.group === group);
+          if (!groupRows.length) return null;
+          return <div role="group" aria-label={groupNames[group]} key={group}>
+            <p className="orbit-command-group" aria-hidden="true">{groupNames[group]}</p>
+            {groupRows.map(row => {
+              const position = rows.indexOf(row);
+              const task = row.group === 'opgave' && row.id !== 'create' ? tasks.find(task => task.id === row.id) : null;
+              return <div id={`orbit-command-${position}`} role="option" aria-selected={position === selected} key={row.id} onMouseEnter={() => setIndex(position)} onClick={() => runRow(row)} className={cn('orbit-command-row', position === selected && 'is-selected')}>
+                {row.group === 'projekt' ? <Folder size={16} /> : row.group === 'samtale' ? <MessageSquare size={16} /> : row.id === 'create' ? <FilePlus2 size={16} /> : task ? <StatusBadge status={task.status} className="shrink-0" /> : <ArrowRight size={15} />}
+                <div><span>{row.label}</span>{row.hint && <small>{row.hint}</small>}</div>{position === selected && <CornerDownLeft size={14} className="orbit-command-enter" />}
+              </div>;
+            })}
+          </div>;
+        })}
       </div>
+      <footer className="orbit-command-footer"><span><kbd>↑</kbd> <kbd>↓</kbd> vælg</span><span><kbd>Enter</kbd> åbn</span><span><kbd>Esc</kbd> luk</span></footer>
     </div>
-  );
+  </dialog>;
 }

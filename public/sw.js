@@ -1,7 +1,7 @@
 // Orbit service worker – offline-håndtering for PWA'en.
 // Der bruges kun ét cache-navn, og gamle caches ryddes op ved aktivering.
 
-const CACHE_NAME = 'orbit-v1';
+const CACHE_NAME = 'orbit-shell-v2';
 
 // App-skallen caches ved installation, så "/"-fallback virker offline med det samme.
 const PRECACHE = ['/', '/index.html', '/manifest.webmanifest'];
@@ -35,6 +35,10 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  // The packaged application serves Companion and frontend on the same port.
+  // Never serve stale health, queue, permissions, files or credentials from a
+  // browser cache, and never store API responses as offline application assets.
+  if (url.pathname.startsWith('/api/') || url.pathname === '/ws' || url.pathname.startsWith('/public/')) return;
 
   // Navigationsanmodninger (sideindlæsninger): network-first.
   // Offline falder vi tilbage til den cachede app-skal ("/").
@@ -42,8 +46,10 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const kopi = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put('/', kopi));
+          if (response.ok && response.headers.get('content-type')?.includes('text/html')) {
+            const kopi = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put('/', kopi));
+          }
           return response;
         })
         .catch(async () => {
@@ -59,6 +65,10 @@ self.addEventListener('fetch', (event) => {
     );
     return;
   }
+
+  // Only immutable build assets and app icons are eligible for cache-first.
+  // index.html and SW metadata must be fetched again after a release switch.
+  if (!url.pathname.startsWith('/assets/') && !url.pathname.startsWith('/icons/')) return;
 
   // Andre GET-anmodninger (assets, ikoner m.m.): cache-first, mens cachen
   // opdateres fra netværket i baggrunden, hvis der findes et svar.

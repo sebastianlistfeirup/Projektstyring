@@ -1,4 +1,5 @@
 import { captureProjectContext } from './project-context.mjs';
+import { normalizeAutonomyPolicy } from './ai-autonomy.mjs';
 
 export function projectExecution(snapshot, input) {
   if (!input.projectId) {
@@ -24,8 +25,8 @@ export function projectExecution(snapshot, input) {
     const count = snapshot.tasks.filter(t => t.projectId === project.id && t.id !== task.id && t.status === 'inprogress').length;
     if (task.status !== 'inprogress' && Number.isFinite(limit) && count >= limit) throw new Error('Projektets grænse for igangværende arbejde er nået.');
   }
-  const context = captureProjectContext(project, task, state, input.bible ?? '');
-  return { ...input, ...context, repositoryPath: project.repositoryPath || undefined, repositoryStartCommit: workspace?.commit ?? undefined, repositoryStartRef: project.repositoryBaseRef || undefined, continuationTaskIds: [...(workspace?.includedTaskIds ?? [])], checks: project.verificationChecks ?? [],
+  const context = captureProjectContext(project, task, state);
+  return { ...input, ...context, autonomy: project.autonomyPolicy ? normalizeAutonomyPolicy(project.autonomyPolicy, { selfHeal: true }) : undefined, repositoryPath: project.repositoryPath || undefined, repositoryStartCommit: workspace?.commit ?? undefined, repositoryStartRef: project.repositoryBaseRef || undefined, continuationTaskIds: [...(workspace?.includedTaskIds ?? [])], checks: project.verificationChecks ?? [],
     goal: [project.releaseGoal ? `Versionsmål: ${project.releaseGoal}` : '', input.goal, task ? `Autoritativ arbejdsordre: ${task.title}\n${task.description ?? ''}` : ''].filter(Boolean).join('\n\n') };
 }
 

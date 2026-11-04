@@ -1,0 +1,52 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import express from 'express';
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { registerAiRoutes } from '../server/ai-engine.mjs';
+import { activeRuns } from '../server/ai-runtime.mjs';
+
+test('HTTP project controls reject stale approval/resume and enforce saved limits over client input', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'orbit-project-controls-'));
+  const marker = join(root, 'calls.txt'), fake = join(root, 'agent.mjs');
+  writeFileSync(fake, `import {appendFileSync} from 'node:fs'; appendFileSync(${JSON.stringify(marker)}, 'called\\n'); console.log('Inspection delivered.');`);
+  const policy = { maxProviderCalls: 1, maxExecutionMinutes: 5, maxRepairAttempts: 0, maxConsecutiveFailures: 2 };
+  let snapshot = { projects: [{ id: 'p', name: 'Project', autonomyPolicy: policy }], tasks: [], workspaceState: { bibles: { p: 'Original approved requirements' } } };
+  let cfg = { aiProviders: { codex: { cmd: process.execPath, cliTemplate: `"${fake}" {prompt}`, billingMode: 'included', noExtraCharges: true } }, aiPrefs: { autoJudge: false, selfHeal: false } };
+  const app = express(); app.use(express.json());
+  registerAiRoutes(app, { APP_DIR: root, loadConfig: () => cfg, saveConfig: value => { cfg = value; }, getSnapshot: () => snapshot });
+  const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
+  t.after(() => { for (const handle of activeRuns.values()) { handle.cancelled = true; handle.abort.abort(); handle.resolveApproval?.([]); } server.closeAllConnections(); server.close(); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = (url, options) => String(url).startsWith(base) ? nativeFetch(url, options) : Promise.reject(new Error('External network disabled'));
+  t.after(() => { globalThis.fetch = nativeFetch; });
+  const post = (path, body) => fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const jobs = ['first', 'second'].map(id => ({ id, title: id, description: 'Inspect', phase: 'test', serviceId: 'codex', readOnly: true, dependsOn: [] }));
+  const response = await post('/api/ai/orchestrate', { projectId: 'p', goal: 'Inspect', pauseAfterPlan: true, jobs, autonomy: { ...policy, maxProviderCalls: 999 } });
+  const stream = response.text(); void stream.catch(() => {});
+  let run;
+  for (const end = Date.now() + 15000; Date.now() < end;) {
+    run = (await (await fetch(base + '/api/ai/swarm')).json()).run;
+    if (run?.status === 'awaiting_approval') break;
+    await new Promise(resolve => setTimeout(resolve, 30));
+  }
+  assert.equal(run.status, 'awaiting_approval');
+  assert.equal(run.autonomy.policy.maxProviderCalls, 1);
+  snapshot = { ...snapshot, workspaceState: { bibles: { p: 'Changed requirements' } } };
+  const rejected = await post(`/api/ai/runs/${run.runId}/approve`, { jobs });
+  assert.equal(rejected.status, 409);
+  assert.equal((await rejected.json()).contextStatus.status, 'changed');
+  assert.equal(existsSync(marker), false, 'No provider work starts for stale approval');
+  assert.equal((await (await fetch(`${base}/api/ai/runs/${run.runId}/context`)).json()).contextStatus.status, 'changed');
+  await post(`/api/ai/runs/${run.runId}/cancel`, {}); await stream;
+  assert.equal((await post(`/api/ai/runs/${run.runId}/resume`, {})).status, 409);
+  await (await post('/api/ai/orchestrate', { projectId: 'p', goal: 'Fresh plan', jobs, autonomy: { ...policy, maxProviderCalls: 999 } })).text();
+  const finished = (await (await fetch(base + '/api/ai/swarm')).json()).run;
+  assert.equal(finished.jobs.filter(job => job.status === 'done').length, 1);
+  assert.equal(finished.jobs.filter(job => job.status === 'blocked').length, 1);
+  assert.equal(finished.autonomy.providerCalls, 1);
+  assert.match(finished.autonomy.blockedReason, /1 tjenestekald/);
+  assert.equal(readFileSync(marker, 'utf8'), 'called\n');
+});

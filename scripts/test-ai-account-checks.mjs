@@ -13,7 +13,11 @@ test('account delivery test is explicit, isolated, persisted and never upgrades 
   writeFileSync(fake, "console.log(process.argv.at(-1).match(/ORBIT_CHECK_[a-f0-9]+/)?.[0] ?? 'NO_MARKER');");
   const cfg = { aiProviders: { codex: { cmd: process.execPath, cliTemplate: `"${fake}" {prompt}`, billingMode: 'usage' } }, aiPrefs: { autoJudge: true, selfHeal: true } };
   const events = [], app = express(); app.use(express.json());
-  registerAiRoutes(app, { loadConfig: () => cfg, saveConfig() {}, APP_DIR: root, broadcast: event => events.push(event) });
+  let stopDuringDiscovery = false;
+  registerAiRoutes(app, { loadConfig: () => {
+    if (stopDuringDiscovery) queueMicrotask(() => { app.locals.aiStopping = true; });
+    return cfg;
+  }, saveConfig() {}, APP_DIR: root, broadcast: event => events.push(event) });
   const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   const nativeFetch = globalThis.fetch;
@@ -46,4 +50,7 @@ test('account delivery test is explicit, isolated, persisted and never upgrades 
   assert.equal((await getReport()).configurationChanged, true);
   writeFileSync(join(root, 'ai-account-checks', 'codex.json'), JSON.stringify({ ...report, status: 'running', runId: 'unknown-crashed-run' }));
   assert.equal((await getReport()).status, 'interrupted');
+  stopDuringDiscovery = true;
+  assert.equal((await post('codex', { execute: true })).status, 503);
+  assert.equal(events.filter(event => event.type === 'service_call_start').length, 1, 'shutdown during discovery must not start a second paid call');
 });

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Bot,
@@ -17,6 +17,7 @@ import {
 import { useStore } from '../store/useStore';
 import { useLang, t } from '../lib/i18n';
 import { cn } from '../lib/utils';
+import { wrapDialogFocus } from '../lib/dialogFocus';
 import WorkshopImport from '../components/WorkshopImport';
 import { useSwarm } from '../lib/swarm';
 import type { AiAgent, AiJob, AiJobStatus, AiPhase } from '../lib/types';
@@ -184,6 +185,14 @@ function JobModal({
   const deleteAiJob = useStore((s) => s.deleteAiJob);
   const aiJobs = useStore((s) => s.aiJobs);
 
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [opener] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => { dialog?.close(); if (opener?.isConnected) opener.focus(); };
+  }, [opener]);
+
   const activeProjects = projects.filter((p) => !p.archived);
   const [form, setForm] = useState({
     title: job?.title ?? '',
@@ -220,14 +229,13 @@ function JobModal({
   };
 
   return (
-    <div className="fixed inset-0 z-40 grid place-items-center p-4" role="dialog" aria-modal>
-      <div className="absolute inset-0 bg-zinc-950/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="glass-panel animate-fade-in relative max-h-[88vh] w-full max-w-lg overflow-y-auto rounded-3xl p-6">
+    <dialog ref={dialogRef} onKeyDown={wrapDialogFocus} className="orbit-job-dialog" aria-labelledby="orbit-job-dialog-title" onCancel={event => { event.preventDefault(); onClose(); }} onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <div className="glass-panel animate-fade-in relative max-h-[88vh] w-full overflow-y-auto rounded-2xl p-6">
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="font-display text-lg font-bold text-zinc-900 dark:text-white">
+          <h3 id="orbit-job-dialog-title" className="font-display text-lg font-bold text-zinc-900 dark:text-white">
             {job ? t('ai.editJob') : t('ai.newJob')}
           </h3>
-          <button onClick={onClose} className="btn-ghost rounded-lg p-1.5">
+          <button onClick={onClose} aria-label="Luk arbejdsopgave" className="btn-ghost rounded-lg p-1.5">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -238,6 +246,7 @@ function JobModal({
             value={form.title}
             onChange={(e) => set('title', e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && submit()}
+            aria-label="Arbejdsopgavens titel"
             placeholder={t('ai.jobTitlePlaceholder')}
             className="input"
           />
@@ -380,7 +389,7 @@ function JobModal({
           </div>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }
 

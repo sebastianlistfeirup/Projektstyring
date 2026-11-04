@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 export default function ModelPreview({ url, name }: { url: string; name: string }) {
   const host = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -27,12 +28,12 @@ export default function ModelPreview({ url, name }: { url: string; name: string 
       container.replaceChildren(viewer);
     }).catch(() => { if (!cancelled) setState('error'); });
     return () => { cancelled = true; container?.replaceChildren(); };
-  }, [url, name]);
+  }, [url, name, attempt]);
 
   return <div className="space-y-2">
     <div ref={host} role="group" aria-label={`3D-visning: ${name}`} className="rounded-lg overflow-hidden border border-white/10 min-h-[380px] bg-[#171726]" />
     {state === 'loading' && <p role="status" className="text-xs opacity-65">Indlæser 3D-modellen…</p>}
     {state === 'ready' && <p className="text-xs opacity-65">Træk for at dreje. Rul eller knib for at zoome. Modellen kan også vælges med tastaturet.</p>}
-    {state === 'error' && <p role="alert" className="text-xs text-amber-500">Modellen kunne ikke vises her. Du kan stadig hente originalfilen ovenfor.</p>}
+    {state === 'error' && <div role="alert" className="text-xs text-amber-500 space-y-2"><p>Modellen kunne ikke vises her. Du kan stadig hente originalfilen ovenfor.</p><button type="button" className="btn-secondary text-xs" onClick={() => { setState('loading'); setAttempt(value => value + 1); }}>Prøv 3D-visning igen</button></div>}
   </div>;
 }

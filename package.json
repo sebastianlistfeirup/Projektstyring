@@ -8,6 +8,7 @@
     "dev:app": "vite",
     "companion": "node server/companion.mjs",
     "build": "tsc -b && vite build",
+    "desktop:package": "node scripts/build-desktop-release.mjs",
     "tauri": "tauri",
     "lint": "oxlint",
     "preview": "vite preview",

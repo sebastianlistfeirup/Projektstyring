@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { runCheckProcess } from './ai-check-process.mjs';
+import { archiveArtifact } from './ai-artifacts.mjs';
 const exec = promisify(execFile);
 const git = async (cwd, args) => (await exec('git', args, { cwd, timeout: 30000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
 
@@ -64,7 +65,7 @@ export async function snapshotRunArtifacts(workDir) {
   return baseline;
 }
 
-export async function runWorktreeArtifacts(workDir, runId, baseCommit, baseline = new Map()) {
+export async function runWorktreeArtifacts(workDir, runId, baseCommit, baseline = new Map(), archive = {}) {
   const [changed, untracked] = await Promise.all([
     baseCommit ? git(workDir, ['diff', '--name-only', '--diff-filter=AM', '-z', baseCommit, 'HEAD']) : git(workDir, ['ls-files', '-z', '--cached']),
     untrackedArtifactPaths(workDir),
@@ -80,11 +81,17 @@ export async function runWorktreeArtifacts(workDir, runId, baseCommit, baseline 
       return [{ name, modified: statSync(path).mtimeMs }];
     } catch { return []; }
   });
-  return files.sort((a, b) => b.modified - a.modified).slice(0, 30).map(({ name }) => {
+  const artifacts = [];
+  let totalBytes = 0;
+  for (const { name } of files.sort((a, b) => b.modified - a.modified).slice(0, 30)) {
+    const path = runArtifactPath(workDir, name);
+    totalBytes += statSync(path).size;
+    if (totalBytes > 512 * 1024 * 1024) throw new Error('Jobbets medier overskrider arkivets grænse på 512 MB.');
     const ext = name.split('.').at(-1).toLowerCase();
     const mime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', glb: 'model/gltf-binary', mp3: 'audio/mpeg', wav: 'audio/wav', mp4: 'video/mp4', webm: 'video/webm' }[ext];
-    return { kind: mime.startsWith('image/') ? 'image' : 'file', name, mime, url: `/api/ai/runs/${encodeURIComponent(runId)}/visual?path=${encodeURIComponent(name)}` };
-  });
+    artifacts.push(await archiveArtifact({ ...archive, runId, filePath: path, name, mime, sourcePath: name }));
+  }
+  return artifacts;
 }
 
 export async function inspectRepository(path) {

@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeAtomicJson } from './atomic-json.mjs';
+import { durableStorePath, readDurableDocument, listDurableDocuments } from './ai-durable-store.mjs';
 
 const VERSION = 2;
 const validId = id => /^[a-zA-Z0-9_-]{1,100}$/.test(id);
@@ -20,8 +21,8 @@ export function summarizeRun(run) {
   };
 }
 
-// A disposable index. The full run remains authoritative; stale, missing or
-// corrupt indexes are regenerated one run at a time without retaining bodies.
+// Compatibility index for legacy JSON-only runs. New runs have an authoritative
+// compact summary committed in the same SQLite transaction as their snapshot.
 export function saveRunSummary(dirs, run) {
   if (!validId(run.runId)) return;
   const source = statSync(join(dirs.runs, `${run.runId}.json`));
@@ -32,6 +33,8 @@ export function saveRunSummary(dirs, run) {
 
 export function readRunSummary(dirs, runId) {
   if (!validId(runId)) return null;
+  const durable = readDurableDocument(durableStorePath(dirs), `summary:${runId}`);
+  if (durable) return durable.value;
   const path = join(dirs.runs, `${runId}.json`), source = statSync(path);
   try {
     const cache = JSON.parse(readFileSync(join(dirs.runs, `${runId}.summary`), 'utf8'));
@@ -46,9 +49,12 @@ export function readRunSummary(dirs, runId) {
 export function listRunSummaries(dirs, { limit = 20, offset = 0, query = '', projectId = '' } = {}) {
   const runs = [], needle = String(query).trim().toLocaleLowerCase();
   let unreadable = 0;
-  for (const file of readdirSync(dirs.runs).filter(name => name.endsWith('.json') && name !== 'ai-queue.json')) {
+  const durable = new Map(listDurableDocuments(durableStorePath(dirs), 'summary:').map(row => [row.key.slice(8), row.value]));
+  const ids = new Set([...durable.keys(),
+    ...readdirSync(dirs.runs).filter(name => name.endsWith('.json') && name !== 'ai-queue.json').map(name => name.slice(0, -5))]);
+  for (const id of ids) {
     try {
-      const run = readRunSummary(dirs, file.slice(0, -5));
+      const run = durable.get(id) ?? readRunSummary(dirs, id);
       if (!run || (projectId && run.projectId !== projectId)) continue;
       if (needle && !`${run.goal} ${run.runId}`.toLocaleLowerCase().includes(needle)) continue;
       runs.push(run);

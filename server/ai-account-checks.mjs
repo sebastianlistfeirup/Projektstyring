@@ -7,6 +7,9 @@ import { writeAtomicJson } from './atomic-json.mjs';
 import { aiCfg, serviceAvailability } from './ai-services.mjs';
 import { executeRun, activeRuns, swarmState } from './ai-runtime.mjs';
 import { readRun } from './ai-state.mjs';
+import { integrationEvidence } from './ai-integration-evidence.mjs';
+import { archivedArtifactPath } from './ai-artifacts.mjs';
+import { registerMcpChecks } from './ai-mcp-probe.mjs';
 
 const providers = new Set(['codex', 'claude', 'gemini', 'grok', 'meshy', 'heygen', 'elevenlabs', 'kimi', 'qwen', 'qwen-code']);
 const media = new Set(['meshy', 'heygen', 'elevenlabs']);
@@ -14,6 +17,7 @@ const fingerprint = (cfg, id) => createHash('sha256').update(JSON.stringify(aiCf
 
 export function registerAccountChecks(app, { APP_DIR, dirs, loadConfig, broadcast, orphanGuard }) {
   const directory = join(APP_DIR, 'ai-account-checks'); mkdirSync(directory, { recursive: true });
+  const mcpChecks = registerMcpChecks(app, { APP_DIR });
   const path = id => join(directory, `${id}.json`);
   app.get('/api/ai/services/:id/verification', (req, res) => {
     const id = req.params.id;
@@ -29,7 +33,7 @@ export function registerAccountChecks(app, { APP_DIR, dirs, loadConfig, broadcas
       report = { ...report, configurationChanged: report.configurationHash !== fingerprint(loadConfig(), id) };
       delete report.configurationHash;
     }
-    res.json({ ok: true, report });
+    res.json({ ok: true, report, integration: integrationEvidence(report, mcpChecks.inventory(id)) });
   });
   app.post('/api/ai/services/:id/verify', async (req, res) => {
     const id = req.params.id;
@@ -37,6 +41,7 @@ export function registerAccountChecks(app, { APP_DIR, dirs, loadConfig, broadcas
     if (req.body?.execute !== true) return res.status(400).json({ ok: false, reason: 'Kontotesten sender én rigtig opgave og bruger din tilgængelige kvote.' });
     if (media.has(id) && req.body?.produceMedia !== true) return res.status(400).json({ ok: false, reason: 'Vælg medietest for at producere én rigtig fil.' });
     const cfg = loadConfig(), availability = await serviceAvailability(cfg);
+    if (app.locals.aiStopping) return res.status(503).json({ ok: false, reason: 'Orbit er ved at lukke. Kontotesten blev ikke startet.' });
     if (!availability[id]?.available) return res.status(409).json({ ok: false, reason: availability[id]?.reason ?? 'Tjenesten er ikke klar.' });
     // Recheck after async discovery. executeRun claims its slot synchronously.
     const guard = orphanGuard();
@@ -56,12 +61,17 @@ export function registerAccountChecks(app, { APP_DIR, dirs, loadConfig, broadcas
       dirs: { ...dirs, memory: join(directory, 'memory', runId) }, emit: event => broadcast?.({ kind: 'ai', ...event }) });
     const timer = setTimeout(() => { const handle = activeRuns.get(runId); if (handle) { handle.cancelled = true; handle.abort.abort(); } }, media.has(id) ? 8 * 60_000 : 120_000);
     timer.unref();
-    void promise.then(() => {
+    void promise.then(async () => {
       const run = readRun(dirs, runId), result = run.results?.find(item => item.jobId === job.id);
-      const artifacts = (result?.artifacts ?? []).map(artifact => {
+      const artifacts = await Promise.all((result?.artifacts ?? []).map(async artifact => {
+        const archived = artifact.url?.match(/^\/api\/ai\/runs\/([a-zA-Z0-9_-]+)\/artifacts\/([a-f0-9]{64})$/);
+        if (archived) {
+          const { metadata } = await archivedArtifactPath(dirs.artifacts, archived[1], archived[2]);
+          return { ...artifact, bytes: metadata.size, sha256: metadata.sha256 };
+        }
         const content = readFileSync(join(dirs.artifacts, basename(artifact.url)));
         return { name: artifact.name, mime: artifact.mime, url: artifact.url, bytes: content.length, sha256: createHash('sha256').update(content).digest('hex') };
-      });
+      }));
       const delivered = run.status === 'done' && (media.has(id) ? artifacts.some(item => item.bytes > 0) : result?.text?.includes(marker));
       writeAtomicJson(path(id), { ...report, status: delivered ? 'passed' : 'failed', delivery: delivered ? 'verified' : 'unverified', finishedAt: new Date().toISOString(), artifacts });
     }).catch(() => {

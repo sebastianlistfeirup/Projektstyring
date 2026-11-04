@@ -1,16 +1,19 @@
 // Orbit AI HTTP-ruter.
 import { registerAccountChecks } from './ai-account-checks.mjs';
 import { nativePermissions } from './ai-permissions.mjs';
-import { existsSync, mkdirSync, writeFileSync, readFileSync, realpathSync, createReadStream } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, realpathSync, createReadStream } from 'fs';
 import { join, basename, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { serviceById, serviceAvailability, runChat, setSecretsDir, loadKeySecrets, saveKeySecrets, aiCfg, inspectCliInstallation, parseCliTemplate } from './ai-services.mjs';
 import { extractDocument, hydrateAttachment, validateAttachmentList } from './ai-documents.mjs';
 import { inspectRepository, repositoryReadiness, runArtifactPath, validateChecks } from './ai-repository.mjs';
+import { registerArtifactRoutes } from './ai-artifacts.mjs';
 import { projectExecution } from './task-execution.mjs';
+import { captureProjectContext, compareProjectContext } from './project-context.mjs';
+import { normalizeAutonomyPolicy } from './ai-autonomy.mjs';
 import { importProjectPlan } from './project-plan.mjs';
 import { DurableRunQueue } from './ai-queue.mjs';
-import { readRun, recoverRuns, validatePlan, runPath, withRunEvents, eventJournalPath, liveRunView } from './ai-state.mjs';
+import { readRun, recoverRuns, validatePlan, withRunEvents, eventJournalPath, liveRunView } from './ai-state.mjs';
 import { importWorkshopJobs } from './ai-workshop.mjs';
 import { repositoryChanges, repositoryPatch } from './ai-diff.mjs';
 import { aiProcessSnapshot, stopAiProcesses, processMayBeWorking } from './ai-processes.mjs';
@@ -34,6 +37,16 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   };
   for (const d of Object.values(dirs)) if (typeof d === 'string') mkdirSync(d, { recursive: true });
 
+  const currentContext = (projectId, taskId) => {
+    if (!projectId || !getSnapshot) return null;
+    const snapshot = getSnapshot();
+    const project = snapshot?.projects?.find(item => item.id === projectId);
+    const task = taskId ? snapshot?.tasks?.find(item => item.id === taskId && item.projectId === projectId) : null;
+    if (!project || (taskId && !task)) return null;
+    return captureProjectContext(project, task, snapshot.workspaceState ?? {}).contextManifest;
+  };
+  const contextReader = (projectId, taskId) => projectId && getSnapshot ? () => currentContext(projectId, taskId) : null;
+
   const recovered = recoverRuns(dirs);
   const recoveryCandidates = listRunSummaries(dirs, { limit: Number.MAX_SAFE_INTEGER }).runs.filter(run => run.status === 'interrupted').flatMap(run => { try { const saved = readRun(dirs, run.runId); return [{ runId: saved.runId, processes: saved.processes ?? [] }]; } catch { return []; } });
   if (recovered.length) swarmState.last = recovered.at(-1);
@@ -49,7 +62,10 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
         if (project.scopeTaskIds && !project.scopeTaskIds.includes(task.id)) throw new Error('Arbejdsordren ligger uden for versionens scope.');
       }
     } else if (input.taskId) throw new Error('Arbejdsordren kræver et projekt.');
-    if (!input.projectId) input.bible = String(body.bible ?? '');
+    if (!input.projectId) {
+      input.bible = String(body.bible ?? '');
+      if (body.autonomy !== undefined) input.autonomy = normalizeAutonomyPolicy(body.autonomy, aiCfg(loadConfig()).prefs);
+    }
     return input;
   };
   const orphanProcesses = () => {
@@ -64,7 +80,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     readRun: runId => readRun(dirs, runId),
     resolveInput: input => getSnapshot ? projectExecution(getSnapshot(), input) : input,
     execute: input => executeRun({ ...input, repository: input.repositoryPath ? { source: String(input.repositoryPath), startCommit: input.repositoryStartCommit, startRef: input.repositoryStartRef } : null,
-      checks: validateChecks(input.checks ?? []), cfg: loadConfig(), dirs, emit: event => broadcast?.({ kind: 'ai', ...event }) }),
+      checks: validateChecks(input.checks ?? []), getCurrentContext: contextReader(input.projectId, input.taskId), cfg: loadConfig(), dirs, emit: event => broadcast?.({ kind: 'ai', ...event }) }),
     onUpdate: state => broadcast?.({ kind: 'ai_queue', type: 'queue_updated', updatedAt: state.updatedAt }),
   });
   app.locals.orbitQueue = queue;
@@ -73,12 +89,13 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     app.locals.aiStopping = true;
     try { if (!queue.storageError) queue.pause('Companion lukkes. Fortsæt køen, når Orbit er startet igen.'); }
     finally {
+      app.locals.abortMcpChecks?.();
       for (const handle of activeRuns.values()) { handle.cancelled = true; handle.abort.abort(); handle.resolveApproval?.([]); }
       stopAiProcesses();
     }
   };
   app.post('/api/ai/prepare-shutdown', (req, res) => {
-    if (req.body?.refuseActive === true && (activeRuns.size || aiProcessSnapshot().length || orphanProcesses().length)) return res.status(409).json({ ok: false, reason: 'En AI-kørsel eller samtale er aktiv. Afslut den før opdatering.' });
+    if (req.body?.refuseActive === true && (activeRuns.size || aiProcessSnapshot().length || orphanProcesses().length || app.locals.mcpChecksActive)) return res.status(409).json({ ok: false, reason: 'En AI-kørsel, samtale eller forbindelsesprøve er aktiv. Afslut den før opdatering.' });
     app.locals.prepareAiShutdown();
     res.json({ ok: true, processes: [...aiProcessSnapshot(), ...orphanProcesses()] });
   });
@@ -253,6 +270,8 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     res.status(404).end();
   });
 
+  registerArtifactRoutes(app, { dirs, readRun });
+
   app.get('/api/ai/runs/:id/visual', (req, res) => {
     try {
       const run = readRun(dirs, req.params.id);
@@ -360,6 +379,15 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     try {
       const h = activeRuns.get(req.params.runId);
       if (!h?.resolveApproval) return res.status(409).json({ ok: false, reason: 'Genoptag den gemte kørsel for at godkende planen.' });
+      const run = swarmState.active;
+      if (run?.runId === req.params.runId && run.projectId && getSnapshot) {
+        const contextStatus = compareProjectContext(run.contextManifest, currentContext(run.projectId, run.taskId));
+        if (contextStatus.status !== 'current') {
+          run.contextStatus = contextStatus;
+          h.track?.({ type: 'context_status', contextStatus });
+          return res.status(409).json({ ok: false, reason: 'Projektgrundlaget har ændret sig. Stop den gamle plan og start en ny fra det gældende grundlag.', contextStatus });
+        }
+      }
       const requested = req.body?.jobs ?? h.jobsSnapshot;
       const jobs = validatePlan(Array.isArray(requested) ? requested.map(job => ({ ...h.jobsSnapshot?.find(original => original.id === job?.id), ...job })) : requested);
       const resolve = h.resolveApproval;
@@ -533,14 +561,21 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
   });
 
   // ---- genoptagelse (resume): kør kun de jobs der aldrig leverede ----
+  app.get('/api/ai/runs/:runId/context', (req, res) => {
+    try {
+      const run = readRun(dirs, req.params.runId);
+      const contextStatus = compareProjectContext(run.contextManifest, currentContext(run.projectId, run.taskId));
+      res.json({ ok: true, contextStatus });
+    } catch (error) { res.status(404).json({ ok: false, reason: error.message }); }
+  });
   app.post('/api/ai/runs/:runId/resume', (req, res) => {
     try {
       if (req.body?.instruction !== undefined && (typeof req.body.instruction !== 'string' || req.body.instruction.length > 100000)) return res.status(400).json({ ok: false, reason: 'Beslutningen skal være tekst på højst 100.000 tegn.' });
       const instruction = req.body?.instruction?.trim();
-      const p = runPath(dirs, req.params.runId);
-      if (!existsSync(p)) return res.status(404).json({ ok: false, reason: 'Kørsel ikke fundet' });
       const prev = readRun(dirs, req.params.runId);
       if (getSnapshot && prev.projectId) {
+        const contextStatus = compareProjectContext(prev.contextManifest, currentContext(prev.projectId, prev.taskId));
+        if (contextStatus.status !== 'current') return res.status(409).json({ ok: false, reason: 'Projektgrundlaget er ændret eller kan ikke kontrolleres. Start en ny plan fra det aktuelle grundlag.', contextStatus });
         const input = projectExecution(getSnapshot(), { projectId: prev.projectId, taskId: prev.taskId, goal: prev.goal });
         if (prev.repository?.source && input.repositoryPath !== prev.repository.source) return res.status(409).json({ ok: false, reason: 'Projektet har skiftet repository. Genoptag ikke en kørsel fra den tidligere mappe.' });
         if (input.repositoryStartCommit && input.repositoryStartCommit !== prev.continuationFromCommit) return res.status(409).json({ ok: false, reason: 'Projektets AI-arbejdsgren er gået videre siden dette forsøg. Start en ny arbejdsordre fra det aktuelle grundlag i stedet for at genoptage en ældre gren.' });
@@ -561,22 +596,21 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
         runId, goal: prev.goal, bible: prev.bible, attachments: prev.attachments,
         predefinedJobs: jobs, previousRun, resumeDir: prev.workDir,
         projectId: prev.projectId, taskId: prev.taskId, repository: prev.repository, checks: prev.checks ?? [],
+        getCurrentContext: contextReader(prev.projectId, prev.taskId),
         pauseAfterPlan: prev.status === 'awaiting_approval',
         cfg: loadConfig(), dirs, mode: prev.mode ?? 'standard',
         emit: obj => broadcast?.({ kind: 'ai', ...obj }),
       }).catch(e => broadcast?.({ kind: 'ai', type: 'error', runId, error: e.message }));
       res.json({ ok: true, runId });
     } catch (e) {
-      res.status(500).json({ ok: false, reason: e.message });
+      res.status(e.code === 'ENOENT' ? 404 : 500).json({ ok: false, reason: e.message });
     }
   });
 
   // ---- leverance-eksport: samlet markdown-pakke til download ----
   app.get('/api/ai/runs/:runId/export', (req, res) => {
     try {
-      const p = runPath(dirs, req.params.runId);
-      if (!existsSync(p)) return res.status(404).json({ ok: false, reason: 'Kørsel ikke fundet' });
-      const run = JSON.parse(readFileSync(p, 'utf8'));
+      const run = readRun(dirs, req.params.runId);
       const lines = [`# ${run.goal ?? run.runId}`, '', `Kørsel: \`${run.runId}\` · Status: ${run.status ?? 'ukendt'} · Tilstand: ${run.mode ?? 'standard'}`, ''];
       if (run.repository) lines.push(`Repository: ${run.repository.source}`, `Arbejdsgren: ${run.repository.branch}`, `Commit: ${run.evidence?.commit ?? 'Ingen samlet verificeret leverance'}`, '');
       if (run.contextManifest) {
@@ -700,7 +734,11 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
     const recoveryBlock = orphanGuard();
     if (recoveryBlock) return res.status(409).json({ ok: false, reason: recoveryBlock });
     let input;
-    try { input = getSnapshot ? projectExecution(getSnapshot(), req.body ?? {}) : req.body ?? {}; validateAttachmentList(input.attachments); }
+    try {
+      input = getSnapshot ? projectExecution(getSnapshot(), req.body ?? {}) : req.body ?? {};
+      validateAttachmentList(input.attachments);
+      if (input.autonomy !== undefined && input.autonomy !== null) input.autonomy = normalizeAutonomyPolicy(input.autonomy, aiCfg(loadConfig()).prefs);
+    }
     catch (error) { return res.status(409).json({ ok: false, reason: error.message }); }
     const emit = sse(res);
     const { goal, bible, attachments, jobs, mode, pauseAfterPlan, projectId, taskId, repositoryPath, repositoryStartCommit, repositoryStartRef, continuationTaskIds, checks, contextManifest } = input;
@@ -712,6 +750,7 @@ export function registerAiRoutes(app, { loadConfig, saveConfig, broadcast, APP_D
         goal: String(goal ?? ''),
         bible: String(bible ?? ''),
         attachments, projectId, taskId, contextManifest, continuationTaskIds,
+        autonomy: input.autonomy, getCurrentContext: contextReader(projectId, taskId),
         repository: repositoryPath ? { source: String(repositoryPath), startCommit: repositoryStartCommit, startRef: repositoryStartRef } : null,
         checks: validateChecks(checks ?? []),
         predefinedJobs: jobs,

@@ -12,11 +12,13 @@ import { agentEvents } from './ai-events.mjs';
 import { nativeCliOptions } from './ai-cli-options.mjs';
 import { serviceCapabilities } from './ai-capabilities.mjs';
 import { trackAiProcess } from './ai-processes.mjs';
+import { archiveArtifact, archivedArtifactPath } from './ai-artifacts.mjs';
+import { claimExternalSubmission, updateExternalSubmission } from './ai-durable-store.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { spawn, execFile, execFileSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, chmodSync, statSync } from 'fs';
-import { dirname, join } from 'path';
-import { randomUUID } from 'crypto';
+import { basename, dirname, join } from 'path';
+import { createHash, randomUUID } from 'crypto';
 import { promisify } from 'util';
 
 const execFileP = promisify(execFile);
@@ -748,7 +750,7 @@ async function meshyTextTo3d({ prompt, cfg, dirs, onStatus, onPreview, signal, e
           : image.subarray(0, 4).toString() === 'RIFF' && image.subarray(8, 12).toString() === 'WEBP' ? 'webp' : null;
         if (format) {
           preview = saveArtifact(image, ` model-preview-${Date.now()}.${format}`, dirs);
-          onPreview?.(preview);
+          await onPreview?.(preview);
         }
       } catch (error) {
         if (signal?.aborted) throw error;
@@ -778,7 +780,7 @@ async function heygenAvatar({ text, cfg, dirs, onStatus, signal, existingId, onS
     headers: { 'Content-Type': 'application/json', 'X-Api-Key': p.apiKey },
     body: JSON.stringify({ video_inputs: [{ character: { type: 'avatar', avatar_id: p.avatarId }, voice: { type: 'text', input_text: text, voice_id: p.voiceId } }] }),
   });
-  if (!r.ok) throw new Error(`HeyGen fejl ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  if (!r.ok) throw await mediaHttpError('HeyGen', r, p.apiKey);
   const { data } = await r.json();
   videoId = data?.video_id;
   if (!videoId) throw new Error('HeyGen returnerede ikke et job-id.');
@@ -786,14 +788,17 @@ async function heygenAvatar({ text, cfg, dirs, onStatus, signal, existingId, onS
   }
   for (let i = 0; i < 60; i++) {
     if (i > 0) await delay(6000, undefined, { signal });
-    const st = await (await fetch(`https://api.heygen.com/v1/video_status.get?video_id=${videoId}`, { signal: requestSignal(signal), headers: { 'X-Api-Key': p.apiKey } })).json();
+    const response = await fetch(`https://api.heygen.com/v1/video_status.get?video_id=${encodeURIComponent(videoId)}`, { signal: requestSignal(signal), headers: { 'X-Api-Key': p.apiKey } });
+    if (!response.ok) throw await mediaHttpError('HeyGen', response, p.apiKey);
+    const st = await response.json();
     onStatus?.(`HeyGen: ${st.data?.status}`);
     if (st.data?.status === 'completed') {
       const video = await downloadMedia(st.data.video_url, signal);
       if (video.subarray(4, 8).toString() !== 'ftyp') throw new Error('HeyGen returnerede ikke en gyldig MP4-fil.');
       return saveArtifact(video, ` video-${Date.now()}.mp4`, dirs);
     }
-    if (st.data?.status === 'failed') throw new Error('HeyGen-video slog fejl');
+    if (['failed', 'canceled', 'cancelled', 'expired'].includes(st.data?.status)) throw new Error(`HeyGen-video stoppede (${st.data.status}). Kontrollér jobbet ${videoId} før en ny bestilling.`);
+    if (!['pending', 'waiting', 'processing'].includes(st.data?.status)) throw new Error(`HeyGen returnerede en ukendt jobstatus: ${String(st.data?.status).slice(0, 80)}`);
   }
   throw new Error('HeyGen: timeout efter 6 minutter');
 }
@@ -828,22 +833,52 @@ function guessMime(n) {
   if (/\.mp4$/i.test(n)) return 'video/mp4';
   return 'application/octet-stream';
 }
-export async function produceMedia(job, text, cfg, dirs, emit, signal) {
+export async function produceMedia(job, text, cfg, dirs, emit, signal, { runId, operationNamespace } = {}) {
   assertUsable(serviceById(job.serviceId), cfg);
   signal?.throwIfAborted();
   const media = { ...(job.media ?? {}) };
+  let submissionKey;
+  if (operationNamespace && dirs.runs) {
+    submissionKey = createHash('sha256').update(JSON.stringify([operationNamespace, job.id, job.serviceId])).digest('hex');
+    const provider = aiCfg(cfg).providers[job.serviceId] ?? {};
+    // Only the digest is persisted; prompts and credentials never enter the ledger.
+    const requestHash = createHash('sha256').update(JSON.stringify({ version: 1, serviceId: job.serviceId, prompt: job.description ?? '', text: text ?? '', voiceId: provider.voiceId ?? null, avatarId: provider.avatarId ?? null, model: provider.model ?? null, account: provider.apiKey ?? null })).digest('hex');
+    const claim = claimExternalSubmission(dirs, { key: submissionKey, serviceId: job.serviceId, requestHash });
+    if (!claim.created) {
+      Object.assign(media, { state: claim.submission.state, remoteId: claim.submission.remoteId, submittedAt: claim.submission.submittedAt, artifacts: claim.submission.artifacts });
+    } else if (media.state === 'completed' || media.remoteId) {
+      updateExternalSubmission(dirs, submissionKey, { state: media.state === 'completed' ? 'completed' : 'processing', ...(media.remoteId ? { remoteId: media.remoteId } : {}), ...(media.artifacts?.length ? { artifacts: media.artifacts } : {}) });
+    }
+  }
   const checkpoint = patch => {
     Object.assign(media, patch);
+    if (submissionKey && ['processing', 'completed'].includes(media.state)) updateExternalSubmission(dirs, submissionKey, { state: media.state, ...(media.remoteId ? { remoteId: media.remoteId } : {}), ...(media.artifacts?.length ? { artifacts: media.artifacts } : {}) });
     emit({ type: 'job_media', jobId: job.id, media: { ...media } });
   };
-  if (media.state === 'completed' && media.artifacts?.length) return media.artifacts;
+  if (media.state === 'completed') {
+    try {
+      if (!Array.isArray(media.artifacts) || !media.artifacts.length) throw new Error('Leverancen mangler.');
+      for (const artifact of media.artifacts) {
+        const archived = artifact.url?.match(/^\/api\/ai\/runs\/([a-zA-Z0-9_-]+)\/artifacts\/([a-f0-9]{64})$/);
+        if (archived) {
+          const { metadata } = await archivedArtifactPath(dirs.artifacts, archived[1], archived[2]);
+          if (artifact.sha256 && artifact.sha256 !== metadata.sha256) throw new Error('Kontrolsummen er ændret.');
+        } else if (/^\/api\/ai\/file\/[^/]+$/.test(artifact.url ?? '')) {
+          const info = statSync(join(dirs.artifacts, basename(artifact.url)));
+          if (!info.isFile() || !info.size) throw new Error('Den tidligere fil mangler.');
+        } else throw new Error('Leverancens adresse kan ikke verificeres.');
+      }
+    } catch { throw new Error('Den afsluttede medieleverance kunne ikke verificeres i arkivet. Gendan filen eller kontrollér leverandørens eksisterende job; Orbit bestiller ikke igen.'); }
+    checkpoint({}); return media.artifacts;
+  }
   if (media.state === 'submitting' && !media.remoteId) throw new Error('En tidligere mediebestilling kan være modtaget af leverandøren, men kvitteringen mangler. Kontrollér leverandørens historik før en ny bestilling. Orbit genbestiller ikke automatisk.');
   if (!media.remoteId) checkpoint({ state: 'submitting', serviceId: job.serviceId, submittedAt: Date.now() });
+  const archive = artifact => runId ? archiveArtifact({ artifactsDir: dirs.artifacts, runId, jobId: job.id, filePath: join(dirs.artifacts, basename(artifact.url)), name: artifact.name, mime: artifact.mime, serviceId: job.serviceId, remoteId: media.remoteId ?? null }) : Promise.resolve(artifact);
   const options = {
     cfg, dirs, signal, existingId: media.remoteId,
     onSubmitted: remoteId => checkpoint({ state: 'processing', remoteId }),
     onStatus: status => emit({ type: 'job_status', jobId: job.id, status }),
-    onPreview: preview => checkpoint({ artifacts: [preview] }),
+    onPreview: async preview => checkpoint({ artifacts: [await archive(preview)] }),
   };
   try {
     let artifact;
@@ -851,7 +886,7 @@ export async function produceMedia(job, text, cfg, dirs, emit, signal) {
     else if (job.serviceId === 'meshy') artifact = await meshyTextTo3d({ prompt: job.description || text, ...options });
     else if (job.serviceId === 'heygen') artifact = await heygenAvatar({ text: text || job.description, ...options });
     else throw new Error('Ukendt medietjeneste.');
-    const artifacts = Array.isArray(artifact) ? artifact : [artifact];
+    const artifacts = await Promise.all((Array.isArray(artifact) ? artifact : [artifact]).map(archive));
     checkpoint({ state: 'completed', artifacts });
     return artifacts;
   } catch (e) {

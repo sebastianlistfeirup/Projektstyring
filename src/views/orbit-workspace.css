@@ -29,3 +29,21 @@
   .orbit-workspace-divider { display:none; }
   .orbit-workspace { padding:8px; }
 }
+
+/* Workbench: clear hierarchy and calm surfaces in both themes. */
+.orbit-workspace { gap:10px; padding:14px; background:var(--orbit-surface-soft); }
+.orbit-workspace-toolbar { padding:2px 2px 4px; }
+.orbit-workspace-pane { border-color:var(--orbit-border); border-radius:var(--orbit-radius); background:var(--orbit-surface); box-shadow:0 2px 6px rgb(10 15 30 / .025); }
+.orbit-pane-heading { padding:12px 16px; background:var(--orbit-surface); border-bottom-color:var(--orbit-border); color:var(--orbit-ink); }
+.orbit-pane-heading > svg { color:var(--acc-500); }
+.orbit-pane-heading span { opacity:1; color:var(--orbit-muted); }
+.orbit-workspace-preset-menu { background:var(--orbit-surface); color:var(--orbit-ink); border-color:var(--orbit-border); }
+.orbit-workspace-status { color:var(--orbit-muted); font-weight:400; border:0; background:none; padding:0; }
+.orbit-workspace-progress { display:flex; align-items:center; gap:12px; padding:12px 15px; border:1px solid var(--orbit-border); border-radius:12px; background:var(--orbit-surface); min-width:0; }
+.orbit-workspace-progress-icon { width:33px; height:33px; display:grid; place-items:center; flex-shrink:0; border-radius:9px; color:var(--acc-500); background:color-mix(in srgb,var(--acc-500) 9%,transparent); }
+.orbit-workspace-progress-copy { min-width:0; flex:1; }
+.orbit-workspace-progress strong { display:block; color:var(--orbit-ink); font-size:12px; font-weight:650; line-height:1.5; overflow-wrap:anywhere; }
+.orbit-workspace-progress p { color:var(--orbit-muted); font-size:11px; line-height:1.6; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.orbit-workspace-progress[data-tone=waiting] .orbit-workspace-progress-icon { color:#bd741d; background:rgb(217 119 6 / .09); }
+.orbit-workspace-progress[data-tone=delivered] .orbit-workspace-progress-icon { color:#168269; background:rgb(16 185 129 / .09); }
+@media (max-width:900px) { .orbit-workspace { padding:8px; } .orbit-workspace-progress { align-items:flex-start; flex-wrap:wrap; gap:8px; } .orbit-workspace-progress-copy { min-width:calc(100% - 48px); } .orbit-workspace-progress p { white-space:normal; } .orbit-workspace-progress > button { margin-left:41px; } .orbit-pane-heading span { display:none; } }

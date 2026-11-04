@@ -35,3 +35,11 @@ test('a recovered live plan must resume even when its approval panel is restored
   assert.equal(next.target, 'orbit-run-results');
   assert.equal(nextStepForRun(run('awaiting_approval'), { approval: true }).target, 'orbit-plan-approval');
 });
+
+test('lost heartbeat never encourages duplicate execution and recovered plans remain resumable', () => {
+  const active = { ...run('running'), heartbeatAt: 1000 };
+  assert.equal(nextStepForRun(active, { now: 50000 }).title, 'Afvent en bekræftet status');
+  assert.match(nextStepForRun(active, { now: 50000 }).detail, /ikke samme opgave/);
+  assert.equal(nextStepForRun(active, { now: 2000, connected: false }).target, 'orbit-job-list');
+  assert.equal(nextStepForRun({ ...run('awaiting_approval'), recoveredAt: 1, heartbeatAt: 1000 }, { now: 50000, connected: false }).action, 'Se genoptagelse');
+});

@@ -5,7 +5,8 @@ import { AiChatView } from './AiChatView';
 import { AiSwarmView } from './AiSwarmView';
 import { useStore } from '../store/useStore';
 import { useSwarm } from '../lib/swarm';
-import { runLabels } from '../lib/runPresentation';
+import { PanelErrorBoundary } from '../components/PanelErrorBoundary';
+import { WorkspaceStatus } from '../components/WorkspaceStatus';
 import './orbit-workspace.css';
 
 type Layout = { direction: 'columns' | 'rows'; split: number };
@@ -20,7 +21,7 @@ function readLayout(projectId?: string | null): Layout {
 }
 
 export default function OrbitWorkspace() {
-  const [search] = useSearchParams();
+  const [search, setSearch] = useSearchParams();
   const chats = useStore(s => s.aiChats);
   const activeProject = useStore(s => s.activeProjectId);
   const projects = useStore(s => s.projects);
@@ -33,16 +34,10 @@ export default function OrbitWorkspace() {
   const runInOtherProject = Boolean(projectId && run?.projectId && run.projectId !== projectId);
   const hasLiveDelivery = run?.jobs.some(job => job.media?.state || job.artifacts?.length) || run?.results?.some(result => result.artifacts?.length);
   const [layout, setLayout] = useState(() => readLayout(projectId));
-  const [focus, setFocus] = useState<'both' | 'chat' | 'live'>('both');
+  const [focus, setFocus] = useState<'both' | 'chat' | 'live'>(() => window.matchMedia('(max-width:700px)').matches ? 'chat' : 'both');
   const [dragging, setDragging] = useState(false);
   const surface = useRef<HTMLDivElement>(null);
   const lastProject = useRef(projectId);
-  const status = permissions ? `${permissions} beslutning${permissions === 1 ? '' : 'er'} afventer dig`
-    : runInOtherProject ? `Kørsel i ${runProject?.name ?? 'et andet projekt'}`
-    : run?.status === 'running' ? 'Orbit arbejder'
-    : run?.status === 'awaiting_approval' ? 'Planen afventer dig'
-    : run?.status === 'done' ? 'Leveret til gennemgang'
-    : run ? runLabels[run.status] ?? run.status : 'Klar til næste opgave';
   const preset = focus === 'chat' ? 'focus' : focus === 'live' ? 'visual'
     : layout.direction === 'columns' && layout.split === 48 ? 'standard'
     : layout.direction === 'columns' && layout.split === 35 ? 'code' : 'custom';
@@ -53,15 +48,36 @@ export default function OrbitWorkspace() {
       if (projectId) localStorage.setItem(`orbit-workspace-layout:${projectId}`, JSON.stringify(layout));
     } catch { /* Storage may be unavailable. */ }
   }, [layout, projectId]);
+  useEffect(() => {
+    const target = search.get('workspace');
+    if (!target) return;
+    const frame = requestAnimationFrame(() => {
+      setFocus(target === 'connections' ? 'chat' : 'live');
+      if (target === 'connections') {
+        const navigation = document.getElementById('orbit-compact-navigation');
+        navigation?.setAttribute('open', '');
+        const connections = document.getElementById('orbit-compact-connections');
+        connections?.setAttribute('open', '');
+        requestAnimationFrame(() => connections?.querySelector('summary')?.focus());
+        connections?.scrollIntoView({ block: 'nearest' });
+      } else {
+        const element = document.getElementById(target === 'visual' ? 'orbit-run-visual' : target === 'result' ? 'orbit-run-results' : 'orbit-live-pane') ?? document.getElementById('orbit-live-pane');
+        requestAnimationFrame(() => element?.focus({ preventScroll: true }));
+        element?.scrollIntoView({ block: 'nearest' });
+      }
+      setSearch(previous => { const next = new URLSearchParams(previous); next.delete('workspace'); return next; }, { replace: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [search, setSearch]);
   return <div className="orbit-workspace" data-focus={focus} data-direction={layout.direction}>
     <header className="orbit-workspace-toolbar">
-      <div className="orbit-workspace-identity"><span className="h-2 w-2 rounded-full bg-indigo-400 shrink-0" /><strong className="text-sm">{project?.name ?? 'Orbit'}</strong><span className="orbit-workspace-status" aria-live="polite">{status}</span></div>
+      <div className="orbit-workspace-identity"><span className="h-2 w-2 rounded-full bg-indigo-400 shrink-0" /><strong className="text-sm">{project?.name ?? 'Orbit'}</strong><span className="orbit-workspace-status">Samtale og arbejdsrum</span></div>
       <div className="flex items-center gap-1 flex-wrap" role="group" aria-label="Arbejdsfladens layout">
         {permissions > 0 && <button className="btn-primary text-xs" aria-live="polite" onClick={() => setFocus('live')}>{permissions} afventer dig</button>}
         <button type="button" className="btn-ghost text-xs" disabled={!run || runInOtherProject || (['running', 'awaiting_approval'].includes(run.status) && !hasLiveDelivery)} onClick={() => { setFocus('live'); requestAnimationFrame(() => (document.getElementById('orbit-run-visual') ?? document.getElementById('orbit-run-results'))?.scrollIntoView({ behavior: 'smooth', block: 'start' })); }}>{run?.status === 'running' ? 'Se produktion' : 'Se resultat'}</button>
         <button className="btn-ghost text-xs" aria-pressed={focus === 'both'} onClick={() => setFocus('both')}>Begge paneler</button>
-        <button className="btn-ghost text-xs" aria-label="Fokusér chat" aria-pressed={focus === 'chat'} onClick={() => setFocus('chat')}><MessageSquare size={15} /></button>
-        <button className="btn-ghost text-xs" aria-label="Fokusér Orbit Live" aria-pressed={focus === 'live'} onClick={() => setFocus('live')}><Activity size={15} /></button>
+        <button className="btn-ghost text-xs" aria-label="Fokusér chat" aria-pressed={focus === 'chat'} onClick={() => setFocus('chat')}><MessageSquare size={15} /><span className="orbit-layout-label">Samtale</span></button>
+        <button className="btn-ghost text-xs" aria-label="Fokusér Orbit Live" aria-pressed={focus === 'live'} onClick={() => setFocus('live')}><Activity size={15} /><span className="orbit-layout-label">Live</span></button>
         <span className="mx-1 h-4 border-l border-current opacity-20" />
         <button className="btn-ghost text-xs" aria-label="Paneler ved siden af hinanden" aria-pressed={layout.direction === 'columns'} onClick={() => { setLayout(v => ({ ...v, direction: 'columns' })); setFocus('both'); }}><Columns2 size={15} /></button>
         <button className="btn-ghost text-xs" aria-label="Paneler over hinanden" aria-pressed={layout.direction === 'rows'} onClick={() => { setLayout(v => ({ ...v, direction: 'rows' })); setFocus('both'); }}><Rows2 size={15} /></button>
@@ -77,10 +93,11 @@ export default function OrbitWorkspace() {
         }}>{label}</button>)}</div></details>
       </div>
     </header>
+    <WorkspaceStatus projectId={projectId} otherProjectName={runProject?.name} onOpenLive={() => { setFocus('live'); requestAnimationFrame(() => document.getElementById('orbit-live-pane')?.focus()); }} />
     <div ref={surface} className="orbit-workspace-panels" data-dragging={dragging} style={layout.direction === 'columns' ? { gridTemplateColumns: `${layout.split}fr 12px ${100 - layout.split}fr` } : { gridTemplateRows: `${layout.split}fr 12px ${100 - layout.split}fr` }}>
       <section id="orbit-chat-pane" aria-label="Chatpanel" className="orbit-workspace-pane orbit-chat-pane">
         <div className="orbit-pane-heading"><MessageSquare size={14} /> Samtale<span>Planlæg · spørg · følg op</span></div>
-        <div className="orbit-pane-content"><AiChatView embedded /></div>
+        <div className="orbit-pane-content"><PanelErrorBoundary label="Samtalen" resetKey={projectId}><AiChatView embedded /></PanelErrorBoundary></div>
       </section>
       <div role="separator" tabIndex={0} aria-label="Tilpas chat og Orbit Live" aria-controls="orbit-chat-pane orbit-live-pane" aria-orientation={layout.direction === 'columns' ? 'vertical' : 'horizontal'} aria-valuemin={25} aria-valuemax={75} aria-valuenow={Math.round(layout.split)} className="orbit-workspace-divider"
         onDoubleClick={() => setLayout(v => ({ ...v, split: 50 }))}
@@ -101,9 +118,9 @@ export default function OrbitWorkspace() {
           event.preventDefault();
           setLayout(v => ({ ...v, split: event.key === 'Home' ? 25 : event.key === 'End' ? 75 : clamp(v.split + (event.key === decrease ? -2 : 2)) }));
         }}><span /></div>
-      <section id="orbit-live-pane" aria-label="Orbit Live" className="orbit-workspace-pane orbit-live-pane">
+      <section id="orbit-live-pane" tabIndex={-1} aria-label="Orbit Live" className="orbit-workspace-pane orbit-live-pane">
         <div className="orbit-pane-heading"><Activity size={14} /> Orbit Live<span>Agenter · kontroller · leverancer</span></div>
-        <div className="orbit-pane-content"><AiSwarmView embedded projectId={projectId} /></div>
+        <div className="orbit-pane-content"><PanelErrorBoundary label="Orbit Live" resetKey={projectId}><AiSwarmView embedded projectId={projectId} /></PanelErrorBoundary></div>
       </section>
     </div>
   </div>;

@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { DurableRunQueue } from '../server/ai-queue.mjs';
+import { durableStorePath } from '../server/ai-durable-store.mjs';
 import { cronMatches, validateCron } from '../server/ai-runtime.mjs';
 
 const path = () => join(mkdtempSync(join(tmpdir(), 'orbit-queue-')), 'queue.json');
@@ -59,7 +60,9 @@ test('corrupt queues fail closed and restore reloads only the saved queue, pause
   assert.equal(corrupt.state.paused, true); assert.throws(() => corrupt.enqueue({ goal: 'Unsafe' }), /kunne ikke læses/);
   await corrupt.pump(); assert.equal(readFileSync(file, 'utf8'), 'broken');
   const goodFile = path(), queue = new DurableRunQueue({ path: goodFile }); queue.enqueue({ goal: 'Original' });
-  const backup = readFileSync(goodFile, 'utf8'); queue.enqueue({ goal: 'Stale memory' }); writeFileSync(goodFile, backup);
+  const database = durableStorePath({ runs: dirname(goodFile) });
+  const backup = readFileSync(goodFile, 'utf8'), dbBackup = readFileSync(database);
+  queue.enqueue({ goal: 'Stale memory' }); writeFileSync(goodFile, backup); writeFileSync(database, dbBackup);
   queue.reloadAfterRestore(); assert.equal(queue.state.entries.length, 1); assert.equal(queue.state.paused, true);
 });
 

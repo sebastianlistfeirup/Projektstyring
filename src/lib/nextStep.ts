@@ -1,4 +1,5 @@
 import type { SwarmRun } from './swarm';
+import { runFreshness } from './runFreshness';
 
 export type NextStep = { title: string; detail: string; action: string; target: string };
 
@@ -7,10 +8,12 @@ function reviewableArtifact(url: string | undefined): boolean {
 }
 
 /** Advice only. The button navigates to existing controls and never dispatches a run. */
-export function nextStepForRun(run: SwarmRun, { approval = false, permission = false }: { approval?: boolean; permission?: boolean } = {}): NextStep {
+export function nextStepForRun(run: SwarmRun, { approval = false, permission = false, connected = true, now = Date.now() }: { approval?: boolean; permission?: boolean; connected?: boolean; now?: number } = {}): NextStep {
   const artifacts = [...run.jobs.flatMap(job => [...(job.artifacts ?? []), ...(job.media?.artifacts ?? [])]), ...(run.results ?? []).flatMap(result => result.artifacts ?? [])].filter(artifact => reviewableArtifact(artifact.url));
   const hasImage = artifacts.some(artifact => artifact.kind === 'image' || artifact.mime?.toLowerCase().startsWith('image/'));
+  if (runFreshness(run, connected, now) !== 'current') return { title: 'Afvent en bekræftet status', detail: 'Den viste status kan være forældet. Orbit forsøger at genoprette forbindelsen. Start ikke samme opgave igen imens.', action: 'Se seneste jobstatus', target: 'orbit-job-list' };
   if (permission) return { title: 'Agenten afventer din beslutning', detail: 'Læs den konkrete handling og vælg, om den må udføres én gang.', action: 'Se forespørgslen', target: 'orbit-native-permissions' };
+  if (run.autonomy?.blockedReason) return { title: run.contextStatus?.status === 'changed' ? 'Projektgrundlaget er ændret' : 'Arbejdsrammen kræver gennemgang', detail: run.autonomy.blockedReason, action: 'Se arbejdsrammer', target: 'orbit-run-limits' };
   if (run.status === 'awaiting_approval' && run.recoveredAt) return { title: 'Genoptag den gemte plan', detail: 'Planen er bevaret efter genstart. Genoptag den, før du træffer beslutning om udførelse.', action: 'Se genoptagelse', target: 'orbit-run-results' };
   if (approval) return { title: 'Planen afventer dig', detail: 'Gennemgå arbejdsplanen og dens afhængigheder, før du godkender den.', action: 'Se planen', target: 'orbit-plan-approval' };
   if (run.status === 'running') return { title: 'Arbejdet er i gang', detail: 'Følg det aktuelle job. Du kan præcisere målet i samtalen.', action: 'Se aktive jobs', target: 'orbit-job-list' };

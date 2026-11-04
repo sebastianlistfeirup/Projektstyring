@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import type { SwarmRun } from '../lib/swarm';
 import ModelPreview from './ModelPreview';
+import ArtifactFeedback from './ArtifactFeedback';
+import type { AiArtifact } from '../lib/types';
+import { PanelErrorBoundary } from './PanelErrorBoundary';
 
 const api = 'http://127.0.0.1:4310';
-type Artifact = { kind: string; name: string; mime: string; url?: string };
+type Artifact = AiArtifact;
 function fileUrl(url: string | undefined): string | null {
   if (!url) return null;
   if (url.startsWith('/') && !url.startsWith('//')) return `${api}${url}`;
@@ -38,7 +41,40 @@ function ModelArtifact({ url, name }: { url: string; name: string }) {
   </article>;
 }
 
+type DisplayArtifact = Artifact & { url: string; type: ReturnType<typeof mediaType> };
+function ImagePreview({ artifact }: { artifact: DisplayArtifact }) {
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  return <div className="space-y-2">
+    {!failed && <a href={artifact.url} target="_blank" rel="noreferrer" className="block rounded-lg overflow-hidden bg-black/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-400"><img key={attempt} src={artifact.url} alt={artifact.name} onError={() => setFailed(true)} loading="lazy" className="w-full max-h-[460px] object-contain bg-black/20" /><span className="block text-xs px-3 py-2">Åbn i fuld størrelse</span></a>}
+    {failed && <div role="alert" className="rounded-lg border border-amber-400/30 p-3 text-xs space-y-2"><p>Billedet kunne ikke hentes. Resten af leverancerne er stadig tilgængelige.</p><button type="button" className="btn-secondary text-xs" onClick={() => { setFailed(false); setAttempt(value => value + 1); }}>Hent billedet igen</button><a href={artifact.url} target="_blank" rel="noreferrer" className="ml-3 underline">Åbn originalfil</a></div>}
+  </div>;
+}
+function ArtifactPreviewContent({ artifact }: { artifact: DisplayArtifact }) {
+  if (artifact.type === 'model') return <ModelArtifact url={artifact.url} name={artifact.name} />;
+  if (artifact.type === 'image') return <ImagePreview key={artifact.url} artifact={artifact} />;
+  return <div className="space-y-2">
+    {artifact.type === 'audio' && <audio controls preload="metadata" src={artifact.url} className="w-full" aria-label={`Afspil ${artifact.name}`} />}
+    {artifact.type === 'video' && <video controls preload="metadata" src={artifact.url} className="w-full rounded-lg bg-black" aria-label={`Afspil ${artifact.name}`} />}
+    {artifact.type === 'model-download' && <p className="text-xs opacity-65">Denne modeltype kan hentes og åbnes i et 3D-program. Direkte visning i Orbit understøtter GLB og glTF.</p>}
+    <a href={artifact.url} target="_blank" rel="noreferrer" download={artifact.name} className="inline-block text-xs underline text-indigo-500 dark:text-indigo-300">{artifact.type === 'model-download' ? 'Hent 3D-fil' : 'Åbn eller hent fil'}</a>
+  </div>;
+}
+function ArtifactPreview({ artifact }: { artifact: DisplayArtifact }) {
+  return <PanelErrorBoundary label={`Visning af ${artifact.name}`} resetKey={artifact.url}><ArtifactPreviewContent artifact={artifact} /></PanelErrorBoundary>;
+}
+
+function ArtifactProvenance({ artifact }: { artifact: DisplayArtifact }) {
+  return <div className="text-[11px] opacity-65 flex flex-wrap gap-x-3 gap-y-1">
+    {artifact.sha256 ? <span title={`SHA256: ${artifact.sha256}`}>Version {artifact.sha256.slice(0, 12)}</span> : <span>Ældre fil · version ikke arkiveret</span>}
+    {artifact.jobId && <span>Opgave: {artifact.jobId}</span>}
+    {artifact.serviceId && <span>{artifact.serviceId}</span>}
+    {typeof artifact.size === 'number' && <span>{artifact.size < 1024 * 1024 ? `${Math.max(1, Math.round(artifact.size / 1024))} KB` : `${(artifact.size / (1024 * 1024)).toFixed(1)} MB`}</span>}
+  </div>;
+}
+
 export default function VisualResultGallery({ run }: { run: SwarmRun }) {
+  const [selected, setSelected] = useState<string[]>([]);
   const seen = new Set<string>();
   const artifacts = [...run.jobs.flatMap(job => [...(job.artifacts ?? []), ...(job.media?.artifacts ?? [])]), ...(run.results ?? []).flatMap(result => result.artifacts ?? [])]
     .map(artifact => ({ ...artifact, url: fileUrl(artifact.url), type: mediaType(artifact) }))
@@ -47,14 +83,24 @@ export default function VisualResultGallery({ run }: { run: SwarmRun }) {
       seen.add(artifact.url); return true;
     });
   const images = artifacts.filter(artifact => artifact.type === 'image').sort((a, b) => sceneName(a.name).localeCompare(sceneName(b.name)) || imageOrder(a.name) - imageOrder(b.name));
-  const other = artifacts.filter(artifact => artifact.type !== 'image');
+  const ordered = [...images, ...artifacts.filter(artifact => artifact.type !== 'image')];
+  const compared = selected.flatMap(url => { const artifact = artifacts.find(item => item.url === url); return artifact ? [artifact] : []; });
+  const toggleComparison = (url: string) => setSelected(current => current.includes(url) ? current.filter(item => item !== url) : [...current.filter(item => artifacts.some(artifact => artifact.url === item)), url].slice(-2));
   const production = run.jobs.filter(job => job.media?.state);
   if (!artifacts.length && !production.length) return null;
   return <section id="orbit-run-visual" tabIndex={-1} aria-label="Leverancer og medieproduktion" className="rounded-2xl border border-zinc-200 dark:border-white/10 bg-black/5 dark:bg-white/[0.03] p-4 space-y-4 scroll-mt-4">
-    <div><h2 className="text-sm font-semibold">Leverancer til gennemgang</h2><p className="text-xs opacity-65 mt-1">Åbn de faktiske filer og sammenlign billeder med projektets referencer.</p></div>
+    <div><h2 className="text-sm font-semibold">Leverancer til gennemgang</h2><p className="text-xs opacity-65 mt-1">Åbn de faktiske filer, sammenlign to leverancer og gem feedback til den præcise version.</p></div>
     {!!production.length && <div className="space-y-2" aria-label="Status for medieproduktion">{production.map(job => <div key={job.id} className="rounded-lg border border-zinc-200 dark:border-white/10 px-3 py-2 text-xs"><span className="font-medium">{job.title}</span><span className="ml-2 opacity-70">{job.status === 'error' || job.status === 'blocked' ? 'Produktionen fejlede eller blev blokeret' : job.status === 'cancelled' || job.status === 'interrupted' ? 'Produktionen blev afbrudt' : job.media?.state === 'submitting' ? 'Bestilling sendes' : job.media?.state === 'processing' ? 'Produceres hos tjenesten' : job.media?.state === 'completed' ? 'Fil modtaget' : job.media?.state}</span>{job.notes.at(-1) && <p className="opacity-60 mt-1">{job.notes.at(-1)}</p>}</div>)}</div>}
-    {!!images.length && <div className="grid grid-cols-1 gap-3">{images.map(image => <a key={image.url} href={image.url} target="_blank" rel="noreferrer" className="block rounded-xl overflow-hidden border border-zinc-200 dark:border-white/10 bg-black/10 hover:border-indigo-400/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-400"><img src={image.url} alt={image.name} loading="lazy" className="w-full max-h-[460px] object-contain bg-black/20" /><span className="block text-xs px-3 py-2 break-all">{image.name} · Åbn i fuld størrelse</span></a>)}</div>}
-    {!!other.length && <div className="grid grid-cols-1 gap-3">{other.map(item => item.type === 'model' ? <ModelArtifact key={item.url} url={item.url} name={item.name} /> : <article key={item.url} className="rounded-xl border border-zinc-200 dark:border-white/10 p-3 space-y-2"><h3 className="text-xs font-semibold break-all">{item.name}</h3>{item.type === 'audio' && <audio controls preload="metadata" src={item.url} className="w-full" aria-label={`Afspil ${item.name}`} />}{item.type === 'video' && <video controls preload="metadata" src={item.url} className="w-full rounded-lg bg-black" aria-label={`Afspil ${item.name}`} />}{item.type === 'model-download' && <p className="text-xs opacity-65">Denne modeltype kan hentes og åbnes i et 3D-program. Direkte visning i Orbit understøtter GLB og glTF.</p>}<a href={item.url} target="_blank" rel="noreferrer" download={item.name} className="inline-block text-xs underline text-indigo-500 dark:text-indigo-300">{item.type === 'model-download' ? 'Hent 3D-fil' : 'Åbn eller hent fil'}</a></article>)}</div>}
+    {compared.length > 0 && <section aria-label="Sammenlign leverancer" className="rounded-xl border border-indigo-400/30 bg-indigo-500/[0.04] p-3 space-y-3">
+      <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-semibold">Sammenligning · {compared.length}/2 valgt</h3><button type="button" className="btn-ghost text-xs" onClick={() => setSelected([])}>Ryd sammenligning</button></div>
+      {compared.length === 1 ? <p className="text-xs opacity-65">Vælg en leverance mere for at se dem ved siden af hinanden.</p> : <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{compared.map(item => <div key={item.url} className="space-y-2 min-w-0"><h4 className="text-xs font-medium break-all">{item.name}</h4><ArtifactProvenance artifact={item} /><ArtifactPreview artifact={item} /></div>)}</div>}
+    </section>}
+    {!!ordered.length && <div className="grid grid-cols-1 gap-3">{ordered.map(item => <article key={item.url} aria-label={`Leverance: ${item.name}`} className="rounded-xl border border-zinc-200 dark:border-white/10 bg-white/30 dark:bg-black/10 p-3 space-y-3">
+      <div className="flex flex-wrap items-start gap-2"><h3 className="text-xs font-semibold break-all flex-1 min-w-0">{item.name}</h3>{ordered.length > 1 && <button type="button" aria-pressed={compared.some(artifact => artifact.url === item.url)} aria-label={`Sammenlign ${item.name}`} className="btn-ghost text-xs shrink-0" onClick={() => toggleComparison(item.url)}>{compared.some(artifact => artifact.url === item.url) ? 'Valgt til sammenligning' : 'Sammenlign'}</button>}</div>
+      <ArtifactProvenance artifact={item} />
+      <ArtifactPreview artifact={item} />
+      {item.artifactId && item.sha256 && <ArtifactFeedback key={`${run.runId}:${item.artifactId}`} runId={run.runId} artifactId={item.artifactId} sha256={item.sha256} name={item.name} />}
+    </article>)}</div>}
     {!!images.length && <p className="text-xs text-amber-600 dark:text-amber-300">Visuel godkendelse afventer din vurdering.</p>}
   </section>;
 }

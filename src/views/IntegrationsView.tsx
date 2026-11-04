@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlarmClock,
   BellRing,
@@ -77,6 +77,8 @@ import { cn, formatDate, formatDateShort, isOverdue, taskRef, timeAgo } from '..
 import { Avatar } from '../components/common';
 import { STATUS_META } from '../lib/constants';
 
+const IntegrationSearchContext = createContext('');
+
 function Section({
   icon,
   title,
@@ -88,18 +90,19 @@ function Section({
   subtitle: string;
   children: React.ReactNode;
 }) {
+  const query = useContext(IntegrationSearchContext).trim().toLocaleLowerCase('da-DK');
+  const [expanded, setExpanded] = useState(title === 'Orbit Companion');
+  const matches = !query || `${title} ${subtitle}`.toLocaleLowerCase('da-DK').includes(query);
   return (
-    <section className="glass-panel animate-fade-in rounded-xl p-5">
-      <div className="mb-4 flex items-center gap-3">
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-indigo-500/10 text-indigo-500 dark:bg-indigo-400/10 dark:text-indigo-300">
-          {icon}
-        </div>
-        <div>
-          <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{title}</h2>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">{subtitle}</p>
-        </div>
-      </div>
-      {children}
+    <section hidden={!matches} aria-label={title} className="glass-panel rounded-xl">
+      <details open={Boolean(query) || expanded} onToggle={event => { if (!query) setExpanded(event.currentTarget.open); }}>
+        <summary className="flex cursor-pointer items-center gap-3 p-5 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500">
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-indigo-500/10 text-indigo-500 dark:text-indigo-300">{icon}</span>
+          <span className="min-w-0 flex-1"><span role="heading" aria-level={2} className="block text-sm font-semibold text-zinc-900 dark:text-zinc-50">{title}</span><span className="block text-xs text-zinc-500 dark:text-zinc-400">{subtitle}</span></span>
+          <span className="text-xs opacity-60" aria-hidden="true">{query || expanded ? '−' : '+'}</span>
+        </summary>
+        <div className="px-5 pb-5">{children}</div>
+      </details>
     </section>
   );
 }
@@ -107,13 +110,14 @@ function Section({
 function Feedback({ text, tone }: { text: string | null; tone: 'ok' | 'error' }) {
   if (!text) return null;
   return (
-    <p className={cn('mt-3 rounded-lg px-3 py-2 text-xs', tone === 'ok' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'bg-rose-500/10 text-rose-700 dark:text-rose-300')}>
+    <p role={tone === 'error' ? 'alert' : 'status'} className={cn('mt-3 rounded-lg px-3 py-2 text-xs', tone === 'ok' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'bg-rose-500/10 text-rose-700 dark:text-rose-300')}>
       {text}
     </p>
   );
 }
 
 export default function IntegrationsView() {
+  const [integrationSearch, setIntegrationSearch] = useState('');
   const tasks = useStore((s) => s.tasks);
   const projects = useStore((s) => s.projects);
   const users = useStore((s) => s.users);
@@ -322,8 +326,14 @@ export default function IntegrationsView() {
   };
 
   return (
+    <IntegrationSearchContext.Provider value={integrationSearch}>
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-3xl space-y-5 p-4 lg:p-6">
+      <div className="mx-auto max-w-3xl space-y-4 p-4 lg:p-6">
+        <header className="space-y-3">
+          <div><h1 className="text-lg font-semibold">Forbindelser og indstillinger</h1><p className="text-sm text-zinc-500 dark:text-zinc-400">Find den tjeneste eller indstilling, du vil arbejde med. Åbn kun de afsnit, du har brug for.</p></div>
+          <div className="flex gap-2"><input type="search" aria-label="Find en integration eller indstilling" value={integrationSearch} onChange={event => setIntegrationSearch(event.target.value)} placeholder="Søg fx Microsoft, Git, backup eller påmindelser" className="input w-full" />{integrationSearch && <button type="button" onClick={() => setIntegrationSearch('')} className="btn-secondary shrink-0">Ryd søgning</button>}</div>
+          {integrationSearch && <p role="status" className="text-xs opacity-65">Filtreret efter “{integrationSearch}”. Ryd søgningen for at se alle afsnit.</p>}
+        </header>
         {/* Companion-status */}
         <Section icon={<Plug className="h-5 w-5" />} title="Orbit Companion" subtitle="Lokal server der forbinder appen med Windows, filsystemet og Teams">
           <div className="flex flex-wrap items-center gap-4">
@@ -400,7 +410,7 @@ export default function IntegrationsView() {
               )}
             </label>
             <div className="flex gap-2">
-              <input
+              <input aria-label="Teams-webhook"
                 value={webhook}
                 onChange={(e) => setWebhook(e.target.value)}
                 placeholder="https://…webhook… (fra Teams: kanal ⋯ → Tilføjelser → Indgående webhook)"
@@ -612,7 +622,7 @@ export default function IntegrationsView() {
               />
               Aktivér
             </label>
-            <input type="time" value={remTime} onChange={(e) => setRemTime(e.target.value)} className="input w-auto py-1.5 text-sm" />
+            <input aria-label="Tidspunkt for morgenpåmindelse" type="time" value={remTime} onChange={(e) => setRemTime(e.target.value)} className="input w-auto py-1.5 text-sm" />
             <button
               disabled={!connected}
               onClick={() =>
@@ -661,7 +671,7 @@ export default function IntegrationsView() {
               <option value={4}>Torsdag</option>
               <option value={5}>Fredag</option>
             </select>
-            <input type="time" value={repTime} onChange={(e) => setRepTime(e.target.value)} className="input w-auto py-1.5 text-sm" />
+            <input aria-label="Tidspunkt for ugerapport" type="time" value={repTime} onChange={(e) => setRepTime(e.target.value)} className="input w-auto py-1.5 text-sm" />
             <button
               disabled={!connected}
               onClick={() =>
@@ -922,9 +932,9 @@ export default function IntegrationsView() {
         {/* Azure DevOps */}
         <Section icon={<Zap className="h-5 w-5" />} title="Azure DevOps" subtitle="Hent work items og skriv status tilbage – to-vejs">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            <input value={adopsOrg} onChange={(e) => setAdopsOrg(e.target.value)} placeholder="Organisation (fx dit-org)" className="input py-1.5 font-mono text-xs" />
-            <input value={adopsProject} onChange={(e) => setAdopsProject(e.target.value)} placeholder="Projekt (fx App 2.0)" className="input py-1.5 font-mono text-xs" />
-            <input type="password" value={adopsPat} onChange={(e) => setAdopsPat(e.target.value)} placeholder="Personal Access Token" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="Azure DevOps-organisation" value={adopsOrg} onChange={(e) => setAdopsOrg(e.target.value)} placeholder="Organisation (fx dit-org)" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="Azure DevOps-projekt" value={adopsProject} onChange={(e) => setAdopsProject(e.target.value)} placeholder="Projekt (fx App 2.0)" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="Azure DevOps-token" type="password" value={adopsPat} onChange={(e) => setAdopsPat(e.target.value)} placeholder="Personal Access Token" className="input py-1.5 font-mono text-xs" />
           </div>
           <div className="mt-2 flex flex-wrap gap-2">
             <button
@@ -1253,9 +1263,9 @@ export default function IntegrationsView() {
               <option value="github">GitHub</option>
               <option value="gitlab">GitLab</option>
             </select>
-            <input type="password" value={gitToken} onChange={(e) => setGitToken(e.target.value)} placeholder="Token (PAT / glpat-)" className="input py-1.5 font-mono text-xs" />
-            <input value={gitOwner} onChange={(e) => setGitOwner(e.target.value)} placeholder="Ejer / gruppe" className="input py-1.5 font-mono text-xs" />
-            <input value={gitRepo} onChange={(e) => setGitRepo(e.target.value)} placeholder="Repository" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="Git-token" type="password" value={gitToken} onChange={(e) => setGitToken(e.target.value)} placeholder="Token (PAT / glpat-)" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="Git-ejer eller gruppe" value={gitOwner} onChange={(e) => setGitOwner(e.target.value)} placeholder="Ejer / gruppe" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="Git-repository" value={gitRepo} onChange={(e) => setGitRepo(e.target.value)} placeholder="Repository" className="input py-1.5 font-mono text-xs" />
           </div>
           <div className="mt-2 flex flex-wrap gap-2">
             <button
@@ -1420,10 +1430,10 @@ export default function IntegrationsView() {
         {/* Jira */}
         <Section icon={<Bug className="h-5 w-5" />} title="Jira" subtitle="Hent issues fra Jira Cloud og skriv status tilbage – to-vejs">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
-            <input value={jiraDomain} onChange={(e) => setJiraDomain(e.target.value)} placeholder="Domæne (fx firma.atlassian.net)" className="input py-1.5 font-mono text-xs" />
-            <input value={jiraEmail} onChange={(e) => setJiraEmail(e.target.value)} placeholder="E-mail (din Atlassian-konto)" className="input py-1.5 font-mono text-xs" />
-            <input type="password" value={jiraToken} onChange={(e) => setJiraToken(e.target.value)} placeholder="API-token" className="input py-1.5 font-mono text-xs" />
-            <input value={jiraProject} onChange={(e) => setJiraProject(e.target.value)} placeholder="Projekt-nøgle (fx APP)" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="Jira-domæne" value={jiraDomain} onChange={(e) => setJiraDomain(e.target.value)} placeholder="Domæne (fx firma.atlassian.net)" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="Jira-e-mail" value={jiraEmail} onChange={(e) => setJiraEmail(e.target.value)} placeholder="E-mail (din Atlassian-konto)" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="Jira API-token" type="password" value={jiraToken} onChange={(e) => setJiraToken(e.target.value)} placeholder="API-token" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="Jira-projektnøgle" value={jiraProject} onChange={(e) => setJiraProject(e.target.value)} placeholder="Projekt-nøgle (fx APP)" className="input py-1.5 font-mono text-xs" />
           </div>
           <div className="mt-2 flex flex-wrap gap-2">
             <button
@@ -1509,9 +1519,9 @@ export default function IntegrationsView() {
         {/* Trello */}
         <Section icon={<SquareKanban className="h-5 w-5" />} title="Trello" subtitle="Hent kort fra et Trello-board og skriv status tilbage – to-vejs">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            <input value={trelloKey} onChange={(e) => setTrelloKey(e.target.value)} placeholder="API-nøgle (fra trello.com/app-key)" className="input py-1.5 font-mono text-xs" />
-            <input type="password" value={trelloToken} onChange={(e) => setTrelloToken(e.target.value)} placeholder="Token (fra Trello-token-URL'en)" className="input py-1.5 font-mono text-xs" />
-            <input value={trelloBoard} onChange={(e) => setTrelloBoard(e.target.value)} placeholder="Board-id (står i board-URL'en)" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="Trello API-nøgle" value={trelloKey} onChange={(e) => setTrelloKey(e.target.value)} placeholder="API-nøgle (fra trello.com/app-key)" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="Trello-token" type="password" value={trelloToken} onChange={(e) => setTrelloToken(e.target.value)} placeholder="Token (fra Trello-token-URL'en)" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="Trello-board" value={trelloBoard} onChange={(e) => setTrelloBoard(e.target.value)} placeholder="Board-id (står i board-URL'en)" className="input py-1.5 font-mono text-xs" />
           </div>
           <div className="mt-2 flex flex-wrap gap-2">
             <button
@@ -1755,8 +1765,8 @@ export default function IntegrationsView() {
         {/* e-conomic */}
         <Section icon={<FileText className="h-5 w-5" />} title="e-conomic" subtitle="Lav en fakturakladde af din registrerede tid – klar til gennemgang og bogføring">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            <input type="password" value={econToken} onChange={(e) => setEconToken(e.target.value)} placeholder="AgreementGrantToken" className="input py-1.5 font-mono text-xs" />
-            <input value={econCustomer} onChange={(e) => setEconCustomer(e.target.value)} placeholder="Kundenummer (debitor)" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="e-conomic-token" type="password" value={econToken} onChange={(e) => setEconToken(e.target.value)} placeholder="AgreementGrantToken" className="input py-1.5 font-mono text-xs" />
+            <input aria-label="e-conomic-kundenummer" value={econCustomer} onChange={(e) => setEconCustomer(e.target.value)} placeholder="Kundenummer (debitor)" className="input py-1.5 font-mono text-xs" />
             <button
               disabled={!connected}
               onClick={() =>
@@ -1849,7 +1859,7 @@ export default function IntegrationsView() {
         {/* Formularer & hvid-label portal */}
         <Section icon={<Share2 className="h-5 w-5" />} title="Formularer & portal" subtitle="Lad kunder indsende opgaver uden login – og giv dem en portal med dit navn">
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            <input
+            <input aria-label="Virksomhedsnavn til portalen"
               value={brandName}
               onChange={(e) => setBrandName(e.target.value)}
               placeholder="Virksomhedsnavn (vises på portalen)"
@@ -1960,5 +1970,6 @@ export default function IntegrationsView() {
         </Section>
       </div>
     </div>
+    </IntegrationSearchContext.Provider>
   );
 }

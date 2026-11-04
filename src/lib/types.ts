@@ -251,7 +251,15 @@ export interface Sprint {
   endDate: string;
 }
 
+export interface AutonomyPolicy {
+  maxProviderCalls: number;
+  maxExecutionMinutes: number | null;
+  maxRepairAttempts: number;
+  maxConsecutiveFailures: number;
+}
+
 export interface Project {
+  autonomyPolicy?: AutonomyPolicy;
   releaseGoal?: string;
   scopeTaskIds?: string[];
   scopeCapturedAt?: string;
@@ -337,7 +345,25 @@ export interface AiJob {
 
 /* ---------- AI-chat (ChatGPT-lignende, drevet af companion) ---------- */
 
-export interface AiAttachment {
+export interface ArtifactMetadata {
+  artifactId?: string;
+  sha256?: string;
+  size?: number;
+  jobId?: string;
+  sourceCommit?: string | null;
+  createdAt?: string;
+  serviceId?: string | null;
+  remoteId?: string | null;
+}
+
+export interface AiArtifact extends ArtifactMetadata {
+  kind: string;
+  name: string;
+  mime: string;
+  url?: string;
+}
+
+export interface AiAttachment extends ArtifactMetadata {
   id?: string;
   extractedText?: string | null;
   extractionError?: string | null;

@@ -1,8 +1,47 @@
 # Orbit på skrivebordet
 
-Denne vejledning beskriver, hvordan Orbit køres som en næsten-native oplevelse på Windows: via genveje, som installeret PWA eller som Tauri-desktopapp.
+Orbit kan nu pakkes som en selvstændig Windows-release med Node, Companion, produktionsbuild og start/stop-genveje. Udviklingsinstallationen og Tauri-skallen er stadig separate muligheder.
 
-## Start, opdater og kontrollér
+## Samlet Windows-release
+
+Byg fra et kontrolleret checkout med Node 24:
+
+```bash
+npm ci
+npm run build
+npm run desktop:package
+```
+
+Pakningen opretter `desktop-build/Orbit` til **den platform, som bygger den**. Windows-workflowet **Orbit Windows release** bygger Windows-versionen, starter hele den pakkede app med isolerede testdata, kontrollerer release-identitet og webindhold, lukker den via dens eget kontrolendpoint og gemmer en ZIP som CI-artifact. Kun en bestået workflow-kørsel er dokumentation for denne pakkes Windows-start.
+
+På den grønne GitHub Actions-kørsel vælges artifactet `Orbit-Windows-x64-<commit>`. ZIP-filen pakkes helt ud én gang; **Install-Orbit.cmd** ligger direkte i den udpakkede mappe. Dobbeltklik på den. Den kopierer en verificeret version til `%LOCALAPPDATA%\Programs\Orbit\releases`, opretter startmenu-/skrivebordsgenvejen **Orbit** og åbner appen. Administratorrettigheder, systeminstalleret Node, npm og Vite er ikke nødvendige for at køre den. Git og de valgte AI-CLI'er skal stadig være installeret for kodearbejde. **Start-Orbit.cmd** kan også starte direkte fra den udpakkede release; **Stop-Orbit.cmd** lukker kun dens egen inaktive runtime.
+
+App og Companion serveres fra samme produktionsruntime på `http://127.0.0.1:4310`. Den bindes kun til loopback. Hver start har en tilfældig kontrolidentitet; starteren genbruger kun samme bekræftede release og stopper aldrig en fremmed proces på porten. API-resultater bliver ikke gemt i serviceworkerens offline-cache. Processen fortsætter, når browservinduet lukkes, så en igangværende opgave ikke afbrydes; brug **Orbit - Stop**, når arbejdet er afsluttet.
+
+### Opdatering og tilbageførsel
+
+Kør **Install-Orbit.cmd** fra den nye release. Installationen foretager følgende:
+
+1. Kontrollerer alle releasefiler mod manifestets SHA-256-hashes og afviser ekstra filer, manglende filer og symbolske links.
+2. Kopierer releasen til en midlertidig mappe og aktiverer først den komplette verificerede kopi.
+3. Starter den nye runtime med tomme, isolerede data **før** den eksisterende installation berøres.
+4. Afviser lukning, hvis den eksisterende Orbit-kørsel arbejder eller afventer en beslutning.
+5. Starter den nye version med de eksisterende data og skifter først startgenvejen, når både Companion og appen svarer med korrekt identitet.
+6. Ved mislykket start forsøger den at genstarte den tidligere pakkede release, når begge angiver samme understøttede lagerformat. Den eksisterende genvej og brugerdata bevares. Et fejlet forsøg registreres i `last-update-error.json`.
+
+Node-programfiler ligger i hver sin release-mappe og bliver ikke overskrevet, mens de kører. En installationslås hindrer samtidige opdateringer; en lås fra en afsluttet proces kan genoprettes. Tidligere releases slettes ikke automatisk. Manifestet angiver både kildecommit og `sourceDirty`; et lokalt build med ændringer bliver ikke præsenteret som et uændret commit.
+
+Data ligger fortsat i `%USERPROFILE%\.orbit` og eksportmappen `Documents\Orbit`. `stateFormat: 2` angiver den pakkede version med SQLite-joblager. **Tilbageførsel af kode er ikke tilbageførsel af data.** Starteren gendanner aldrig gamle data oven på nyere beslutninger. En gammel Git-version før SQLite må ikke bruges som automatisk rollback; nyere SQLite-data kan ellers blive ignoreret. Ved et fremtidigt inkompatibelt lagerformat skal migrations-/backupforløbet afprøves, og formatnummeret ændres.
+
+### Overgang fra udviklingsinstallationen
+
+Afslut arbejdet og brug den gamle installations **Stop-Orbit.bat**, før den pakkede version startes. En fremmed eller gammel server på port 4310 bliver ikke tvangslukket af den nye installer. Kontrollér, at den gamle browser har synkroniseret samtaler, kladder og projektdata til Companion, og tag en backup i Orbit. Browserlagret for port 5173 og port 4310 er forskelligt; usynkroniserede lokale data flyttes ikke af installeren.
+
+### Hvad pakken endnu ikke dokumenterer
+
+Dette er en verificerbar ZIP med en per-user installer og browser/PWA-vindue. Det er endnu ikke en signeret MSI/EXE, en samlet native Tauri-app eller automatisk download af nye releases inde fra Orbit. Hash-manifestet opdager beskadigede eller ændrede filer; det erstatter ikke en digital udgiversignatur. Installation på brugerens egen pc, rigtige konti og flere døgns drift skal stadig afprøves. Kørsel af Windows-CI og faktisk installation er forskellige kontroller.
+
+## Udviklingsinstallation: start, opdater og kontrollér
 
 Når den nye Orbit-version er installeret og startet, sørger `scripts/Ensure-Shortcut.ps1` for to genveje på skrivebordet: **Orbit** starter appen; **Orbit - Opdater** henter den aftalte udviklingsversion, installerer afhængigheder og starter Orbit igen. Du kan også dobbeltklikke på `scripts/Install-Orbit-Preview.bat` eller `scripts/Check-Orbit.bat` direkte i Orbit-mappen.
 
@@ -75,7 +114,7 @@ PWA-delen består af:
 
 - `public/manifest.webmanifest` – app-navn, farver, `standalone`-visning og ikoner (inkl. maskable varianter til Android).
 - `public/icons/` – app-ikoner i 192×192 og 512×512 (almindelige + maskable), tegnet med Orbit-logoet.
-- `public/sw.js` – service worker uden afhængigheder: app-skallen forud-caches, navigeringer er *network-first* med offline-fallback til cachen, og øvrige GET-forespørgsler er *cache-first* med opdatering fra netværket. Gamle caches ryddes automatisk (kun `orbit-v1` bruges).
+- `public/sw.js` – service worker uden afhængigheder: app-skallen forud-caches, navigeringer er *network-first* med offline-fallback til cachen, og øvrige GET-forespørgsler er *cache-first* med opdatering fra netværket. Gamle caches ryddes automatisk (den aktuelle cache hedder `orbit-shell-v2`).
 
 > Service workeren registreres kun i produktionsbuild (`import.meta.env.PROD`), så den forstyrrer ikke udviklingen.
 
@@ -101,6 +140,6 @@ Tauri-appen indlejrer produktionsbuildet fra `dist/`, så den kører uden dev-se
 
 ## Status for den aktuelle ændring
 
-Tauri-koden er en desktopskal. Den starter og pakker endnu ikke Companion som en administreret baggrundsproces; AI-kørsler kræver fortsat Companion. Der er ikke bygget eller installeret en ny desktoprelease på brugerens Windows-maskine i denne opfølgning. En kommende samlet installer skal også håndtere Node/Companion, opstart, opdatering uden afbrudte kørsler og migration af browserens lokale data. Browser og Tauri har forskellige lokale lagre; synkronisér og sikkerhedskopiér før skift.
+Tauri-koden er fortsat en separat desktopskal. Den samlede runtime er implementeret i ZIP/per-user-installationen ovenfor; Tauri pakker endnu ikke denne runtime. Browser og Tauri har forskellige lokale lagre; synkronisér og sikkerhedskopiér før skift. Der er ikke installeret en ny release på brugerens Windows-maskine fra dette miljø.
 
 I browserudgaven kan den konkrete maskine måles fra **Orbit Live → Mål visningens performance**. Start målingen under en rigtig AI-kørsel og gem JSON-resultatet. Windows-CI er et supplement til denne måling og beviser ikke performance på brugerens hardware.
