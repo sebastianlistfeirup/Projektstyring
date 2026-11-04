@@ -761,8 +761,11 @@ textarea {
 }
 
 /* Shared product surfaces: neutral structure, one accent, visible keyboard focus. */
-:root { --orbit-surface:#ffffff; --orbit-surface-soft:#f6f7f9; --orbit-border:#dedfe7; --orbit-ink:#232633; --orbit-muted:#62697a; --orbit-radius:14px; }
-html.dark { --orbit-surface:#202229; --orbit-surface-soft:#1b1d24; --orbit-border:#353843; --orbit-ink:#eef0f6; --orbit-muted:#a3aaba; }
+:root { color-scheme:light; --orbit-surface:#ffffff; --orbit-surface-soft:#f6f7f9; --orbit-border:#dedfe7; --orbit-ink:#232633; --orbit-muted:#62697a; --orbit-radius:14px; }
+html.dark { color-scheme:dark; --orbit-surface:#202229; --orbit-surface-soft:#1b1d24; --orbit-border:#353843; --orbit-ink:#eef0f6; --orbit-muted:#a3aaba; }
+/* Native Windows menus otherwise combine inherited light text with a white popup. */
+select option, select optgroup { color:var(--orbit-ink); background-color:var(--orbit-surface); }
+select option:disabled { color:var(--orbit-muted); }
 :where(button, a, summary, input, select, textarea, [tabindex]):focus-visible { outline:2px solid var(--acc-500); outline-offset:3px; }
 .orbit-panel-error { display:flex; flex-direction:column; align-items:flex-start; justify-content:center; min-height:240px; height:100%; gap:12px; padding:28px; color:var(--orbit-ink); background:var(--orbit-surface-soft); }
 .orbit-panel-error-icon { display:grid; place-items:center; width:44px; height:44px; border-radius:12px; color:#c87512; background:rgb(217 119 6 / .10); }

@@ -684,15 +684,17 @@ export function AiChatView({ embedded = false }: { embedded?: boolean }) {
     <div className={embedded ? "orbit-chat-embedded flex h-full min-h-0 p-3 overflow-hidden" : "flex h-full min-h-0 gap-4 p-3 md:p-6 max-w-[1500px] mx-auto overflow-hidden"}>
       {/* venstre: samtaler + tilslutning */}
       {!embedded && <aside className={embedded ? "hidden" : "w-64 shrink-0 hidden lg:flex flex-col gap-3 overflow-y-auto pr-1"}>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-end gap-1.5">
+          <label className="flex-1 min-w-0 text-[11px]">Projekt til ny samtale
           <select
             aria-label="Projekt til ny samtale"
             value={newProjectId}
             onChange={(e) => setNewProjectId(e.target.value)}
-            className="flex-1 min-w-0 rounded-xl glass-panel px-2 py-1.5 text-[12px] bg-transparent outline-none"
+            className="mt-1 w-full min-w-0 rounded-xl glass-panel px-2 py-1.5 text-[12px] bg-transparent outline-none"
           >
             {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
+          </label>
           <button
             onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); }}
             className="rounded-xl btn-primary px-2.5 py-1.5 text-[12px] flex items-center gap-1"
@@ -725,15 +727,16 @@ export function AiChatView({ embedded = false }: { embedded?: boolean }) {
 
       {/* hoved: beskeder + komponist */}
       <main className="flex-1 min-w-0 min-h-0 flex flex-col gap-3 overflow-y-auto pr-1 [&>*]:shrink-0">
-        {embedded && <div className="flex items-center gap-2">
-          <select aria-label="Projekt til ny samtale" className="input min-w-0 flex-1 text-xs" value={newProjectId} onChange={e => setNewProjectId(e.target.value)}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+        {embedded && <div className="flex items-end gap-2">
+          <label className="min-w-0 flex-1 text-xs">Projekt til ny samtale<select aria-label="Projekt til ny samtale" className="input mt-1 min-w-0 text-xs" value={newProjectId} onChange={e => setNewProjectId(e.target.value)}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
           <button className="btn-primary text-xs" onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); }}>{t('chat.newChat')}</button>
         </div>}
+        {embedded && chatProject && newProjectId !== chatProject.id && <p className="text-xs text-[var(--orbit-muted)]">Klik Ny chat for at åbne en samtale i {selectedProject?.name ?? 'det valgte projekt'}. Den åbne samtale tilhører stadig {chatProject.name}.</p>}
         <details id="orbit-compact-navigation" ref={compactNavigationRef} className={`${embedded ? "max-h-64 overflow-auto" : "lg:hidden"} rounded-xl border border-zinc-200 dark:border-white/10 p-3 text-xs`}>
           <summary className="cursor-pointer font-medium">Samtaler og forbindelser</summary>
           <div className="mt-3 space-y-3">
             <CreateProjectChat onCreate={(projectId, id) => { setNewProjectId(projectId); setChatId(id); }} />
-            <label className="block">Projekt<select aria-label="Projekt til ny mobil-samtale" className="input w-full mt-1" value={newProjectId} onChange={e => setNewProjectId(e.target.value)}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+            <label className="block">Projekt til ny samtale<select aria-label="Projekt til ny mobil-samtale" className="input w-full mt-1" value={newProjectId} onChange={e => setNewProjectId(e.target.value)}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
             <button className="btn-primary text-xs" onClick={() => { const c = addAiChat({ projectId: newProjectId, title: t('chat.untitled') }); setChatId(c.id); }}>{t('chat.newChat')}</button>
             <div className="max-h-48 overflow-auto">{aiChats.map(c => <button key={c.id} className="block w-full text-left rounded-lg p-2 hover:bg-indigo-500/10" onClick={() => { setChatId(c.id); }}>{c.title}</button>)}</div>
             <details id="orbit-compact-connections" ref={compactConnectionsRef}><summary className="cursor-pointer">Forbindelser · {availableCount} klar</summary><ConnectionPanel services={services} prefs={prefs} onChanged={refresh} /></details>
