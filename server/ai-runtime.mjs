@@ -88,14 +88,14 @@ async function initRunWorkdir(runDir, goal) {
   mkdirSync(runDir, { recursive: true });
   if (existsSync(join(runDir, '.git'))) return;
   writeFileSync(join(runDir, '00-MÅL.md'), `# Mål\n\n${goal}\n`);
-  await execFileAsync('git', ['init', '-q'], { cwd: runDir, timeout: 10000 });
+  await execFileAsync('git', ['init', '-q'], { windowsHide: true, cwd: runDir, timeout: 10000 });
   await gitCommit(runDir, 'Start: mål');
 }
 
 async function gitCommit(runDir, message) {
-  await execFileAsync('git', ['add', '-A'], { cwd: runDir, timeout: 10000 });
-  await execFileAsync('git', ['-c', 'user.name=Orbit AI', '-c', 'user.email=orbit@local', 'commit', '-q', '-m', message, '--allow-empty'], { cwd: runDir, timeout: 10000 });
-  const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: runDir, timeout: 10000 });
+  await execFileAsync('git', ['add', '-A'], { windowsHide: true, cwd: runDir, timeout: 10000 });
+  await execFileAsync('git', ['-c', 'user.name=Orbit AI', '-c', 'user.email=orbit@local', 'commit', '-q', '-m', message, '--allow-empty'], { windowsHide: true, cwd: runDir, timeout: 10000 });
+  const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { windowsHide: true, cwd: runDir, timeout: 10000 });
   return stdout.trim();
 }
 
@@ -359,7 +359,7 @@ function buildRolesPlan({ goal, availability, bible }) {
 const JUDGE_SCHEMA = `Svar KUN med JSON: {"score":number(0-10),"note":string,"examinedFiles":[string],"findings":[{"severity":"critical"|"major"|"minor"|"info","file":string,"message":string}]}`;
 
 async function judgeDeliverable({ judgeId, job, text, goal, bible, cfg, dirs, signal, baseCommit, commit, requireFiles, onAction, onProcess, onSubagent, track }) {
-  const scope = (await execFileAsync('git', ['diff', '--stat', baseCommit, commit], { cwd: dirs.cwd, timeout: 10000 })).stdout;
+  const scope = (await execFileAsync('git', ['diff', '--stat', baseCommit, commit], { windowsHide: true, cwd: dirs.cwd, timeout: 10000 })).stdout;
   const minimumScore = minimumReviewScore(aiCfg(cfg).prefs);
   const prompt = `Du er uafhængig reviewer for et AI-projekt. Undersøg den faktiske leverance i kørselsmappen. Læs relevante ændrede filer og deres integrationer og tests; en overbevisende tekst er ikke bevis for korrekt kode. Du må ikke ændre filer eller udføre eksterne handlinger. Angiv kun filer, du faktisk har undersøgt. Testresultater udføres separat af Orbit; påstå ikke, at tests er kørt, hvis du ikke har evidens.\nProjektmål: ${String(goal)}\n${bible ? `Projektgrundlag:\n${String(bible)}\n` : ''}Job: ${job.title}\nOpgave: ${job.description ?? ''}\nCommit til review: ${commit}\nÆndringsoversigt:\n${scope || '(Ingen ændringer i versionsstyrede filer)'}\n\nLeverancens forklaring:\n${text}\n\nVurder korrekthed, integrationer, acceptkriterier og overholdelse af biblen. Minimumscore er ${minimumScore}/10. Kritiske og væsentlige fund (critical/major) blokerer også ved høj score. Hvis grundlaget er utilstrækkeligt, sig det tydeligt og giv ikke en bestået vurdering. ${JUDGE_SCHEMA}`;
   const raw = await trackedChat({ track, jobId: job.id, role: 'review', serviceId: judgeId, messages: [{ role: 'user', text: prompt }], cfg, dirs, signal, readOnly: true, cwd: dirs.cwd, onAction, onProcess, onSubagent });
@@ -756,7 +756,7 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       return text;
     };
 
-    const baseCommit = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: handle.runDir })).stdout.trim();
+    const baseCommit = (await execFileAsync('git', ['rev-parse', 'HEAD'], { windowsHide: true, cwd: handle.runDir })).stdout.trim();
     let candidateCommit = null;
     try {
       const artifactBaseline = run.repository ? await snapshotRunArtifacts(handle.runDir) : undefined;
@@ -806,8 +806,8 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
         if (judgeId) {
           try {
             if (job.readOnly) {
-              const dirty = (await execFileAsync('git', ['status', '--porcelain'], { cwd: handle.runDir })).stdout.trim();
-              const head = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: handle.runDir })).stdout.trim();
+              const dirty = (await execFileAsync('git', ['status', '--porcelain'], { windowsHide: true, cwd: handle.runDir })).stdout.trim();
+              const head = (await execFileAsync('git', ['rev-parse', 'HEAD'], { windowsHide: true, cwd: handle.runDir })).stdout.trim();
               if (dirty || head !== baseCommit) throw new Error('Analysejobbet ændrede repository, selv om det kun måtte læse.');
             }
             candidateCommit = await gitCommit(handle.runDir, `Til review: ${job.title}`);
@@ -817,8 +817,8 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
               onSubagent: sub => track({ type: sub.phase === 'start' ? 'subagent_start' : 'subagent_done', jobId: job.id, ...sub }),
               onProcess: process => track({ type: 'job_process', jobId: job.id, ...process }),
             });
-            const changedByReview = (await execFileAsync('git', ['status', '--porcelain'], { cwd: handle.runDir })).stdout.trim();
-            const reviewHead = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: handle.runDir })).stdout.trim();
+            const changedByReview = (await execFileAsync('git', ['status', '--porcelain'], { windowsHide: true, cwd: handle.runDir })).stdout.trim();
+            const reviewHead = (await execFileAsync('git', ['rev-parse', 'HEAD'], { windowsHide: true, cwd: handle.runDir })).stdout.trim();
             if (changedByReview || reviewHead !== candidateCommit) throw new Error('Reviewer ændrede arbejdsområdet. Review må kun læse; ændringerne kræver særskilt gennemgang.');
             score = judged.score;
             judgeNote = judged.note;
@@ -836,8 +836,8 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       const fname = writeDeliverable(run.auditDir, job, text);
       if (!fname) throw new Error('Leverancen kunne ikke gemmes.');
       if (job.readOnly) {
-        const dirty = (await execFileAsync('git', ['status', '--porcelain'], { cwd: handle.runDir })).stdout.trim();
-        const head = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: handle.runDir })).stdout.trim();
+        const dirty = (await execFileAsync('git', ['status', '--porcelain'], { windowsHide: true, cwd: handle.runDir })).stdout.trim();
+        const head = (await execFileAsync('git', ['rev-parse', 'HEAD'], { windowsHide: true, cwd: handle.runDir })).stdout.trim();
         if (dirty || head !== (candidateCommit ?? baseCommit)) throw new Error('Analysejobbet ændrede repository, selv om det kun måtte læse. Ændringerne kræver separat gennemgang.');
       }
       const commit = candidateCommit ?? await gitCommit(handle.runDir, job.title);
@@ -853,8 +853,8 @@ export async function executeRun({ runId, goal, bible, attachments = [], predefi
       try {
         const failedCommit = await gitCommit(handle.runDir, `Ikke godkendt: ${job.title}`);
         const failedBranch = `orbit-attempt/${runId}/${job.id}`;
-        await execFileAsync('git', ['branch', failedBranch, failedCommit], { cwd: handle.runDir, timeout: 10000 });
-        await execFileAsync('git', ['reset', '--hard', baseCommit], { cwd: handle.runDir, timeout: 10000 });
+        await execFileAsync('git', ['branch', failedBranch, failedCommit], { windowsHide: true, cwd: handle.runDir, timeout: 10000 });
+        await execFileAsync('git', ['reset', '--hard', baseCommit], { windowsHide: true, cwd: handle.runDir, timeout: 10000 });
         track({ type: 'job_note', jobId: job.id, note: `Forsøget er bevaret i ${failedBranch} (${failedCommit}). Arbejdsgrenen er tilbageført før næste job.` });
       } catch (checkpointError) {
         handle.cancelled = true;

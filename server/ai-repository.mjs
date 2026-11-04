@@ -6,7 +6,7 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 import { runCheckProcess } from './ai-check-process.mjs';
 import { archiveArtifact } from './ai-artifacts.mjs';
 const exec = promisify(execFile);
-const git = async (cwd, args) => (await exec('git', args, { cwd, timeout: 30000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
+const git = async (cwd, args) => (await exec('git', args, { windowsHide: true, cwd, timeout: 30000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
 
 export function runArtifactPath(workDir, name) {
   if (typeof name !== 'string' || !name || name.includes('\\') || name.split('/').some(part => !part || part === '.' || part === '..') || !/\.(png|jpe?g|webp|glb|mp3|wav|mp4|webm)$/i.test(name) || !/(^|\/)(reports|screenshots|visual|captures)(\/|$)/i.test(name)) throw new Error('Mediefilen ligger ikke i en rapportmappe.');
@@ -192,7 +192,7 @@ export async function verifyRepository(cwd, checks, signal, { onProgress, onProc
     try {
       let command = check.command;
       if (process.platform === 'win32' && !isAbsolute(command)) {
-        const found = await exec('where', [command], { timeout: 5000 });
+        const found = await exec('where', [command], { windowsHide: true, timeout: 5000 });
         command = found.stdout.trim().split(/\r?\n/)[0];
       }
       const launch = cliSpawnSpec(command, check.args);

@@ -6,7 +6,7 @@ import { trackAiProcess } from './ai-processes.mjs';
 export function runCheckProcess(command, args, { cwd, signal, timeoutMs = 600000, onProcess, failOnErrorOutput = false } = {}) {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { windowsHide: true, cwd, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '', bytes = 0, reason = null, callbackError, forceTimer, windowsStop;
     let errorLines = 0;
     const pendingLines = { stdout: '', stderr: '' };
@@ -16,7 +16,7 @@ export function runCheckProcess(command, args, { cwd, signal, timeoutMs = 600000
     const terminate = () => {
       if (!child.pid) return;
       if (process.platform === 'win32') {
-        windowsStop ??= new Promise(done => execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { timeout: 10000 }, () => done()));
+        windowsStop ??= new Promise(done => execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }, () => done()));
       } else {
         try { process.kill(-child.pid, 'SIGTERM'); } catch { /* already stopped */ }
         forceTimer ??= setTimeout(force, 2000);

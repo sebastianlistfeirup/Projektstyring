@@ -59,11 +59,11 @@ function psQuote(s) {
 // Windows-toast via BurntToast (hvis modulet findes – ellers stille ignoreret)
 function windowsNotify(title, message) {
   const script = `try { Import-Module BurntToast -ErrorAction Stop; New-BurntToastNotification -Text ${psQuote(title)}, ${psQuote(message)} } catch { }`;
-  execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 9000 }, () => {});
+  execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 9000 }, () => {});
 }
 
 function openExportFolder() {
-  execFile('explorer', [EXPORT_DIR], () => {});
+  execFile('explorer', [EXPORT_DIR], { windowsHide: true }, () => {});
 }
 
 function broadcast(payload) {
@@ -967,7 +967,7 @@ app.get('/api/attachments/:taskId/file/:name', (req, res) => {
 app.post('/api/attachments/:taskId/open', (req, res) => {
   const file = join(ATTACH_DIR, `${req.params.taskId}__${sanitizeFileName(req.body?.name ?? '')}`);
   if (!existsSync(file)) return res.status(404).json({ ok: false, reason: 'Filen findes ikke' });
-  execFile('explorer', [file], () => {});
+  execFile('explorer', [file], { windowsHide: true }, () => {});
   res.json({ ok: true });
 });
 
@@ -1619,7 +1619,7 @@ app.post('/api/notify-action', (req, res) => {
     `try { New-BurntToastNotification -Text '${String(title).replace(/'/g, "''").slice(0, 90)}' } catch { }`,
     '}',
   ].join('; ');
-  execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 9000 }, () => {});
+  execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 9000 }, () => {});
   res.json({ ok: true });
 });
 

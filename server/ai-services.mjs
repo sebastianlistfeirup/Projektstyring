@@ -67,7 +67,7 @@ export function saveKeySecrets(secrets) {
     // Giv din bruger fuld kontrol og prøv igen, før vi melder fejl.
     if (process.platform !== 'win32') { console.warn('[orbit] ai-keys.json kunne ikke gemmes:', e.message); return false; }
     try {
-      execFileSync('icacls', acl(), { timeout: 5000 });
+      execFileSync('icacls', acl(), { windowsHide: true, timeout: 5000 });
       writeFileSync(p, json);
     } catch (e2) {
       console.warn('[orbit] ai-keys.json kunne ikke gemmes:', e2.message);
@@ -78,7 +78,7 @@ export function saveKeySecrets(secrets) {
   if (process.platform === 'win32') {
     // Afgræns filen, så kun din egen Windows-bruger kan åbne den.
     // F (fuld kontrol) — IKKE R, for så kan næste gemning ikke skrive til filen.
-    execFile('icacls', acl(), { timeout: 5000 }, () => {});
+    execFile('icacls', acl(), { windowsHide: true, timeout: 5000 }, () => {});
   }
   return true;
 }
@@ -120,7 +120,9 @@ async function resolveCliCommand(cmd) {
   if (!cmd) return null;
   if (/[\\/]/.test(cmd) && existsSync(cmd)) return cmd;
   try {
-    const r = await execFileP(process.platform === 'win32' ? 'where' : 'which', [cmd], { timeout: 3000 });
+    // Packaged Companion has no console. Without windowsHide each periodic
+    // where.exe lookup can briefly open its own window on the user's desktop.
+    const r = await execFileP(process.platform === 'win32' ? 'where' : 'which', [cmd], { windowsHide: true, timeout: 3000 });
     return chooseCliCandidate(r.stdout);
   } catch { return null; }
 }
@@ -131,7 +133,7 @@ export async function inspectCliInstallation(serviceId, cfg) {
   const command = await resolveCliCommand(provider.cmd ?? service.cmd);
   if (!command) throw new Error('Programmet blev ikke fundet. Installer leverandørens CLI eller angiv stien til programmet.');
   const launch = cliSpawnSpec(command, ['--version']);
-  const result = await execFileP(launch.cmd, launch.args, { timeout: 5000, maxBuffer: 64000, env: cliChildEnv(process.env, { claude: serviceId === 'claude' }) });
+  const result = await execFileP(launch.cmd, launch.args, { windowsHide: true, timeout: 5000, maxBuffer: 64000, env: cliChildEnv(process.env, { claude: serviceId === 'claude' }) });
   const version = `${result.stdout}\n${result.stderr}`.trim().slice(0, 500);
   if (!/\d+\.\d+/.test(version)) throw new Error('Programmet svarede, men versionen kunne ikke genkendes. Kontrollér at stien peger på den rigtige CLI.');
   return { version, checkedAt: new Date().toISOString(), login: 'not_checked', note: 'Installation svarer. Login, modeladgang og resterende abonnementskvote er ikke kontrolleret.' };
@@ -423,7 +425,7 @@ function windowsGitBash(env) {
     env.LOCALAPPDATA && join(env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'),
   ].filter(Boolean);
   try {
-    const output = execFileSync('where', ['git'], { encoding: 'utf8', timeout: 3000 });
+    const output = execFileSync('where', ['git'], { windowsHide: true, encoding: 'utf8', timeout: 3000 });
     for (const git of output.split(/\r?\n/).map((p) => p.trim()).filter(Boolean)) {
       candidates.push(join(dirname(git), 'bash.exe'), join(dirname(git), '..', 'bin', 'bash.exe'));
     }
@@ -541,13 +543,13 @@ export async function chatCli({ cmd, cliTemplate, prompt, cwd, onDelta, onEvent,
     for (const key of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'MOONSHOT_API_KEY', 'DASHSCOPE_API_KEY', 'QWEN_API_KEY', 'KIMI_API_KEY', 'XAI_API_KEY', 'GROK_API_KEY', 'GROK_DEPLOYMENT_KEY']) delete env[key];
     if (grok) { env.GROK_DISABLE_AUTOUPDATER = '1'; env.GROK_MEMORY = '0'; }
     if (interactive) env.CLAUDE_CODE_SDK_READS_SESSION_STATE = '1';
-    const child = spawn(launch.cmd, launch.args, { cwd: cwd ?? process.cwd(), env, detached: process.platform !== 'win32' });
+    const child = spawn(launch.cmd, launch.args, { windowsHide: true, cwd: cwd ?? process.cwd(), env, detached: process.platform !== 'win32' });
     let permissionFailure;
     let terminationTimer, windowsStop, callbackError, stopped = false, out = '', lineBuf = '', bytes = 0;
     const kill = () => {
       if (stopped) return;
       stopped = true;
-      try { if (process.platform === 'win32') windowsStop = new Promise(done => execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { timeout: 10000 }, () => done())); else process.kill(-child.pid, 'SIGTERM'); } catch { /* already stopped */ }
+      try { if (process.platform === 'win32') windowsStop = new Promise(done => execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }, () => done())); else process.kill(-child.pid, 'SIGTERM'); } catch { /* already stopped */ }
       terminationTimer = setTimeout(() => { try { if (process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL'); else child.kill(); } catch { /* already stopped */ } }, 5000);
       terminationTimer.unref();
     };

@@ -16,7 +16,7 @@ const PROTOCOLS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 
 async function terminateMcpProcessTree(child) {
   if (!child.pid) return;
-  if (process.platform === 'win32') await exec('taskkill', ['/pid', String(child.pid), '/T', '/F'], { timeout: 5000, maxBuffer: 16384 });
+  if (process.platform === 'win32') await exec('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 5000, maxBuffer: 16384 });
   else {
     try { process.kill(-child.pid, 'SIGTERM'); } catch { /* Checked again after the forced stop. */ }
     await delay(150);
@@ -31,7 +31,7 @@ export async function probeStdioMcp(configuration, { signal, timeoutMs = 20000, 
   let command = configuration.command;
   if (!isAbsolute(configuration.cwd)) throw new Error('MCP-prøven kræver en absolut arbejdsmappe.');
   if (process.platform === 'win32' && !/[\\/]/.test(command)) {
-    try { command = chooseCliCandidate((await exec('where', [command], { timeout: 3000, maxBuffer: 16384, signal })).stdout); }
+    try { command = chooseCliCandidate((await exec('where', [command], { windowsHide: true, timeout: 3000, maxBuffer: 16384, signal })).stdout); }
     catch { signal?.throwIfAborted(); throw new Error('MCP-programmet kunne ikke findes. Kontrollér den native konfiguration.'); }
     if (!command) throw new Error('MCP-programmet kunne ikke findes.');
   }

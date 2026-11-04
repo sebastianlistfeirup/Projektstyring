@@ -20,6 +20,8 @@ App og Companion serveres fra samme produktionsruntime på `http://127.0.0.1:431
 
 ### Opdatering og tilbageførsel
 
+Baggrundskontroller, Git og AI-processer starter med skjult konsol på Windows. En tidligere pakket udgave kunne vise kortvarige terminalvinduer, når AI-værktøjerne blev fundet igen efter cirka 30 sekunder. Den fejl kræver en opdatering og genstart af Companion; en genindlæsning af browseren er ikke nok. Orbit behøver ikke et fast terminalvindue åbent. Stifinder, browser og meddelelser, som brugeren beder om, vises fortsat normalt.
+
 Kør **Install-Orbit.cmd** fra den nye release. Installationen foretager følgende:
 
 1. Kontrollerer alle releasefiler mod manifestets SHA-256-hashes og afviser ekstra filer, manglende filer og symbolske links.

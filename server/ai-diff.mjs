@@ -4,7 +4,7 @@ import { realpathSync, statSync } from 'node:fs';
 import { relative } from 'node:path';
 
 const exec = promisify(execFile);
-const git = async (cwd, args, maxBuffer = 4 * 1024 * 1024) => (await exec('git', ['--literal-pathspecs', ...args], { cwd, timeout: 30000, maxBuffer })).stdout;
+const git = async (cwd, args, maxBuffer = 4 * 1024 * 1024) => (await exec('git', ['--literal-pathspecs', ...args], { windowsHide: true, cwd, timeout: 30000, maxBuffer })).stdout;
 
 async function target(run, requestedCommit, wholeBranch = false) {
   const baseCommit = wholeBranch ? run.repository?.sourceCommit ?? run.repository?.baseCommit : run.repository?.baseCommit, commit = requestedCommit ?? run.evidence?.commit ?? run.results?.at(-1)?.commit;
